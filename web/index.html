@@ -213,6 +213,18 @@
       <tbody id="rules"></tbody>
     </table>
 
+    <h2>Detected</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Application</th>
+          <th style="width: 8rem">Seen</th>
+          <th style="width: 12rem"></th>
+        </tr>
+      </thead>
+      <tbody id="detected"></tbody>
+    </table>
+
     <h2>Recent connections</h2>
     <ul id="events" class="events"></ul>
 
@@ -225,14 +237,18 @@
     <p class="sub">
       A deny always beats an allow, whatever the order of the list. Patterns accept the wildcards
       <code>*</code> and <code>?</code>. Every change is written to <code>rules.toml</code> and
-      pushed to the store immediately.
+      pushed to the store immediately. A detected application is one no rule speaks about yet; edit
+      its path into a pattern such as <code>C:\Program Files\*\app.exe</code> before you allow or
+      deny it, if you want to cover more than that one file.
     </p>
 
     <script>
       "use strict";
 
       let rules = [];
+      let detected = [];
       let source = null;
+      let detectedTimer = null;
 
       const el = (id) => document.getElementById(id);
       const MAX_EVENTS = 50;
@@ -371,6 +387,105 @@
         });
       }
 
+      function renderDetected() {
+        const body = el("detected");
+
+        body.replaceChildren();
+
+        if (detected.length === 0) {
+          const row = element("tr");
+
+          row.appendChild(
+            element("td", "empty", "Nothing waiting for a decision."),
+          );
+          body.appendChild(row);
+
+          return;
+        }
+
+        detected.forEach((entry) => {
+          const row = element("tr");
+
+          // The path is editable on purpose: widening it to a wildcard before deciding is the
+          // usual wish, and an ordinary rule is created either way.
+          const pattern = element("input");
+
+          pattern.type = "text";
+          pattern.value = entry.display;
+          pattern.spellcheck = false;
+          pattern.addEventListener("change", () => {
+            entry.display = pattern.value;
+          });
+          row.appendChild(element("td", "pattern")).appendChild(pattern);
+
+          const when = new Date(entry.seen_ms).toLocaleTimeString();
+          const meta = entry.hits + " hits " + when + (entry.allowed ? " allowed" : " blocked");
+
+          row.appendChild(element("td", "sub", meta));
+
+          const buttons = element("td");
+
+          for (const [label, action] of [
+            ["allow", "allow"],
+            ["deny", "deny"],
+            ["dismiss", null],
+          ]) {
+            const button = element("button", null, label);
+
+            if (action === "deny") {
+              button.classList.add("deny");
+            }
+            button.addEventListener("click", () => decide(entry, action));
+            buttons.appendChild(button);
+          }
+
+          row.appendChild(buttons);
+        });
+      }
+
+      async function decide(entry, action) {
+        try {
+          if (action === null) {
+            await request("POST", "/api/detected/dismiss", { app: entry.app });
+
+            detected = detected.filter((other) => other.app !== entry.app);
+            renderDetected();
+            status("dismissed");
+
+            return;
+          }
+
+          apply(await request("POST", "/api/detected", {
+            app: entry.app,
+            pattern: entry.display,
+            action,
+          }));
+          status(action + " written to the rules");
+        } catch (error) {
+          status("could not decide: " + error.message);
+        }
+      }
+
+      // A new application should show up in the Detected list without a reload, but reusing
+      // `/api/state` for it would also redraw the rules table and throw away what the user is
+      // typing there. So the stream only refreshes this one list, and at most once a second.
+      function scheduleDetectedRefresh() {
+        if (detectedTimer !== null) {
+          return;
+        }
+
+        detectedTimer = setTimeout(async () => {
+          detectedTimer = null;
+
+          try {
+            detected = (await request("GET", "/api/state")).detected;
+            renderDetected();
+          } catch (error) {
+            status("could not refresh the detected list: " + error.message);
+          }
+        }, 1000);
+      }
+
       function renderEvent(event) {
         const list = el("events");
         const row = element("li", event.allowed ? "allowed" : "blocked");
@@ -396,15 +511,20 @@
         }
 
         source = new EventSource("/api/events");
-        source.onmessage = (message) => renderEvent(JSON.parse(message.data));
+        source.onmessage = (message) => {
+          renderEvent(JSON.parse(message.data));
+          scheduleDetectedRefresh();
+        };
         source.onerror = () => status("event stream interrupted");
       }
 
       function apply(state) {
         rules = state.rules.rule;
+        detected = state.detected;
         el("addr").textContent = location.host;
         el("learn-mode").textContent = state.learn_mode ? "on" : "off";
         renderRules();
+        renderDetected();
         renderBanner(state.store);
 
         // The state carries the newest events first, so the panel needs no second request.

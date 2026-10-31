@@ -93,6 +93,19 @@ impl EventLog {
     }
 }
 
+/// Where a callback hands what it saw.
+///
+/// The log is the connection feed, and the detector is learning mode's list. Both are shared with
+/// the request threads, so a callback holds a lock only for as long as appending takes. The rules
+/// are read to decide whether an application is already covered by a decision the user made.
+#[cfg(windows)]
+#[derive(Clone)]
+struct Sink {
+    log: Arc<EventLog>,
+    detector: Arc<crate::learn::Detector>,
+    rules: Arc<Mutex<crate::rules::RuleFile>>,
+}
+
 /// The thread that keeps a subscription open.
 ///
 /// It opens an engine handle of its own, so subscribing and unsubscribing cannot interleave with
@@ -108,10 +121,14 @@ impl Monitor {
     ///
     /// A machine where the event session is unavailable is not a failure: the rest of the tool
     /// still works, it just has no live feed, which the monitor reports in its log.
-    pub fn start(log: Arc<EventLog>) -> Self {
+    pub fn start(
+        log: Arc<EventLog>,
+        detector: Arc<crate::learn::Detector>,
+        rules: Arc<Mutex<crate::rules::RuleFile>>,
+    ) -> Self {
         let (shutdown, receiver) = channel();
 
-        let join = thread::spawn(move || listen(log, receiver));
+        let join = thread::spawn(move || listen(log, detector, rules, receiver));
 
         Self {
             shutdown: Some(shutdown),
@@ -132,7 +149,12 @@ impl Drop for Monitor {
 
 /// Subscribe, then wait to be told to stop.
 #[cfg(windows)]
-fn listen(log: Arc<EventLog>, shutdown: Receiver<()>) {
+fn listen(
+    log: Arc<EventLog>,
+    detector: Arc<crate::learn::Detector>,
+    rules: Arc<Mutex<crate::rules::RuleFile>>,
+    shutdown: Receiver<()>,
+) {
     use std::ffi::c_void;
 
     use tracing::{debug, warn};
@@ -230,7 +252,11 @@ fn listen(log: Arc<EventLog>, shutdown: Receiver<()>) {
         sessionKey: SESSION_KEY,
         ..Default::default()
     };
-    let context = Box::into_raw(Box::new(Arc::clone(&log))) as *mut c_void;
+    let context = Box::into_raw(Box::new(Sink {
+        log,
+        detector,
+        rules,
+    })) as *mut c_void;
 
     let mut events = HANDLE::default();
 
@@ -253,7 +279,7 @@ fn listen(log: Arc<EventLog>, shutdown: Receiver<()>) {
         unsafe {
             let _ = FwpmEngineClose0(engine);
 
-            drop(Box::from_raw(context as *mut Arc<EventLog>));
+            drop(Box::from_raw(context as *mut Sink));
         }
 
         return;
@@ -271,12 +297,12 @@ fn listen(log: Arc<EventLog>, shutdown: Receiver<()>) {
 
         // Unsubscribing is what guarantees no callback runs after this point, so the context can
         // be reclaimed here.
-        drop(Box::from_raw(context as *mut Arc<EventLog>));
+        drop(Box::from_raw(context as *mut Sink));
     }
 
     debug!("event monitor unsubscribed");
 
-    /// Copy one store event into the log.
+    /// Copy one store event into the log and into learning mode.
     ///
     /// Everything read here is memory the caller owns and that is released when the callback
     /// returns, which is why the entry is copied rather than referenced.
@@ -292,7 +318,7 @@ fn listen(log: Arc<EventLog>, shutdown: Receiver<()>) {
             return;
         }
 
-        let log = unsafe { &*(context as *const Arc<EventLog>) };
+        let sink = unsafe { &*(context as *const Sink) };
         let event = unsafe { &*event };
 
         let allowed = event.r#type == FWPM_NET_EVENT_TYPE_CLASSIFY_ALLOW;
@@ -314,13 +340,28 @@ fn listen(log: Arc<EventLog>, shutdown: Receiver<()>) {
             kind: kind.to_owned(),
         };
 
-        log.push(entry);
+        // Learning mode looks at the application behind the connection, not at the connection
+        // itself, so the log gets a copy and the detector gets the original.
+        sink.log.push(entry.clone());
+
+        let covered = sink.rules.lock().expect("rules lock poisoned").clone();
+
+        if sink.detector.observe(&entry, &covered)
+            && let Err(error) = sink.detector.save()
+        {
+            warn!(reason = %format!("{error:#}"), "could not write learn.json");
+        }
     }
 }
 
 /// The non-Windows monitor exists so the crate still builds for a doc tool.
 #[cfg(not(windows))]
-fn listen(_log: Arc<EventLog>, shutdown: Receiver<()>) {
+fn listen(
+    _log: Arc<EventLog>,
+    _detector: Arc<crate::learn::Detector>,
+    _rules: Arc<Mutex<crate::rules::RuleFile>>,
+    shutdown: Receiver<()>,
+) {
     let _ = shutdown.recv();
 }
 

@@ -18,6 +18,8 @@
 //! | GET | `/api/events` | the event log as a server-sent event stream |
 //! | GET | `/api/health` | liveness, no state involved |
 //! | POST | `/api/rules` | replace the rules, write the file, rebuild the store |
+//! | POST | `/api/detected` | turn a detected application into a rule and rebuild the store |
+//! | POST | `/api/detected/dismiss` | drop a detected application without allowing it |
 //! | POST | `/api/clear` | remove our filters from the store |
 //!
 //! ## Threading
@@ -35,13 +37,14 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::config::Settings;
+use crate::learn::{Detected, Detector};
 use crate::monitor::{EventLog, NetEvent};
 use crate::paths::DataPaths;
-use crate::rules::RuleFile;
+use crate::rules::{Action, Rule, RuleFile};
 
 /// The page served at `/`, embedded so the binary stays a single file.
 const INDEX_HTML: &str = include_str!("../web/index.html");
@@ -57,6 +60,10 @@ const EVENT_POLL: Duration = Duration::from_millis(500);
 /// request.
 const STATE_EVENTS: usize = 50;
 
+/// How many detected applications `/api/state` carries. Pi-hole-like: a short list of what needs a
+/// decision, not the whole history.
+const STATE_DETECTED: usize = 20;
+
 /// Everything a request handler may touch.
 ///
 /// The rules are the in-memory copy that the request handlers keep authoritative: a change is
@@ -65,7 +72,9 @@ const STATE_EVENTS: usize = 50;
 pub struct AppState {
     paths: DataPaths,
     settings: Settings,
-    rules: Mutex<RuleFile>,
+    rules: Arc<Mutex<RuleFile>>,
+    /// The applications learning mode collected, waiting for a decision.
+    detector: Arc<Detector>,
     /// The live connection feed, filled by the monitor thread.
     events: Arc<EventLog>,
 }
@@ -74,13 +83,15 @@ impl AppState {
     pub fn new(
         paths: DataPaths,
         settings: Settings,
-        rules: RuleFile,
+        rules: Arc<Mutex<RuleFile>>,
+        detector: Arc<Detector>,
         events: Arc<EventLog>,
     ) -> Self {
         Self {
             paths,
             settings,
-            rules: Mutex::new(rules),
+            rules,
+            detector,
             events,
         }
     }
@@ -145,8 +156,9 @@ impl Response {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum StoreWork {
-    /// Rebuild the filters from these rules.
-    Apply { rules: RuleFile },
+    /// Rebuild the filters from these rules, expanding wildcards against the applications the
+    /// detector has seen.
+    Apply { rules: RuleFile, known: Vec<String> },
     /// Take our filters out of the store.
     Clear,
     /// Report what the store says without changing it.
@@ -280,9 +292,9 @@ fn handle_work(engine: Option<&crate::wfp::Engine>, work: StoreWork) -> Result<S
     };
 
     let (_removed, _installed, result) = match work {
-        StoreWork::Apply { rules } => {
+        StoreWork::Apply { rules, known } => {
             let result = engine
-                .apply(&rules)
+                .apply(&rules, &known)
                 .map(|applied| (applied.removed, applied.installed));
 
             (0, 0, result)
@@ -493,10 +505,71 @@ impl Server {
                     .save(&state.paths.rules)
                     .context("write rules.toml")?;
 
-                let outcome = worker.ask(StoreWork::Apply { rules })?;
+                let outcome = worker.ask(StoreWork::Apply {
+                    rules,
+                    known: state.detector.apps(),
+                })?;
                 let state_json = StateJson::new(state, &outcome);
 
                 Response::json(200, &state_json)
+            }
+            ("POST", "/api/detected") => {
+                let decision: Decision = serde_json::from_slice(&request.body)
+                    .context("body must be a detected decision object")?;
+
+                let pattern = decision.pattern.unwrap_or_else(|| {
+                    // No edited pattern given: the drive form of what the firewall reported.
+                    crate::device::to_dos_path(&decision.app)
+                });
+
+                let name = match decision.name {
+                    Some(name) if !name.trim().is_empty() => name,
+                    _ => decision
+                        .app
+                        .rsplit(['\\', '/'])
+                        .next()
+                        .unwrap_or("detected")
+                        .to_owned(),
+                };
+
+                // A detected application becomes an ordinary rule, so nothing downstream has to
+                // know where a rule came from.
+                let applied = {
+                    let mut current = state.rules.lock().expect("rules lock poisoned");
+
+                    current.rule.push(Rule {
+                        name,
+                        action: decision.action,
+                        pattern,
+                        enabled: true,
+                    });
+
+                    current
+                        .save(&state.paths.rules)
+                        .context("write rules.toml")?;
+                    current.clone()
+                };
+
+                let outcome = worker.ask(StoreWork::Apply {
+                    rules: applied,
+                    known: state.detector.apps(),
+                })?;
+
+                // Only after the store accepted the rule: a refused write leaves the entry on the
+                // list so the user can try again.
+                if outcome.ok {
+                    state.detector.dismiss(&decision.app)?;
+                }
+
+                Response::json(200, &StateJson::new(state, &outcome))
+            }
+            ("POST", "/api/detected/dismiss") => {
+                let body: Dismissal = serde_json::from_slice(&request.body)
+                    .context("body must be a dismissal object")?;
+
+                let removed = state.detector.dismiss(&body.app)?;
+
+                Response::json(200, &serde_json::json!({ "removed": removed }))
             }
             // `/api/events` is answered by `stream_events`, because a response that never ends
             // cannot be a buffered body.
@@ -521,6 +594,8 @@ struct StateJson {
     store: StoreOutcome,
     /// The newest events first, so the panel shows the interesting end even when it is truncated.
     events: Vec<NetEvent>,
+    /// The applications waiting for a decision, newest first.
+    detected: Vec<Detected>,
 }
 
 impl StateJson {
@@ -531,6 +606,9 @@ impl StateJson {
         events.reverse();
         events.truncate(STATE_EVENTS);
 
+        let mut detected = state.detector.snapshot();
+        detected.truncate(STATE_DETECTED);
+
         Self {
             port: state.settings.port,
             learn_mode: state.settings.learn_mode,
@@ -538,8 +616,30 @@ impl StateJson {
             rules,
             store: store.clone(),
             events,
+            detected,
         }
     }
+}
+
+/// The body of `POST /api/detected`: what to do with one detected application.
+#[derive(Debug, Clone, Deserialize)]
+struct Decision {
+    /// The application in device form, which is the identity of the detected entry.
+    app: String,
+    /// The pattern to write into the rule. The UI sends the editable drive form; when it is left
+    /// out the drive form of `app` is used.
+    #[serde(default)]
+    pattern: Option<String>,
+    action: Action,
+    /// Optional rule name, so an edit can name the rule instead of taking the file name.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// The body of `POST /api/detected/dismiss`.
+#[derive(Debug, Clone, Deserialize)]
+struct Dismissal {
+    app: String,
 }
 
 /// Push the event stream until the client goes away.
@@ -696,17 +796,22 @@ mod tests {
         let scratch = crate::testutil::scratch_dir("server");
         let paths = DataPaths::under(scratch.join("data"));
 
+        paths.ensure().expect("create the data directories");
+
+        let detector = Detector::load(&paths.learn).expect("load the detected list");
+
         AppState::new(
             paths,
             Settings::default(),
-            RuleFile {
+            Arc::new(Mutex::new(RuleFile {
                 rule: vec![Rule {
                     name: "browser".to_owned(),
                     action: crate::rules::Action::Allow,
                     pattern: "C:\\Program Files\\*\\browser.exe".to_owned(),
                     enabled: true,
                 }],
-            },
+            })),
+            Arc::new(detector),
             events,
         )
     }
@@ -721,6 +826,53 @@ mod tests {
             allowed: true,
             kind: "allowed".to_owned(),
         }
+    }
+
+    /// A decided application becomes an ordinary rule, leaves the detected list, and the rules
+    /// file carries the new entry.
+    #[test]
+    fn a_detected_application_becomes_a_rule() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        server_state.detector.observe(
+            &connection("\\device\\harddiskvolume3\\windows\\system32\\thing.exe"),
+            &RuleFile::default(),
+        );
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/detected",
+                br#"{"app":"\\device\\harddiskvolume3\\windows\\system32\\thing.exe","pattern":"C:\\Windows\\System32\\thing.exe","action":"allow","name":"thing"}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert_eq!(response.status, 200, "{body}");
+        assert!(
+            body.contains("thing.exe"),
+            "the rule is in the state: {body}"
+        );
+        assert!(
+            !server_state
+                .detector
+                .snapshot()
+                .iter()
+                .any(|entry| entry.app.contains("thing.exe")),
+            "the decided application left the detected list",
+        );
+
+        let written = std::fs::read_to_string(&server_state.paths.rules).expect("rules.toml");
+
+        assert!(
+            written.contains("C:\\Windows\\System32\\thing.exe"),
+            "the drive form is what the file holds: {written}"
+        );
     }
 
     #[test]

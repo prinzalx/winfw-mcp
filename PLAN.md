@@ -13,7 +13,7 @@ The C implementation is the **functional specification**, not a code base to por
   plus `builder/` (upstream packaging only)
 - Target platform: **Windows only** — no cross-platform abstraction layer needed
 - Language of all code, identifiers, UI strings and docs: **English only**
-- Status: **implementing** — M0 to M5 done, M6 (learning mode) next
+- Status: **implementing** — M0 to M6 done, M7 (tray icon) next
 
 
 ---
@@ -56,7 +56,7 @@ winfw-mcp.exe            <- one binary: core + HTTP server + tray + MCP
     config.toml          <- settings (port, theme, log level, learn mode, ...)
     rules.toml           <- user rules (allow/deny, apps, services)
     profiles\            <- named profiles, one file each
-    learn.bin            <- collected "detected" entries (learning mode)
+    learn.json           <- collected "detected" entries (learning mode)
     logs\                <- rotating log files
     export\              <- destination for on-demand exports
 ```
@@ -105,7 +105,7 @@ Detected  (newest first, last N ~ 10 visible, full list on scroll)
 Flow:
 
 1. The monitor thread notices a connection whose process path has **no matching rule**.
-2. The entry is added / counted up in the **Detected** list (`learn.bin`).
+2. The entry is added / counted up in the **Detected** list (`learn.json`).
 3. User clicks **Allow** or **Deny** → a real rule is created in `rules.toml` **and**
    committed to WFP immediately → the entry leaves the Detected list.
 4. Nothing is ever auto-applied in learning mode. It is a queue, not a policy engine.
@@ -138,6 +138,12 @@ Notes:
   with either an exact path or a security-descriptor binary. A wildcard rule is therefore
   resolved by **us** (enumerate + match), not by the kernel. That is the main behavioural
   risk of this feature and the reason it is called out separately.
+- **Deviation found in M6:** the enumeration side is the *applications learning mode has
+  observed*, not a file-system glob. Walking the disk for every pattern would stat millions of
+  paths for a guess at what connects, and a program that has never connected cannot be matched by
+  a filter anyway. A pattern with nothing observed yet is installed as its literal text, so the
+  rule stays visible in the UI and in the store. Each pattern can expand to at most a fixed number
+  of filters.
 
 
 ---
@@ -337,7 +343,7 @@ Small, each one independently useful, each one testable without the next.
 | 3 | **Rules model + write path** ✅ | `rules.toml` ↔ WFP, add/remove/enable/disable, elevated-write check | toggling a rule changes live WFP state *and* the file |
 | 4 | **HTTP server + web UI shell** ✅ | static assets, Rules area, JSON API | browser shows rules, change in UI is on disk instantly |
 | 5 | **Live events via SSE** ✅ | `FwpmNetEventSubscribe` → SSE stream | connection log scrolls live in browser |
-| 6 | **Learning mode** | Detected list, `learn.bin`, Allow/Deny/Edit, wildcard matching | unknown app appears, Allow creates a rule, entry leaves list |
+| 6 | **Learning mode** ✅ | Detected list, `learn.json`, Allow/Deny/Dismiss, wildcard matching | unknown app appears, Allow creates a rule, entry leaves list |
 | 7 | **Tray + start popup** | tray icon, click opens browser, `Quit` | no console window, works from double-click |
 | 8 | **Export + Share** | per-area export to `export\`, Base64 rule encode/decode | Base64 string pastes back into a second machine |
 | 9 | **MCP endpoint** | `/mcp` with tools for status, list/allow/deny/edit, encode/decode | an MCP client can allow a Detected entry |

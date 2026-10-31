@@ -1,4 +1,6 @@
 mod config;
+mod device;
+mod learn;
 mod monitor;
 mod paths;
 mod rules;
@@ -90,7 +92,6 @@ fn main() -> Result<()> {
     if command == Command::Serve {
         return serve(paths, settings, rules);
     }
-
     sync_store(&rules, command);
 
     Ok(())
@@ -104,12 +105,21 @@ fn main() -> Result<()> {
 fn serve(paths: DataPaths, settings: Settings, rules: RuleFile) -> Result<()> {
     let port = settings.port;
 
+    // The rules and the detected applications are shared between the request threads and the
+    // monitor's callbacks, which is what the locks are for.
+    let rules = Arc::new(std::sync::Mutex::new(rules));
+    let detector = Arc::new(learn::Detector::load(&paths.learn)?);
+
     // The monitor is started before the listener so the first page load already has a feed, even
     // if it is empty. It is held by this scope, which is what keeps the subscription open.
     let events = Arc::new(monitor::EventLog::new());
-    let _monitor = monitor::Monitor::start(Arc::clone(&events));
+    let _monitor = monitor::Monitor::start(
+        Arc::clone(&events),
+        Arc::clone(&detector),
+        Arc::clone(&rules),
+    );
 
-    let state = server::AppState::new(paths, settings, rules, events);
+    let state = server::AppState::new(paths, settings, rules, detector, events);
     let server = server::Server::bind(port, state, Arc::new(server::WfpWorker::start()))?;
 
     info!(url = %format!("http://{}", server.addr()), "web UI ready");
@@ -141,7 +151,9 @@ fn sync_store(rules: &RuleFile, command: Command) {
     report("filters", &inventory.filters);
 
     let outcome = match command {
-        Command::Apply => engine.apply(rules).map(|applied| {
+        // A one-shot run has no observed applications, so a wildcard pattern can only be
+        // installed as it stands.
+        Command::Apply => engine.apply(rules, &[]).map(|applied| {
             info!(
                 removed = applied.removed,
                 installed = applied.installed,

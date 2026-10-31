@@ -11,6 +11,9 @@ pub struct DataPaths {
     pub root: PathBuf,
     pub config: PathBuf,
     pub rules: PathBuf,
+    /// The Detected list of learning mode, as JSON: it is machine state rather than something the
+    /// user edits, and JSON keeps it readable without a TOML dependency in the way.
+    pub learn: PathBuf,
     pub profiles: PathBuf,
     pub logs: PathBuf,
     pub export: PathBuf,
@@ -23,6 +26,7 @@ impl DataPaths {
         Self {
             config: root.join("config.toml"),
             rules: root.join("rules.toml"),
+            learn: root.join("learn.json"),
             profiles: root.join("profiles"),
             logs: root.join("logs"),
             export: root.join("export"),
@@ -66,6 +70,7 @@ mod tests {
 
         assert_eq!(paths.config, PathBuf::from("root/config.toml"));
         assert_eq!(paths.rules, PathBuf::from("root/rules.toml"));
+        assert_eq!(paths.learn, PathBuf::from("root/learn.json"));
         assert_eq!(paths.profiles, PathBuf::from("root/profiles"));
         assert_eq!(paths.export, PathBuf::from("root/export"));
     }

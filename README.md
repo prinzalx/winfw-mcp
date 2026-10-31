@@ -15,10 +15,12 @@ exposed over MCP, so an agent can allow or deny a connection too.
 
 ## Status
 
-Milestone 5 of 10. The tool owns its data directory, reads its config and rules, reads the live
+Milestone 6 of 10. The tool owns its data directory, reads its config and rules, reads the live
 WFP store, translates `rules.toml` into persistent WFP filters with deny ranked above allow, and
-serves a web UI that edits those rules. It also follows live connections: WFP's own event stream is
-forwarded to the browser over SSE. The tray icon that opens the browser is still missing.
+serves a web UI that edits those rules. It follows live connections over SSE, and learning mode
+collects every application no rule speaks about yet in a Detected list where each entry can be
+allowed, denied or dismissed from the browser. The tray icon that opens the browser is still
+missing.
 
 | # | Milestone | State |
 |---|---|---|
@@ -28,8 +30,8 @@ forwarded to the browser over SSE. The tray icon that opens the browser is still
 | 3 | Rules model and write path: `rules.toml` ↔ WFP | done |
 | 4 | HTTP server and web UI shell | done |
 | 5 | Live connection events over SSE | done |
-| 6 | Learning mode: Detected list, Allow / Deny / Edit | planned |
-| 7 | Tray icon and start popup | planned |
+| 6 | Learning mode: Detected list, Allow / Deny / Edit | done |
+| 7 | Tray icon and start popup | next |
 | 8 | Export and Base64 Share | planned |
 | 9 | MCP endpoint | planned |
 | 10 | Named profiles | planned |
@@ -78,7 +80,7 @@ On the first run the binary creates its data directory and the two files inside 
     config.toml          settings, written with defaults on first run
     rules.toml           user rules, order significant: the first match wins
     profiles\            named profiles, one file each
-    learn.bin            collected Detected entries (learning mode)
+    learn.json           collected Detected entries (learning mode)
     logs\                rotating log files
     export\              destination for on-demand exports
 ```
@@ -97,9 +99,21 @@ page with no build step, embedded in the binary. Open it, edit a rule, and the c
 | `GET /` | the page itself |
 | `GET /api/state` | settings, rules and what the store reported |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
+| `POST /api/detected` | turn one detected application into a rule and rebuild the store |
+| `POST /api/detected/dismiss` | drop a detected application without deciding |
 | `POST /api/clear` | remove our filters from the store |
 | `GET /api/events` | the connection feed as a server-sent event stream |
 | `GET /api/health` | liveness, for a future tray icon or supervisor |
+
+The Detected list is the learning mode. Every application that connects while no enabled rule
+covers it is collected there, with its hit count and whether the firewall allowed or blocked it, and
+the newest decision waits at the top. Each row can be allowed, denied or dismissed, and the path in
+the row is editable before that, because widening `C:\Program Files\Nodejs\node.exe` to
+`C:\Program Files\*\*.exe` is the usual wish. A decided row becomes an ordinary rule in
+`rules.toml`, so nothing downstream has to know where a rule came from.
+
+Application paths reach the firewall in device form (`\device\harddiskvolume3\...`), which nobody
+reads comfortably, so the UI shows the drive form and a rule written in either form is accepted.
 
 Live connections come from WFP's own event stream (`FwpmNetEventSubscribe4`) on a session of the
 monitor's own. Two engine options have to be set on that session first, and both were found the
@@ -138,7 +152,13 @@ answers `store.ok` with the reason, and the web UI shows a banner instead of an 
   sublayers and filters each carry their own result. A refused provider store is not a reason to
   throw away the filters we did read.
 - **Wildcards are ours, not the kernel's.** Rules match on `*` and `?`; the translation to WFP is
-  done by this program, in one place.
+  done by this program, in one place. WFP itself compares an application path exactly, so a pattern
+  with a wildcard is expanded into the applications learning mode has actually seen, and each of
+  them gets its own filter (up to a fixed cap). A pattern nothing was seen for yet is installed as
+  it stands, so the rule stays visible even before it can match.
+- **Learning mode collects applications, not connections.** One executable that makes a hundred
+  connections is one decision. An application an enabled rule already covers is not collected at
+  all, because a rule that blocks it is a decision that was already made.
 
 ## Releases
 
@@ -157,3 +177,4 @@ own, which is why some versions have no milestone of their own.
 | 0.4.0 | HTTP server and web UI shell: rules page, JSON API, degraded-store banner |
 | 0.4.1 | Show the address the page was served from instead of a hardcoded localhost |
 | 0.5.0 | Live connection events: WFP event stream forwarded to the browser over SSE, plus a page markup fix (the script had been outside its element) |
+| 0.6.0 | Learning mode: Detected list in the UI, wildcard patterns, device path ↔ drive path translation |

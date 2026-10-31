@@ -24,7 +24,7 @@ use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
 };
 use windows::core::{GUID, PCWSTR, PWSTR};
 
-use crate::rules::{Action, Rule, RuleFile};
+use crate::rules::{Action, Rule, RuleFile, is_wildcard, wildcard_match};
 
 /// The name the store shows for us, in provider, sublayer and filter display data alike.
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
@@ -242,7 +242,12 @@ impl Engine {
     ///
     /// Everything happens in one transaction, so no observer can see a store holding only part of
     /// the rule set.
-    pub fn apply(&self, rules: &RuleFile) -> Result<Applied> {
+    ///
+    /// `known` is the set of application paths this tool has seen connecting, in device form.
+    /// WFP compares an application path exactly, so a rule whose pattern contains wildcards is
+    /// expanded against those paths and installed once per match. An unexpanded wildcard pattern
+    /// stays in the store as it stands, which keeps the rule visible even while it matches nothing.
+    pub fn apply(&self, rules: &RuleFile, known: &[String]) -> Result<Applied> {
         let mut report = Applied::default();
 
         self.transaction(|| {
@@ -254,7 +259,7 @@ impl Engine {
             let mut installed = 0;
 
             for rule in rules.rule.iter().filter(|rule| rule.enabled) {
-                installed += self.add_rule(rule)?;
+                installed += self.add_rule(rule, known)?;
             }
 
             report.installed = installed;
@@ -453,21 +458,10 @@ impl Engine {
         Ok(removed)
     }
 
-    /// Install one rule as one filter per layer, so both directions and both address families are
-    /// covered. Returns the number of filters installed.
-    fn add_rule(&self, rule: &Rule) -> Result<usize> {
-        let app = AppId::resolve(&rule.pattern);
-
-        let mut condition = FWPM_FILTER_CONDITION0 {
-            fieldKey: FWPM_CONDITION_ALE_APP_ID,
-            matchType: FWP_MATCH_EQUAL,
-            conditionValue: FWP_CONDITION_VALUE0 {
-                r#type: FWP_BYTE_BLOB_TYPE,
-                Anonymous: FWP_CONDITION_VALUE0_0 {
-                    byteBlob: &raw const app.blob as *mut _,
-                },
-            },
-        };
+    /// Install one rule as one filter per application per layer, so both directions and both
+    /// address families are covered. Returns the number of filters installed.
+    fn add_rule(&self, rule: &Rule, known: &[String]) -> Result<usize> {
+        let apps = app_ids(&rule.pattern, known);
 
         let mut provider_key = PROVIDER_KEY;
 
@@ -496,46 +490,96 @@ impl Engine {
         let owner = wide(APP_NAME);
         let label = wide(&rule.name);
 
-        for layer in LAYERS {
-            let mut filter = FWPM_FILTER0::default();
-            filter.filterKey = filter_key(&rule.name, &layer);
-            filter.displayData = FWPM_DISPLAY_DATA0 {
-                name: PWSTR(owner.as_ptr() as *mut _),
-                description: PWSTR(label.as_ptr() as *mut _),
-            };
-            filter.flags = flags;
-            filter.providerKey = &mut provider_key;
-            filter.layerKey = layer;
-            filter.subLayerKey = SUBLAYER_KEY;
-            filter.weight = FWP_VALUE0 {
-                r#type: FWP_UINT8,
-                Anonymous: FWP_VALUE0_0 { uint8: weight },
-            };
-            filter.numFilterConditions = 1;
-            filter.filterCondition = &mut condition;
-            filter.action = FWPM_ACTION0 {
-                r#type: action,
-                ..Default::default()
+        let mut installed = 0;
+
+        // One condition per application, because it points into that application's blob.
+        for (index, app) in apps.iter().enumerate() {
+            let mut condition = FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_ALE_APP_ID,
+                matchType: FWP_MATCH_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_BYTE_BLOB_TYPE,
+                    Anonymous: FWP_CONDITION_VALUE0_0 {
+                        byteBlob: &raw const app.blob as *mut _,
+                    },
+                },
             };
 
-            let mut filter_id = 0u64;
+            for layer in LAYERS {
+                let mut filter = FWPM_FILTER0::default();
+                filter.filterKey = filter_key(&format!("{}#{index}", rule.name), &layer);
+                filter.displayData = FWPM_DISPLAY_DATA0 {
+                    name: PWSTR(owner.as_ptr() as *mut _),
+                    description: PWSTR(label.as_ptr() as *mut _),
+                };
+                filter.flags = flags;
+                filter.providerKey = &mut provider_key;
+                filter.layerKey = layer;
+                filter.subLayerKey = SUBLAYER_KEY;
+                filter.weight = FWP_VALUE0 {
+                    r#type: FWP_UINT8,
+                    Anonymous: FWP_VALUE0_0 { uint8: weight },
+                };
+                filter.numFilterConditions = 1;
+                filter.filterCondition = &mut condition;
+                filter.action = FWPM_ACTION0 {
+                    r#type: action,
+                    ..Default::default()
+                };
 
-            // SAFETY: every pointer in the filter points into memory owned by this function, and
-            // all of it outlives the call. WFP copies what it needs.
-            let status =
-                unsafe { FwpmFilterAdd0(self.handle, &filter, None, Some(&mut filter_id)) };
+                let mut filter_id = 0u64;
 
-            if status != 0 {
-                bail!(
-                    "FwpmFilterAdd0 failed with 0x{status:08X} for rule '{}' on layer {}",
-                    rule.name,
-                    layer_index(layer),
-                );
+                // SAFETY: every pointer in the filter points into memory owned by this function, and
+                // all of it outlives the call. WFP copies what it needs.
+                let status =
+                    unsafe { FwpmFilterAdd0(self.handle, &filter, None, Some(&mut filter_id)) };
+
+                if status != 0 {
+                    bail!(
+                        "FwpmFilterAdd0 failed with 0x{status:08X} for rule '{}' on layer {}",
+                        rule.name,
+                        layer_index(layer),
+                    );
+                }
+
+                installed += 1;
             }
         }
 
-        Ok(LAYERS.len())
+        Ok(installed)
     }
+}
+
+/// How many applications one wildcard rule may be expanded into.
+///
+/// A pattern is allowed to be broad, but the store is shared and every match costs four filters.
+/// The cap keeps a careless `*` from turning one rule into thousands.
+const MAX_WILDCARD_MATCHES: usize = 32;
+
+/// Build the application identities one rule needs.
+///
+/// An exact pattern is resolved on its own, which is the normal case a Detected entry produces.
+/// A wildcard pattern is matched against the paths this tool has seen; when nothing has been seen
+/// yet the pattern itself goes into the store, so the rule is at least visible to the user.
+fn app_ids(pattern: &str, known: &[String]) -> Vec<AppId> {
+    if !is_wildcard(pattern) {
+        return vec![AppId::resolve(pattern)];
+    }
+
+    let device_pattern = crate::device::to_device_path(pattern);
+
+    let mut ids: Vec<AppId> = known
+        .iter()
+        .filter(|path| wildcard_match(&device_pattern, path))
+        .take(MAX_WILDCARD_MATCHES)
+        .map(|path| AppId::resolve(path))
+        .collect();
+
+    if ids.is_empty() {
+        ids.push(AppId::resolve(pattern));
+    }
+
+    ids
 }
 
 impl Drop for Engine {
@@ -552,8 +596,8 @@ impl Drop for Engine {
 /// WFP does not match a file name but a device path blob. `FwpmGetAppIdFromFileName0` resolves one
 /// for a file that exists, which is the case for the concrete paths learning mode produces. A
 /// wildcard pattern usually names a file that does not exist; then the pattern is handed over as
-/// it stands and the match becomes exact. Turning patterns into real wildcard matching is
-/// milestone 6's job.
+/// it stands and the match becomes exact. Wildcard patterns are expanded into the concrete
+/// applications the detector has seen, so a pattern matches every observed program under it.
 struct AppId {
     blob: FWP_BYTE_BLOB,
     /// Keeps the fallback's wide characters alive while `blob` points into them.
@@ -758,12 +802,14 @@ mod tests {
             }
         }
 
-        let applied = engine.apply(&rules).expect("apply the rule");
+        let applied = engine.apply(&rules, &[]).expect("apply the rule");
 
         assert_eq!(applied.installed, expected, "one filter per rule and layer");
         assert_eq!(applied.removed, 0, "the store was cleared first");
 
-        let rebuilt = engine.apply(&rules).expect("apply the same rule again");
+        let rebuilt = engine
+            .apply(&rules, &[])
+            .expect("apply the same rule again");
 
         assert_eq!(
             rebuilt.removed, expected,
