@@ -89,3 +89,4 @@ in `Cargo.toml` is the source of truth.
 |---|---|
 | 0.1.0 | Data directory, config and rules load, atomic writes |
 | 0.2.0 | WFP read path: engine handle, enumeration of the live store, degraded when unelevated |
+| 0.2.1 | Fix heap corruption while releasing an enumerated store |

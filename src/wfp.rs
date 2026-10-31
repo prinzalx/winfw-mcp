@@ -9,20 +9,16 @@ use std::ffi::c_void;
 use anyhow::{Result, bail};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterCreateEnumHandle0, FwpmFilterDestroyEnumHandle0,
-    FwpmFilterEnum0, FwpmFreeMemory0, FwpmProviderCreateEnumHandle0,
-    FwpmProviderDestroyEnumHandle0, FwpmProviderEnum0, FwpmSubLayerCreateEnumHandle0,
-    FwpmSubLayerDestroyEnumHandle0, FwpmSubLayerEnum0, FWPM_DISPLAY_DATA0, FWPM_FILTER0,
-    FWPM_PROVIDER0, FWPM_SUBLAYER0,
+    FWPM_DISPLAY_DATA0, FWPM_FILTER0, FWPM_PROVIDER0, FWPM_SUBLAYER0, FwpmEngineClose0,
+    FwpmEngineOpen0, FwpmFilterCreateEnumHandle0, FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0,
+    FwpmFreeMemory0, FwpmProviderCreateEnumHandle0, FwpmProviderDestroyEnumHandle0,
+    FwpmProviderEnum0, FwpmSubLayerCreateEnumHandle0, FwpmSubLayerDestroyEnumHandle0,
+    FwpmSubLayerEnum0,
 };
 use windows::core::PCWSTR;
 
 /// `RPC_C_AUTHN_DEFAULT`, spelled out instead of pulling in the RPC module for one constant.
 const RPC_C_AUTHN_DEFAULT: u32 = 0xFFFF_FFFF;
-
-/// How many entries a single `Fwpm*Enum0` call is asked for. Affects only the number of calls,
-/// not the result.
-const BATCH: u32 = 128;
 
 /// The display names of one class of store entries.
 pub type Entries = Result<Vec<String>>;
@@ -31,6 +27,12 @@ pub type Entries = Result<Vec<String>>;
 ///
 /// The three `Fwpm*` families differ only in name and entry type, which is what makes them worth
 /// a macro rather than three copies of the same loop.
+///
+/// Everything is requested in a single call, the way the C reference does it. Not only is that
+/// one round trip instead of several, it also keeps the ownership rule simple: the whole result
+/// is one WFP allocation, released by handing the *array pointer* to `FwpmFreeMemory0`. Freeing
+/// the individual elements as well corrupts the heap, because they were never allocated apart
+/// from the array.
 macro_rules! enumerate {
     ($engine:expr, $create:ident, $fetch:ident, $destroy:ident, $entry:ty) => {{
         let engine = $engine;
@@ -42,40 +44,32 @@ macro_rules! enumerate {
             anyhow::bail!("{} failed with 0x{status:08X}", stringify!($create));
         }
 
+        let mut entries: *mut *mut $entry = std::ptr::null_mut();
+        let mut returned = 0u32;
+
+        // SAFETY: both out parameters are valid, and the array they receive belongs to WFP.
+        let status = unsafe { $fetch(engine, enum_handle, u32::MAX, &mut entries, &mut returned) };
+        if status != 0 {
+            // SAFETY: the enum handle is still open and belongs to this engine.
+            unsafe { $destroy(engine, enum_handle) };
+            anyhow::bail!("{} failed with 0x{status:08X}", stringify!($fetch));
+        }
+
         let mut names = Vec::new();
-        loop {
-            let mut entries: *mut *mut $entry = std::ptr::null_mut();
-            let mut returned = 0u32;
 
-            // SAFETY: both out parameters are valid, and the array they receive belongs to WFP.
-            let status = unsafe {
-                $fetch(engine, enum_handle, BATCH, &mut entries, &mut returned)
-            };
-            if status != 0 {
-                // SAFETY: the enum handle is still open and belongs to this engine.
-                unsafe { $destroy(engine, enum_handle) };
-                anyhow::bail!("{} failed with 0x{status:08X}", stringify!($fetch));
-            }
-
+        if !entries.is_null() {
             for index in 0..returned {
                 // SAFETY: WFP reported `returned` entries, so this slot is inside the array.
-                let slot = unsafe { entries.add(index as usize) };
-                // SAFETY: the same bound that makes the slot valid makes the entry readable
-                // until it is handed back to WFP below.
-                let entry = unsafe { *slot };
+                let entry = unsafe { *entries.add(index as usize) };
 
                 if !entry.is_null() {
-                    // SAFETY: valid until FwpmFreeMemory0 gives the memory back to WFP.
+                    // SAFETY: the entry stays readable until the array is handed back below.
                     names.push(display_name(unsafe { &(*entry).displayData }));
                 }
-
-                // SAFETY: the memory belongs to WFP, which releases it through this call.
-                unsafe { FwpmFreeMemory0(slot as *mut *mut c_void) };
             }
 
-            if returned < BATCH {
-                break;
-            }
+            // SAFETY: the array is WFP-owned, and this is the documented way to release it.
+            unsafe { FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut c_void) };
         }
 
         // SAFETY: the enum handle is still open and belongs to this engine.
@@ -114,11 +108,14 @@ impl Engine {
 
         // SAFETY: `handle` is a valid out parameter, a null server name means the local machine,
         // and a null session selects the default non-dynamic session.
-        let status =
-            unsafe { FwpmEngineOpen0(PCWSTR::null(), RPC_C_AUTHN_DEFAULT, None, None, &mut handle) };
+        let status = unsafe {
+            FwpmEngineOpen0(PCWSTR::null(), RPC_C_AUTHN_DEFAULT, None, None, &mut handle)
+        };
 
         if status != 0 {
-            bail!("FwpmEngineOpen0 failed with 0x{status:08X}; is the Base Filtering Engine running?");
+            bail!(
+                "FwpmEngineOpen0 failed with 0x{status:08X}; is the Base Filtering Engine running?"
+            );
         }
 
         Ok(Self { handle })
