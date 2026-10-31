@@ -20,6 +20,24 @@ pub struct Settings {
     pub learn_mode: bool,
     /// Presentation only, but stored so the browser and the file agree.
     pub theme: String,
+    /// How much the MCP endpoint may change (PLAN.md section 10).
+    ///
+    /// `none` is the default on purpose: an agent talking to a firewall it did not configure should
+    /// be able to ask questions before it is allowed to answer them.
+    pub mcp_writes: Writes,
+}
+
+/// What the MCP endpoint is allowed to modify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Writes {
+    /// Read-only. Every write answers "refused" rather than touching the store.
+    #[default]
+    None,
+    /// The rules may change; the profile and the settings may not.
+    Rules,
+    /// Everything an MCP client can see, it can change.
+    All,
 }
 
 impl Default for Settings {
@@ -29,6 +47,7 @@ impl Default for Settings {
             log_level: "info".to_owned(),
             learn_mode: true,
             theme: "dark".to_owned(),
+            mcp_writes: Writes::None,
         }
     }
 }
@@ -67,6 +86,7 @@ mod tests {
             log_level: "debug".to_owned(),
             learn_mode: false,
             theme: "light".to_owned(),
+            mcp_writes: Writes::Rules,
         };
 
         settings.save(&path).expect("save");
@@ -94,5 +114,26 @@ mod tests {
         // `{error:#}` prints the whole chain; the plain Display would only show our own
         // "parse <path>" context and hide the reason.
         assert!(format!("{error:#}").contains("unknown field"), "{error:#}");
+    }
+
+    /// A `config.toml` written by an earlier version has no `mcp_writes`. Upgrading must not fail
+    /// the whole start over one missing key, so the field falls back to the read-only default.
+    #[test]
+    fn a_config_from_an_older_version_still_loads() {
+        let path = crate::testutil::scratch_dir("config-upgrade").join("config.toml");
+        std::fs::write(
+            &path,
+            "port = 9999\nlog_level = \"warn\"\nlearn_mode = false\ntheme = \"light\"\n",
+        )
+        .expect("write");
+
+        let settings = Settings::load_or_create(&path).expect("load");
+
+        assert_eq!(settings.port, 9999);
+        assert_eq!(
+            settings.mcp_writes,
+            Writes::None,
+            "a missing key must not silently enable writes"
+        );
     }
 }

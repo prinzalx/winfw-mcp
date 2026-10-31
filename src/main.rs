@@ -6,6 +6,7 @@ mod config;
 mod device;
 mod export;
 mod learn;
+mod mcp;
 mod monitor;
 mod paths;
 mod rules;

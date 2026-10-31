@@ -15,13 +15,14 @@ exposed over MCP, so an agent can allow or deny a connection too.
 
 ## Status
 
-Milestone 8 of 10. The tool owns its data directory, reads its config and rules, reads the live
+Milestone 9 of 10. The tool owns its data directory, reads its config and rules, reads the live
 WFP store, translates `rules.toml` into persistent WFP filters with deny ranked above allow, and
 serves a web UI that edits those rules. It follows live connections over SSE, and learning mode
 collects every application no rule speaks about yet in a Detected list where each entry can be
 allowed, denied or dismissed from the browser. In a release build it runs without a console window
 and lives as a tray icon: left click opens the browser, right click offers `Quit`. Any area can be
 copied into `export\` on demand, and one rule travels as a Base64 string you can paste anywhere.
+The same core now answers a second client: an MCP agent talks JSON-RPC to `POST /mcp`.
 
 | # | Milestone | State |
 |---|---|---|
@@ -34,8 +35,8 @@ copied into `export\` on demand, and one rule travels as a Base64 string you can
 | 6 | Learning mode: Detected list, Allow / Deny / Edit | done |
 | 7 | Tray icon and start popup | done |
 | 8 | Export and Base64 Share | done |
-| 9 | MCP endpoint | next |
-| 10 | Named profiles | planned |
+| 9 | MCP endpoint | done |
+| 10 | Named profiles | next |
 
 ## Build and run
 
@@ -113,6 +114,30 @@ page with no build step, embedded in the binary. Open it, edit a rule, and the c
 | `POST /api/rules/import` | append the rule a Base64 string carries |
 | `GET /api/events` | the connection feed as a server-sent event stream |
 | `GET /api/health` | liveness, for a supervisor or the MCP transport |
+| `POST /mcp` | the Model Context Protocol endpoint (JSON-RPC 2.0) |
+
+### MCP endpoint
+
+`POST /mcp` speaks JSON-RPC 2.0 and needs no session: every request is answered on its own, so
+curl is a valid client. `initialize`, `ping`, `tools/list` and `tools/call` are implemented, and a
+tool name may be used as the method directly.
+
+| Tool | Purpose | Writes? |
+|---|---|---|
+| `status` | settings, rule count, store health, how much the endpoint may write | no |
+| `rules.list` | every rule, in file order | no |
+| `rules.share` | one rule as a Base64 string (takes `index`) | no |
+| `rules.allow` | add an allow rule (takes `app`, optional `name`) | yes |
+| `rules.deny` | add a deny rule (takes `app`, optional `name`) | yes |
+| `detected.list` | what learning mode collected | no |
+| `events.list` | recent connection events | no |
+| `export` | copy an area (`rules`, `config`, `detected`, `all`) into `export\` | yes |
+
+Reads are always allowed. Writes go through `mcp_writes` in `config.toml`, which is `none` by
+default: an agent should be able to ask questions before anyone allows it to answer them. A
+refused write is not a transport error; it comes back as a normal tool result with `isError` set,
+which is what the MCP spec says about a tool that ran and declined. Deny outranks allow, always,
+so an agent can loosen a hole but cannot talk its way past a deny.
 
 The Detected list is the learning mode. Every application that connects while no enabled rule
 covers it is collected there, with its hit count and whether the firewall allowed or blocked it, and
@@ -189,3 +214,4 @@ own, which is why some versions have no milestone of their own.
 | 0.6.0 | Learning mode: Detected list in the UI, wildcard patterns, device path ↔ drive path translation |
 | 0.7.0 | Tray icon without a console window: left click opens the browser, right click offers `Quit` |
 | 0.8.0 | Export of any area into `export\`, plus Share and Import of a single rule as Base64 |
+| 0.9.0 | MCP endpoint: JSON-RPC 2.0 over `POST /mcp`, read-only by default, gated writes |

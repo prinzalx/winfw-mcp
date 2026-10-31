@@ -24,6 +24,7 @@
 //! | POST | `/api/export` | copy rules, config and the Detected list into `export\` |
 //! | POST | `/api/rules/share` | one rule as a Base64 string, for copy and paste |
 //! | POST | `/api/rules/import` | append the rule a Base64 string carries |
+//! | POST | `/mcp` | JSON-RPC 2.0 for an MCP client: see `crate::mcp` |
 //!
 //! ## Threading
 //!
@@ -43,9 +44,10 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::config::Settings;
+use crate::config::{Settings, Writes};
 use crate::export::{self, Area};
 use crate::learn::{Detected, Detector};
+use crate::mcp;
 use crate::monitor::{EventLog, NetEvent};
 use crate::paths::DataPaths;
 use crate::rules::{Action, Rule, RuleFile};
@@ -625,8 +627,261 @@ impl Server {
 
                 Response::json(200, &StateJson::new(state, &outcome))
             }
+            ("POST", "/mcp") => mcp_endpoint(state, worker, request),
             _ => Ok(Response::text(404, "not found")),
         }
+    }
+}
+
+/// Answer one JSON-RPC 2.0 call for an MCP client.
+///
+/// Everything the endpoint knows is in `state`, so the transport stays thin: it decodes the call,
+/// asks the same core the web UI asks, and puts the answer into the shape MCP clients read. A
+/// failure to speak JSON-RPC is still answered with HTTP 200, because in JSON-RPC the failure is
+/// part of the conversation rather than a delivery problem.
+fn mcp_endpoint(state: &AppState, worker: &WfpWorker, request: &Request) -> Result<Response> {
+    let call = match mcp::parse(&request.body) {
+        Ok(call) => call,
+        Err(reply) => return Response::json(200, &reply),
+    };
+
+    let id = call.id.clone();
+
+    // A notification wants no answer, but HTTP needs a body, so it gets an empty result. Both the
+    // missing id and the `notifications/` prefix mean the same thing here.
+    if call.is_notification() || call.method.starts_with("notifications/") {
+        return Response::json(200, &mcp::Response::acknowledged(id));
+    }
+
+    let reply = match call.method.as_str() {
+        "initialize" => serde_json::json!({
+            "protocolVersion": mcp::PROTOCOL_VERSION,
+            "capabilities": { "tools": {} },
+            "serverInfo": {
+                "name": env!("CARGO_PKG_NAME"),
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+        }),
+        "ping" => serde_json::json!({}),
+        "tools/list" => serde_json::json!({ "tools": tool_list() }),
+        "tools/call" => match mcp_tool(state, worker, &call) {
+            Err(error) => {
+                return Response::json(200, &mcp::Response::error(id, error.0, error.1));
+            }
+            Ok(value) => value,
+        },
+        other => {
+            return Response::json(
+                200,
+                &mcp::Response::error(id, mcp::METHOD_NOT_FOUND, format!("unknown method {other}")),
+            );
+        }
+    };
+
+    Response::json(200, &mcp::Response::result(id, reply))
+}
+
+/// The tools the endpoint offers, in the shape `tools/list` wants.
+///
+/// The schema is deliberately loose: every argument is optional, and a tool that needs one says so
+/// in its refusal rather than letting the transport reject a call it could have answered.
+fn tool_list() -> Vec<serde_json::Value> {
+    [
+        (
+            "status",
+            "settings, the rule count, the store, and how much the endpoint may write",
+        ),
+        (
+            "rules.list",
+            "every rule, in the order the firewall reads it",
+        ),
+        ("rules.share", "one rule as a Base64 string; takes an index"),
+        (
+            "rules.allow",
+            "append an allow rule; takes app, pattern, name",
+        ),
+        ("rules.deny", "append a deny rule; takes app, pattern, name"),
+        (
+            "detected.list",
+            "the applications learning mode collected, newest first",
+        ),
+        (
+            "events.list",
+            "the connections the firewall reported recently",
+        ),
+        ("export", "copy the data files into export\\; takes an area"),
+    ]
+    .into_iter()
+    .map(|(name, description)| {
+        serde_json::json!({
+            "name": name,
+            "description": description,
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "index": { "type": "integer" },
+                    "app": { "type": "string" },
+                    "pattern": { "type": "string" },
+                    "name": { "type": "string" },
+                    "area": {
+                        "type": "string",
+                        "enum": ["rules", "config", "detected", "all"],
+                    },
+                },
+            },
+        })
+    })
+    .collect()
+}
+
+/// The method behind a `tools/call`, with the code and message of a protocol error.
+type ToolError = (i32, String);
+
+/// Run one MCP tool.
+///
+/// Reads are always allowed. A write depends on `Settings.mcp_writes`, which is checked here rather
+/// than in the transport, so a second transport cannot talk its way past the policy (PLAN.md
+/// section 10).
+fn mcp_tool(
+    state: &AppState,
+    worker: &WfpWorker,
+    call: &mcp::Request,
+) -> std::result::Result<serde_json::Value, ToolError> {
+    match call.tool_name().as_str() {
+        "status" => {
+            let outcome = worker
+                .ask(StoreWork::Inventory)
+                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+            let rules = state.rules.lock().expect("rules lock poisoned").rule.len();
+            let detected = state.detector.snapshot().len();
+
+            Ok(mcp::tool_json(serde_json::json!({
+                "port": state.settings.port,
+                "learn_mode": state.settings.learn_mode,
+                "mcp_writes": state.settings.mcp_writes,
+                "rules": rules,
+                "detected": detected,
+                "store": {
+                    "readable": outcome.ok,
+                    "providers": outcome.inventory.providers,
+                    "sublayers": outcome.inventory.sublayers,
+                    "filters": outcome.inventory.filters,
+                    "reason": outcome.reason,
+                },
+            })))
+        }
+        "rules.list" => {
+            let rules = state.rules.lock().expect("rules lock poisoned").clone();
+
+            Ok(mcp::tool_json(
+                serde_json::to_value(rules).map_err(|error| (mcp::REFUSED, error.to_string()))?,
+            ))
+        }
+        "rules.share" => {
+            let index = call
+                .arg("index")
+                .and_then(|value| value.as_u64())
+                .ok_or((mcp::INVALID_PARAMS, "rules.share needs an index".to_owned()))?
+                as usize;
+            let rules = state.rules.lock().expect("rules lock poisoned").clone();
+
+            match rules.rule.get(index) {
+                Some(rule) => Ok(mcp::tool_text(
+                    export::encode(rule).map_err(|error| (mcp::REFUSED, format!("{error:#}")))?,
+                )),
+                None => Err((
+                    mcp::INVALID_PARAMS,
+                    format!("there is no rule at index {index}"),
+                )),
+            }
+        }
+        name @ ("rules.allow" | "rules.deny") => {
+            let action = if name == "rules.deny" {
+                Action::Deny
+            } else {
+                Action::Allow
+            };
+
+            if state.settings.mcp_writes == Writes::None {
+                return Ok(mcp::tool_refusal(format!(
+                    "{name} refused: mcp_writes is none"
+                )));
+            }
+
+            let app = call
+                .string_arg("app")
+                .or_else(|| call.string_arg("pattern"))
+                .ok_or((mcp::INVALID_PARAMS, format!("{name} needs an app")))?;
+
+            // The pattern defaults to the application itself, which is the narrowest rule an agent
+            // can ask for; widening it to a wildcard stays a human decision in the browser.
+            let pattern = call.string_arg("pattern").unwrap_or_else(|| app.clone());
+
+            let name = call
+                .string_arg("name")
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| app.rsplit(['\\', '/']).next().unwrap_or("agent").to_owned());
+
+            let applied = {
+                let mut current = state.rules.lock().expect("rules lock poisoned");
+
+                current.rule.push(Rule {
+                    name: name.clone(),
+                    action,
+                    pattern,
+                    enabled: true,
+                });
+                current
+                    .save(&state.paths.rules)
+                    .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+                current.clone()
+            };
+
+            let outcome = worker
+                .ask(StoreWork::Apply {
+                    rules: applied,
+                    known: state.detector.apps(),
+                })
+                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+
+            Ok(mcp::tool_json(serde_json::json!({
+                "added": { "name": name, "action": action, "app": app },
+                "installed": outcome.installed,
+                "store": outcome.ok,
+            })))
+        }
+        "detected.list" => Ok(mcp::tool_json(
+            serde_json::to_value(state.detector.snapshot())
+                .map_err(|error| (mcp::REFUSED, error.to_string()))?,
+        )),
+        "events.list" => {
+            let mut events = state.events.snapshot();
+
+            events.reverse();
+            events.truncate(STATE_EVENTS);
+
+            Ok(mcp::tool_json(
+                serde_json::to_value(events).map_err(|error| (mcp::REFUSED, error.to_string()))?,
+            ))
+        }
+        "export" => {
+            let area = match call.string_arg("area") {
+                Some(text) => serde_json::from_value::<Area>(serde_json::Value::String(text))
+                    .map_err(|error| (mcp::INVALID_PARAMS, format!("bad area: {error}")))?,
+                None => Area::All,
+            };
+
+            let report = export::run(&state.paths, area)
+                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+
+            Ok(mcp::tool_json(
+                serde_json::to_value(report).map_err(|error| (mcp::REFUSED, error.to_string()))?,
+            ))
+        }
+        other => Err((
+            mcp::METHOD_NOT_FOUND,
+            format!("this endpoint has no tool named {other}"),
+        )),
     }
 }
 
