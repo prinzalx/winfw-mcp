@@ -6,22 +6,21 @@
 use std::ffi::c_void;
 
 use anyhow::{Result, bail};
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{FWP_E_ALREADY_EXISTS, HANDLE};
 use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE, FWP_CONDITION_VALUE0,
     FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_UINT8, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
     FWPM_CONDITION_ALE_APP_ID, FWPM_DISPLAY_DATA0, FWPM_FILTER_CONDITION0,
-    FWPM_FILTER_ENUM_TEMPLATE0, FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_FILTER_FLAG_INDEXED,
-    FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-    FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
-    FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6, FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_PROVIDER0,
-    FWPM_SUBLAYER_FLAG_PERSISTENT, FWPM_SUBLAYER0, FwpmEngineClose0, FwpmEngineOpen0,
-    FwpmFilterAdd0, FwpmFilterCreateEnumHandle0, FwpmFilterDeleteByKey0,
-    FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0,
-    FwpmProviderAdd0, FwpmProviderCreateEnumHandle0, FwpmProviderDestroyEnumHandle0,
-    FwpmProviderEnum0, FwpmSubLayerAdd0, FwpmSubLayerCreateEnumHandle0,
-    FwpmSubLayerDestroyEnumHandle0, FwpmSubLayerEnum0, FwpmTransactionAbort0,
-    FwpmTransactionBegin0, FwpmTransactionCommit0,
+    FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_FILTER_FLAG_INDEXED, FWPM_FILTER_FLAG_PERSISTENT,
+    FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+    FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+    FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_PROVIDER0, FWPM_SUBLAYER_FLAG_PERSISTENT, FWPM_SUBLAYER0,
+    FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterCreateEnumHandle0,
+    FwpmFilterDeleteByKey0, FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0, FwpmFreeMemory0,
+    FwpmGetAppIdFromFileName0, FwpmProviderAdd0, FwpmProviderCreateEnumHandle0,
+    FwpmProviderDestroyEnumHandle0, FwpmProviderEnum0, FwpmSubLayerAdd0,
+    FwpmSubLayerCreateEnumHandle0, FwpmSubLayerDestroyEnumHandle0, FwpmSubLayerEnum0,
+    FwpmTransactionAbort0, FwpmTransactionBegin0, FwpmTransactionCommit0,
 };
 use windows::core::{GUID, PCWSTR, PWSTR};
 
@@ -47,9 +46,15 @@ pub const SUBLAYER_KEY: GUID = GUID::from_u128(0x38c5b71e_4a26_4d09_9f81_7c6b2e0
 /// `RPC_C_AUTHN_DEFAULT`, spelled out instead of pulling in the RPC module for one constant.
 const RPC_C_AUTHN_DEFAULT: u32 = 0xFFFF_FFFF;
 
-/// `ERROR_ALREADY_EXISTS`, which `FwpmProviderAdd0` and `FwpmSubLayerAdd0` answer when we are
-/// already in the store. Installing again is the normal case, not a failure.
+/// `ERROR_ALREADY_EXISTS`, the Win32 answer for "it was already there".
 const ERROR_ALREADY_EXISTS: u32 = 183;
+
+/// Both answers that mean the object is already in the store. Measured on a real store, the two
+/// `Fwpm*Add0` calls answer `FWP_E_ALREADY_EXISTS` rather than the Win32 code, so accepting only
+/// `ERROR_ALREADY_EXISTS` turns a normal restart into a failed apply.
+fn already_exists(status: u32) -> bool {
+    status == ERROR_ALREADY_EXISTS || status == FWP_E_ALREADY_EXISTS.0 as u32
+}
 
 /// `FWW_IMPORTANT`, the reference implementation's weight for a filter that has to win.
 const WEIGHT_IMPORTANT: u8 = 0x0F;
@@ -318,7 +323,7 @@ impl Engine {
         // SAFETY: the struct only borrows the two wide buffers above, which outlive the call.
         let status = unsafe { FwpmProviderAdd0(self.handle, &provider, None) };
 
-        if status != 0 && status != ERROR_ALREADY_EXISTS {
+        if status != 0 && !already_exists(status) {
             bail!("FwpmProviderAdd0 failed with 0x{status:08X}");
         }
 
@@ -345,7 +350,7 @@ impl Engine {
         // SAFETY: the struct only borrows buffers owned by this function, which outlive the call.
         let status = unsafe { FwpmSubLayerAdd0(self.handle, &sublayer, None) };
 
-        if status != 0 && status != ERROR_ALREADY_EXISTS {
+        if status != 0 && !already_exists(status) {
             bail!("FwpmSubLayerAdd0 failed with 0x{status:08X}");
         }
 
@@ -353,18 +358,17 @@ impl Engine {
     }
 
     /// Delete every filter our provider owns, and report how many there were.
+    ///
+    /// The enumeration is unfiltered and the provider is selected here rather than with a
+    /// `FWPM_FILTER_ENUM_TEMPLATE0`: on a real store the template was rejected with
+    /// `FWPM_E_INVALID_ENUM_TYPE`, and we already enumerate all filters for the inventory, so the
+    /// extra entries cost nothing we were not already paying.
     fn remove_our_filters(&self) -> Result<usize> {
-        let mut provider_key = PROVIDER_KEY;
-
-        let mut template = FWPM_FILTER_ENUM_TEMPLATE0::default();
-        template.providerKey = &mut provider_key;
-
         let mut enum_handle = HANDLE::default();
 
-        // SAFETY: the template restricts the enumeration to our provider, and the out parameter is
-        // a valid handle slot.
-        let status =
-            unsafe { FwpmFilterCreateEnumHandle0(self.handle, Some(&template), &mut enum_handle) };
+        // SAFETY: a null template asks for every filter, and the out parameter is a valid handle
+        // slot.
+        let status = unsafe { FwpmFilterCreateEnumHandle0(self.handle, None, &mut enum_handle) };
 
         if status != 0 {
             bail!("FwpmFilterCreateEnumHandle0 failed with 0x{status:08X}");
@@ -397,9 +401,24 @@ impl Engine {
                 // SAFETY: WFP reported `returned` entries, so this slot is inside the array.
                 let entry = unsafe { *entries.add(index as usize) };
 
-                if !entry.is_null() {
-                    // SAFETY: the entry stays readable until the array is handed back below.
-                    keys.push(unsafe { (*entry).filterKey });
+                if entry.is_null() {
+                    continue;
+                }
+
+                // SAFETY: the entry stays readable until the array is handed back below.
+                let filter = unsafe { &*entry };
+
+                // A filter without a provider key was not added by us. Comparing the key here
+                // instead of in the template keeps the working enumeration path.
+                // SAFETY: the pointer is WFP-owned and either null or a readable GUID, which is
+                // what `as_ref` checks for.
+                let ours = match unsafe { filter.providerKey.as_ref() } {
+                    Some(key) => *key == PROVIDER_KEY,
+                    None => false,
+                };
+
+                if ours {
+                    keys.push(filter.filterKey);
                 }
             }
 

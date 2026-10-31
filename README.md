@@ -16,7 +16,7 @@ exposed over MCP, so an agent can allow or deny a connection too.
 ## Status
 
 Milestone 3 of 10. The tool owns its data directory, reads its config and rules, reads the live
-WFP store, and can translate `rules.toml` into persistent WFP filters. It has no UI yet.
+WFP store, and translates `rules.toml` into persistent WFP filters. It has no UI yet.
 
 | # | Milestone | State |
 |---|---|---|
@@ -46,7 +46,8 @@ cargo run
 ### Commands
 
 Until milestone 4 puts the web server in front of it, the two store operations are command line
-flags. Both are the operations the web UI will expose first as well.
+flags. Both are the operations the web UI will expose first as well. An apply needs elevation:
+without it the store reports access denied and the rules are not installed.
 
 ```
 winfw-mcp            load rules.toml and install it in the live store
@@ -56,6 +57,17 @@ winfw-mcp --clear    remove our filters from the live store
 Applying is a full rebuild, not a diff: our filters are removed and re-added in rule order inside
 one transaction, so the order in `rules.toml` is exactly the order WFP evaluates. Because the
 filters are persistent, `--clear` is the clean way to take the tool out again.
+
+Re-applying is the normal case, not an error. The provider and sublayer stay in the store after
+`--clear`, and both `Fwpm*Add0` calls answer `FWP_E_ALREADY_EXISTS` when they are added again, which
+the write path accepts.
+
+### Identifying our filters
+
+Every filter we install belongs to a fixed provider GUID, so a later run can find its own objects
+again without a state file. Enumerating them through a `FWPM_FILTER_ENUM_TEMPLATE0` was rejected by
+the engine with `FWPM_E_INVALID_ENUM_TYPE`, so the filter list is read whole and the provider key is
+compared in code. A filter with no provider key was not added by us.
 
 On the first run the binary creates its data directory and the two files inside it:
 
@@ -98,7 +110,8 @@ say so on a banner instead of showing an empty list.
 ## Releases
 
 Every milestone is released: version bumped here, `README.md` updated, tagged, pushed. The version
-in `Cargo.toml` is the source of truth.
+in `Cargo.toml` is the source of truth. A fix to a released milestone is a patch release of its
+own, which is why some versions have no milestone of their own.
 
 | Version | Milestone |
 |---|---|
@@ -106,3 +119,4 @@ in `Cargo.toml` is the source of truth.
 | 0.2.0 | WFP read path: engine handle, enumeration of the live store, degraded when unelevated |
 | 0.2.1 | Fix heap corruption while releasing an enumerated store |
 | 0.3.0 | Rules model and write path: `rules.toml` ↔ WFP, full rebuild in one transaction |
+| 0.3.1 | Fix the write path: find our filters without a template, accept `FWP_E_ALREADY_EXISTS` |
