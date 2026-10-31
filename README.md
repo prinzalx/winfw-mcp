@@ -12,6 +12,7 @@ exposed over MCP, so an agent can allow or deny a connection too.
 - All settings, rules and logs live in `%APPDATA%\winfw-mcp`
 - Everything in the repo is English: code, identifiers, UI strings, docs
 - Plan and rationale: [PLAN.md](PLAN.md)
+- Collected follow-ups: [BACKLOG.md](BACKLOG.md)
 
 ## Status
 
