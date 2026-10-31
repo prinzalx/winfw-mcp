@@ -64,6 +64,7 @@ their own.
 | 0.9.0 | MCP endpoint: JSON-RPC 2.0 over `POST /mcp`, read-only by default, gated writes |
 | 0.10.0 | Named profiles: `profiles\<name>.toml`, switchable from the UI and over MCP |
 | 0.11.0 | Stopping the tool: `POST /api/shutdown`, a `Quit` button, and a `Quit` on the tray that ends the process rather than only its tray thread |
+| 0.11.1 | Documentation split into chapters under `docs/`; the README is the index rather than every answer |
 
 ---
 
