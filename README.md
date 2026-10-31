@@ -52,6 +52,10 @@ cargo test
 cargo run
 ```
 
+Run the tests one at a time (`cargo test -- --test-threads=1`) and elevated. One test drives the
+real store through `WfpWorker`, and an unelevated process is refused there, so that test fails
+without administrator rights for reasons that have nothing to do with the code.
+
 ### Commands
 
 ```
