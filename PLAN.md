@@ -142,6 +142,24 @@ Notes:
 
 ---
 
+## 4.1 Rule precedence
+
+Decided 2026-10-31, and it is a decision rather than a WFP default:
+
+1. **A deny always beats an allow.** A deny filter is installed at filter weight `0x0F`, an allow
+   at `0x0E`. Equal weights would be resolved by creation order, which would let the position of a
+   rule in `rules.toml` decide an allow/deny conflict. Deny also sets
+   `FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT`, so the permit filters of other software cannot override
+   it either.
+2. **Between rules of the same action, the earlier rule in `rules.toml` wins.** Equal weights are
+   resolved in creation order, and a rebuild installs filters in file order.
+
+Consequence for the UI: rule order is only meaningful within one action, so the editor does not
+need to warn when a deny is dragged below an allow.
+
+
+---
+
 ## 5. WFP integration notes (learned from the C reference)
 
 These are facts from the C code that constrain the Rust design:

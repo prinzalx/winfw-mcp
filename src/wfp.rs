@@ -56,8 +56,15 @@ fn already_exists(status: u32) -> bool {
     status == ERROR_ALREADY_EXISTS || status == FWP_E_ALREADY_EXISTS.0 as u32
 }
 
-/// `FWW_IMPORTANT`, the reference implementation's weight for a filter that has to win.
-const WEIGHT_IMPORTANT: u8 = 0x0F;
+/// Filter weight for a deny rule.
+///
+/// A deny is installed one step above an allow so that it wins even when the allow rule appears
+/// earlier in `rules.toml`. Equal weights would be resolved by creation order, which would make
+/// the outcome depend on where a rule happens to sit in the file rather than on its action.
+const WEIGHT_DENY: u8 = 0x0F;
+
+/// Filter weight for an allow rule, one step below a deny.
+const WEIGHT_ALLOW: u8 = 0x0E;
 
 /// `FWW_SUBLAYER`, the top of a `u16` sublayer weight.
 const WEIGHT_SUBLAYER: u16 = 0xFFFF;
@@ -469,8 +476,17 @@ impl Engine {
             Action::Deny => FWP_ACTION_BLOCK,
         };
 
-        // A deny has to win over the permit filters around it, which is what clearing the action
-        // right of lower-weight filters does. Mirrors the reference implementation.
+        // Deny outranks allow by weight, so a matching deny wins whatever the order in the file
+        // is. Among rules of the same action the earlier rule still wins, because equal weights
+        // are resolved in creation order and we install in file order.
+        let weight = match rule.action {
+            Action::Allow => WEIGHT_ALLOW,
+            Action::Deny => WEIGHT_DENY,
+        };
+
+        // A deny also has to win over the permit filters of other software, which is what
+        // clearing the action right of lower-weight filters does. Mirrors the reference
+        // implementation.
         let mut flags = FWPM_FILTER_FLAG_PERSISTENT | FWPM_FILTER_FLAG_INDEXED;
 
         if rule.action == Action::Deny {
@@ -493,9 +509,7 @@ impl Engine {
             filter.subLayerKey = SUBLAYER_KEY;
             filter.weight = FWP_VALUE0 {
                 r#type: FWP_UINT8,
-                Anonymous: FWP_VALUE0_0 {
-                    uint8: WEIGHT_IMPORTANT,
-                },
+                Anonymous: FWP_VALUE0_0 { uint8: weight },
             };
             filter.numFilterConditions = 1;
             filter.filterCondition = &mut condition;
@@ -714,13 +728,24 @@ mod tests {
         let engine = Engine::open().expect("open engine");
 
         let rules = RuleFile {
-            rule: vec![Rule {
-                name: "winfw-mcp write test".to_owned(),
-                action: Action::Deny,
-                pattern: TEST_APP.to_owned(),
-                enabled: true,
-            }],
+            rule: vec![
+                Rule {
+                    name: "winfw-mcp write test".to_owned(),
+                    action: Action::Deny,
+                    pattern: TEST_APP.to_owned(),
+                    enabled: true,
+                },
+                Rule {
+                    name: "winfw-mcp write test allow".to_owned(),
+                    action: Action::Allow,
+                    pattern: TEST_APP.to_owned(),
+                    enabled: true,
+                },
+            ],
         };
+
+        // Both actions have to be installed, because they differ in more than their name.
+        let expected = rules.rule.len() * LAYERS.len();
 
         // Start from a clean store, so a count of zero means what it says.
         match engine.clear() {
@@ -735,22 +760,20 @@ mod tests {
 
         let applied = engine.apply(&rules).expect("apply the rule");
 
-        assert_eq!(applied.installed, LAYERS.len(), "one filter per layer");
+        assert_eq!(applied.installed, expected, "one filter per rule and layer");
         assert_eq!(applied.removed, 0, "the store was cleared first");
 
         let rebuilt = engine.apply(&rules).expect("apply the same rule again");
 
         assert_eq!(
-            rebuilt.removed,
-            LAYERS.len(),
+            rebuilt.removed, expected,
             "a rebuild must remove exactly what the run before installed"
         );
 
         let cleared = engine.clear().expect("clear the store");
 
         assert_eq!(
-            cleared,
-            LAYERS.len(),
+            cleared, expected,
             "clearing removes every filter we installed"
         );
     }
@@ -774,5 +797,12 @@ mod tests {
     #[test]
     fn a_default_handle_counts_as_invalid() {
         assert!(HANDLE::default().is_invalid());
+    }
+
+    /// A deny has to win over an allow no matter where the two rules sit in the file, and inside
+    /// the engine that is decided by filter weight rather than by rule order.
+    #[test]
+    fn a_deny_rule_outranks_an_allow_rule() {
+        assert!(WEIGHT_DENY > WEIGHT_ALLOW);
     }
 }

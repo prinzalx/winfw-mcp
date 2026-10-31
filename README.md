@@ -16,7 +16,8 @@ exposed over MCP, so an agent can allow or deny a connection too.
 ## Status
 
 Milestone 3 of 10. The tool owns its data directory, reads its config and rules, reads the live
-WFP store, and translates `rules.toml` into persistent WFP filters. It has no UI yet.
+WFP store, and translates `rules.toml` into persistent WFP filters, with deny ranked above allow.
+It has no UI yet.
 
 | # | Milestone | State |
 |---|---|---|
@@ -96,6 +97,10 @@ say so on a banner instead of showing an empty list.
 
 - **Load once, write immediately.** All settings are read at startup; every change made in the web
   UI is written straight back to disk. No save button, no dirty state.
+- **Deny always beats allow.** A deny filter is installed one weight above an allow filter, so a
+  matching deny wins even when an allow rule comes earlier in `rules.toml`. Between rules of the
+  same action the earlier one still wins, because equal weights are resolved in creation order and
+  filters are installed in file order.
 - **Atomic writes.** Files are written to `*.tmp` and renamed, so a crash never leaves a half
   written config behind. This matters because the WFP filters we install are persistent and
   outlive the process.
@@ -120,3 +125,4 @@ own, which is why some versions have no milestone of their own.
 | 0.2.1 | Fix heap corruption while releasing an enumerated store |
 | 0.3.0 | Rules model and write path: `rules.toml` ↔ WFP, full rebuild in one transaction |
 | 0.3.1 | Fix the write path: find our filters without a template, accept `FWP_E_ALREADY_EXISTS` |
+| 0.3.2 | Deny outranks allow by filter weight, whatever the order in `rules.toml` is |
