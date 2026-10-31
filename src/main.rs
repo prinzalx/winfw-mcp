@@ -107,7 +107,17 @@ fn main() -> Result<()> {
     if command == Command::Serve {
         return serve(paths, settings, rules, active_rules);
     }
-    sync_store(&rules, command);
+
+    // A one-shot run has no live monitor, but the applications a previous `--serve` run saw are on
+    // disk, and those are what a wildcard rule has to be expanded against.
+    let known = match command {
+        Command::Apply => learn::Detector::load(&paths.learn)
+            .map(|detector| detector.apps())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+
+    sync_store(&rules, command, &known);
 
     Ok(())
 }
@@ -131,6 +141,10 @@ fn serve(
     let rules = Arc::new(std::sync::Mutex::new(rules));
     let detector = Arc::new(learn::Detector::load(&paths.learn)?);
 
+    // The worker is started before the monitor so a callback can hand the store a rebuild when an
+    // application turns up that no filter knows about yet.
+    let worker = Arc::new(server::WfpWorker::start());
+
     // The monitor is started before the listener so the first page load already has a feed, even
     // if it is empty. It is held by this scope, which is what keeps the subscription open.
     let events = Arc::new(monitor::EventLog::new());
@@ -139,7 +153,24 @@ fn serve(
         Arc::clone(&detector),
         Arc::clone(&rules),
         settings.learn_mode,
+        worker.handle(),
     );
+
+    // Our filters persist across runs, so without this the store would keep whatever the previous
+    // run left in it: a rule edited while the tool was stopped, or an application that appeared
+    // since, would not be reflected until the next write. A refused store is a supported state.
+    let startup_rules = rules.lock().expect("rules lock poisoned").clone();
+    match worker.ask(server::StoreWork::Apply {
+        rules: startup_rules,
+        known: detector.apps(),
+    }) {
+        Ok(outcome) => {
+            info!(store = %outcome.describe(), "store rebuilt from the rules at startup")
+        }
+        Err(error) => {
+            warn!(reason = %format!("{error:#}"), "could not rebuild the store at startup")
+        }
+    }
 
     // Taken before `paths` moves into the state.
     let logfile = paths.logs.join("winfw-mcp.log");
@@ -157,7 +188,7 @@ fn serve(
     // flag the routes set.
     let running = state.stop_handle();
 
-    let server = server::Server::bind(port, state, Arc::new(server::WfpWorker::start()))?;
+    let server = server::Server::bind(port, state, Arc::clone(&worker))?;
 
     let url = format!("http://{}", server.addr());
 
@@ -214,7 +245,7 @@ fn log(path: &std::path::Path, message: &str) {
 /// need elevation, so an ordinary double-click on the executable reports the store as unreadable
 /// and leaves the filters untouched; the web UI will show that state instead of an empty list.
 #[cfg(windows)]
-fn sync_store(rules: &RuleFile, command: Command) {
+fn sync_store(rules: &RuleFile, command: Command, known: &[String]) {
     let engine = match wfp::Engine::open() {
         Ok(engine) => engine,
         Err(error) => {
@@ -229,9 +260,7 @@ fn sync_store(rules: &RuleFile, command: Command) {
     report("filters", &inventory.filters);
 
     let outcome = match command {
-        // A one-shot run has no observed applications, so a wildcard pattern can only be
-        // installed as it stands.
-        Command::Apply => engine.apply(rules, &[]).map(|applied| {
+        Command::Apply => engine.apply(rules, known).map(|applied| {
             info!(
                 removed = applied.removed,
                 installed = applied.installed,
@@ -267,7 +296,7 @@ fn report(category: &str, entries: &wfp::Entries) {
 
 /// The non-Windows variant exists only so the crate still builds for a doc tool.
 #[cfg(not(windows))]
-fn sync_store(_rules: &RuleFile, _command: Command) {}
+fn sync_store(_rules: &RuleFile, _command: Command, _known: &[String]) {}
 
 /// Logging goes to stderr: stdout belongs to the MCP stdio transport.
 fn init_tracing(settings: &Settings) {

@@ -250,6 +250,20 @@ impl StoreOutcome {
             reason: Some(reason.into()),
         }
     }
+
+    /// One line about what the store did, for a log message from outside this module.
+    pub(crate) fn describe(&self) -> String {
+        if self.ok {
+            format!("removed {}, installed {}", self.removed, self.installed)
+        } else {
+            format!(
+                "refused: {}",
+                self.reason
+                    .clone()
+                    .unwrap_or_else(|| "no reason given".to_owned())
+            )
+        }
+    }
 }
 
 /// The readable part of the store, summarized for the UI.
@@ -261,7 +275,7 @@ struct InventorySummary {
 }
 
 /// One unit of work plus the channel its answer goes back on.
-type WorkItem = (StoreWork, SyncSender<Result<StoreOutcome>>);
+pub(crate) type WorkItem = (StoreWork, SyncSender<Result<StoreOutcome>>);
 
 /// The single thread that owns the engine handle.
 pub struct WfpWorker {
@@ -303,6 +317,13 @@ impl WfpWorker {
             sender: Some(sender),
             join: Some(join),
         }
+    }
+
+    /// A second handle on the request queue, for a caller that has work but no interest in the
+    /// answer. The monitor uses it to rebuild the wildcard filters when an application turns up
+    /// that no filter knows yet.
+    pub fn handle(&self) -> Option<SyncSender<WorkItem>> {
+        self.sender.clone()
     }
 
     /// Hand one unit of work to the worker and wait for the answer.

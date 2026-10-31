@@ -35,7 +35,9 @@ refreshed from the event stream, so what the user is typing in the rules table i
 ## The switch
 
 Collection is controlled by `learn_mode` in `config.toml`. While it is off, nothing new reaches the
-Detected list, but the connection log keeps filling, so the events panel is unaffected. The setting
+Detected list, but the connection log keeps filling, so the events panel is unaffected. The set of
+seen applications that wildcard rules are expanded against grows either way; see
+[the wildcards](03-rules-and-profiles.md#wildcards). The setting
 is read when the process starts, which means changing it takes a restart; a way to flip it from the
 web page is on the [backlog](../BACKLOG.md). With learning off the Detected table says so instead of
 claiming that nothing is waiting for a decision.

@@ -10,7 +10,7 @@
 //! than the last few screens.
 
 use std::collections::VecDeque;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
@@ -107,6 +107,9 @@ struct Sink {
     /// `learn_mode` from the settings. Read once at startup, like every other setting, so the
     /// callback does not have to reach for the config on every connection.
     learning: bool,
+    /// Hand a store rebuild to the WFP worker when an application turns up that no filter knows
+    /// yet. The answer is not waited for: the next page load reads the store anyway.
+    rebuild: Option<SyncSender<crate::server::WorkItem>>,
 }
 
 /// The thread that keeps a subscription open.
@@ -129,10 +132,11 @@ impl Monitor {
         detector: Arc<crate::learn::Detector>,
         rules: Arc<Mutex<crate::rules::RuleFile>>,
         learning: bool,
+        rebuild: Option<SyncSender<crate::server::WorkItem>>,
     ) -> Self {
         let (shutdown, receiver) = channel();
 
-        let join = thread::spawn(move || listen(log, detector, rules, learning, receiver));
+        let join = thread::spawn(move || listen(log, detector, rules, learning, rebuild, receiver));
 
         Self {
             shutdown: Some(shutdown),
@@ -158,11 +162,12 @@ fn listen(
     detector: Arc<crate::learn::Detector>,
     rules: Arc<Mutex<crate::rules::RuleFile>>,
     learning: bool,
+    rebuild: Option<SyncSender<crate::server::WorkItem>>,
     shutdown: Receiver<()>,
 ) {
     use std::ffi::c_void;
 
-    use tracing::{debug, warn};
+    use tracing::{debug, info, warn};
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
         FWP_UINT32, FWP_VALUE0, FWP_VALUE0_0, FWPM_ENGINE_COLLECT_NET_EVENTS,
@@ -262,6 +267,7 @@ fn listen(
         detector,
         rules,
         learning,
+        rebuild,
     })) as *mut c_void;
 
     let mut events = HANDLE::default();
@@ -351,16 +357,52 @@ fn listen(
         // off the log still fills, because it is what the connection panel shows.
         sink.log.push(entry.clone());
 
-        if !sink.learning {
-            return;
-        }
+        // The seen list grows whatever the settings say, because it is the set a wildcard rule is
+        // expanded against, and the applications a rule already covers are exactly what a pattern
+        // wants to match. Learning mode is only the list of undecided applications on top of it.
+        let newly_seen = sink.detector.note_app(&entry.app);
 
-        let covered = sink.rules.lock().expect("rules lock poisoned").clone();
+        let ruleset = sink.rules.lock().expect("rules lock poisoned").clone();
 
-        if sink.detector.observe(&entry, &covered)
+        let detected = sink.learning && sink.detector.observe(&entry, &ruleset);
+
+        if (newly_seen || detected)
             && let Err(error) = sink.detector.save()
         {
             warn!(reason = %format!("{error:#}"), "could not write learn.json");
+        }
+
+        if !newly_seen {
+            return;
+        }
+
+        // A wildcard rule is a set of exact filters, so an application that did not exist when
+        // the rule was written cannot be matched by it. When one turns up and an enabled rule is
+        // a pattern, the filters are rebuilt against every application seen so far.
+        let pattern_in_use = ruleset
+            .rule
+            .iter()
+            .any(|rule| rule.enabled && crate::rules::is_wildcard(&rule.pattern));
+
+        let Some(rebuild) = &sink.rebuild else {
+            return;
+        };
+
+        if !pattern_in_use {
+            return;
+        }
+
+        let (reply, _reply) = sync_channel(1);
+        let work = crate::server::StoreWork::Apply {
+            rules: ruleset,
+            known: sink.detector.apps(),
+        };
+
+        // A full queue means a rebuild is already on its way, and that rebuild reads the rules
+        // and the seen list as they stand by then, so dropping this one loses nothing.
+        match rebuild.try_send((work, reply)) {
+            Ok(()) => info!(app = %entry.app, "new application, wildcard rebuild queued"),
+            Err(error) => debug!(reason = %format!("{error:?}"), "wildcard rebuild not queued"),
         }
     }
 }
@@ -372,6 +414,7 @@ fn listen(
     _detector: Arc<crate::learn::Detector>,
     _rules: Arc<Mutex<crate::rules::RuleFile>>,
     _learning: bool,
+    _rebuild: Option<SyncSender<crate::server::WorkItem>>,
     shutdown: Receiver<()>,
 ) {
     let _ = shutdown.recv();

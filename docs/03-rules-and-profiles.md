@@ -24,9 +24,17 @@ with base filters at the lowest weight, is in
 
 Rules match on `*` and `?`. Those wildcards are ours, not the kernel's: the translation to WFP is
 done by this program, in one place. WFP itself compares an application path exactly, so a pattern
-with a wildcard is expanded into the applications learning mode has actually seen, and each of them
+with a wildcard is expanded into the applications this tool has actually seen, and each of them
 gets its own filter (up to a fixed cap). A pattern nothing was seen for yet is installed as it
 stands, so the rule stays visible even before it can match.
+
+The set of seen applications is wider than the Detected list: it grows whether or not
+`learn_mode` is on, it includes applications an existing rule already covers, and dismissing or
+deciding an entry does not remove it. When an application is seen for the first time and an
+enabled rule is a pattern, the filters are rebuilt against the whole set, so a rule written
+yesterday picks up a program installed today without a manual Apply. The store is also rebuilt
+from the rules every time the tool starts, which is what keeps a rule edited while the process was
+stopped honest.
 
 ## Device paths and drive paths
 

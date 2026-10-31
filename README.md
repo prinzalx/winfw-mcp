@@ -63,5 +63,5 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.11.3**. What is known to be missing or fragile is listed in the
+The current release is **0.11.4**. What is known to be missing or fragile is listed in the
 [backlog](BACKLOG.md), ranked in its last section.

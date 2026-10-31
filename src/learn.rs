@@ -19,6 +19,10 @@ use crate::rules::{RuleFile, covered_by};
 /// How many applications the Detected list holds. The newest is kept, the oldest falls out.
 const DETECTED_CAP: usize = 100;
 
+/// How many application paths the seen list holds. It is the set a wildcard rule is expanded
+/// against, so it is wider than the Detected list and grows whether or not learning mode is on.
+const SEEN_CAP: usize = 512;
+
 /// One application waiting for a decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Detected {
@@ -40,6 +44,14 @@ pub struct Detected {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct LearnFile {
     entry: Vec<Detected>,
+    /// Every application path this tool has seen connecting, newest first.
+    ///
+    /// This is deliberately separate from `entry`: the Detected list is a to-do list that shrinks
+    /// when a decision is made and stops growing when learning mode is off, while the set a
+    /// wildcard rule is expanded against has to keep both. `#[serde(default)]` keeps a
+    /// `learn.json` written by an earlier version readable.
+    #[serde(default)]
+    seen: Vec<String>,
 }
 
 /// The Detected list, shared between the monitor's callbacks and the request threads.
@@ -109,7 +121,31 @@ impl Detector {
         true
     }
 
-    /// Persist the list. Called by the monitor when [`Detector::observe`] said the file changed.
+    /// Record that an application connected, whether or not a rule covers it and whether or not
+    /// learning mode is on.
+    ///
+    /// This is the set a wildcard rule is expanded against, so it has to grow even for an
+    /// application nobody has to decide about. Returns whether the application was new to the
+    /// list, which is what tells the monitor a rebuild of the wildcard filters is worth doing.
+    pub fn note_app(&self, app: &str) -> bool {
+        if app.is_empty() {
+            return false;
+        }
+
+        let mut list = self.inner.lock().expect("learn lock poisoned");
+
+        if list.seen.iter().any(|known| known == app) {
+            return false;
+        }
+
+        list.seen.insert(0, app.to_owned());
+        list.seen.truncate(SEEN_CAP);
+
+        true
+    }
+
+    /// Persist the list. Called by the monitor when [`Detector::observe`] or
+    /// [`Detector::note_app`] said the file changed.
     pub fn save(&self) -> Result<()> {
         let list = self.inner.lock().expect("learn lock poisoned");
         let text = serde_json::to_vec_pretty(&*list).context("serialize learn.json")?;
@@ -147,15 +183,11 @@ impl Detector {
     ///
     /// These are the candidates a wildcard rule is expanded against: WFP compares an application
     /// path exactly, so a pattern with `*` only becomes a filter for paths that were actually
-    /// observed.
+    /// observed. This is the seen list rather than the Detected list, because an application an
+    /// existing rule already covers is exactly what a wildcard rule wants to match, and because
+    /// collection continues when learning mode is off.
     pub fn apps(&self) -> Vec<String> {
-        self.inner
-            .lock()
-            .expect("learn lock poisoned")
-            .entry
-            .iter()
-            .map(|entry| entry.app.clone())
-            .collect()
+        self.inner.lock().expect("learn lock poisoned").seen.clone()
     }
 }
 
@@ -262,6 +294,7 @@ mod tests {
             &event("\\device\\harddiskvolume3\\a.exe", 10),
             &RuleFile::default(),
         );
+        detector.note_app("\\device\\harddiskvolume3\\a.exe");
         detector.save().expect("save");
 
         let loaded = Detector::load(&path).expect("reload");
@@ -269,6 +302,52 @@ mod tests {
         assert_eq!(loaded.snapshot(), detector.snapshot());
         assert_eq!(
             loaded.apps(),
+            vec!["\\device\\harddiskvolume3\\a.exe".to_owned()]
+        );
+    }
+
+    #[test]
+    fn the_seen_list_grows_even_when_nothing_is_detected() {
+        let detector = detector("detect-seen");
+
+        // An application a rule covers is not detected, but it is seen, and a wildcard rule has
+        // to be expanded against it.
+        let covered = rules("\\device\\harddiskvolume3\\windows\\*");
+
+        assert!(!detector.observe(
+            &event("\\device\\harddiskvolume3\\windows\\a.exe", 10),
+            &covered,
+        ));
+        assert!(detector.snapshot().is_empty());
+
+        assert!(detector.note_app("\\device\\harddiskvolume3\\windows\\a.exe"));
+        assert!(!detector.note_app("\\device\\harddiskvolume3\\windows\\a.exe"));
+        assert!(!detector.note_app(""));
+
+        assert_eq!(
+            detector.apps(),
+            vec!["\\device\\harddiskvolume3\\windows\\a.exe".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_decided_application_stays_a_wildcard_candidate() {
+        let detector = detector("detect-dismiss-seen");
+
+        detector.observe(
+            &event("\\device\\harddiskvolume3\\a.exe", 10),
+            &RuleFile::default(),
+        );
+        detector.note_app("\\device\\harddiskvolume3\\a.exe");
+        detector
+            .dismiss("\\device\\harddiskvolume3\\a.exe")
+            .expect("dismiss");
+
+        // Dismissing empties the Detected list, but the application was still seen, and a
+        // wildcard rule written later must still be expanded against it.
+        assert!(detector.snapshot().is_empty());
+        assert_eq!(
+            detector.apps(),
             vec!["\\device\\harddiskvolume3\\a.exe".to_owned()]
         );
     }
