@@ -335,6 +335,7 @@
 
       function apply(state) {
         rules = state.rules.rule;
+        el("addr").textContent = location.host;
         el("learn-mode").textContent = state.learn_mode ? "on" : "off";
         renderRules();
         renderBanner(state.store);

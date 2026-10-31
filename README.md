@@ -146,3 +146,4 @@ own, which is why some versions have no milestone of their own.
 | 0.3.1 | Fix the write path: find our filters without a template, accept `FWP_E_ALREADY_EXISTS` |
 | 0.3.2 | Deny outranks allow by filter weight, whatever the order in `rules.toml` is |
 | 0.4.0 | HTTP server and web UI shell: rules page, JSON API, degraded-store banner |
+| 0.4.1 | Show the address the page was served from instead of a hardcoded localhost |
