@@ -1,4 +1,5 @@
 mod config;
+mod monitor;
 mod paths;
 mod rules;
 mod server;
@@ -102,7 +103,13 @@ fn main() -> Result<()> {
 /// handle, because a WFP transaction belongs to a thread rather than to a handle.
 fn serve(paths: DataPaths, settings: Settings, rules: RuleFile) -> Result<()> {
     let port = settings.port;
-    let state = server::AppState::new(paths, settings, rules);
+
+    // The monitor is started before the listener so the first page load already has a feed, even
+    // if it is empty. It is held by this scope, which is what keeps the subscription open.
+    let events = Arc::new(monitor::EventLog::new());
+    let _monitor = monitor::Monitor::start(Arc::clone(&events));
+
+    let state = server::AppState::new(paths, settings, rules, events);
     let server = server::Server::bind(port, state, Arc::new(server::WfpWorker::start()))?;
 
     info!(url = %format!("http://{}", server.addr()), "web UI ready");

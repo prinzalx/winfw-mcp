@@ -15,9 +15,10 @@ exposed over MCP, so an agent can allow or deny a connection too.
 
 ## Status
 
-Milestone 4 of 10. The tool owns its data directory, reads its config and rules, reads the live
+Milestone 5 of 10. The tool owns its data directory, reads its config and rules, reads the live
 WFP store, translates `rules.toml` into persistent WFP filters with deny ranked above allow, and
-serves a web UI that edits those rules. The tray icon that opens the browser is still missing.
+serves a web UI that edits those rules. It also follows live connections: WFP's own event stream is
+forwarded to the browser over SSE. The tray icon that opens the browser is still missing.
 
 | # | Milestone | State |
 |---|---|---|
@@ -26,7 +27,7 @@ serves a web UI that edits those rules. The tray icon that opens the browser is 
 | 2 | WFP read path: open the engine, enumerate providers, sublayers, filters | done |
 | 3 | Rules model and write path: `rules.toml` ↔ WFP | done |
 | 4 | HTTP server and web UI shell | done |
-| 5 | Live connection events over SSE | next |
+| 5 | Live connection events over SSE | done |
 | 6 | Learning mode: Detected list, Allow / Deny / Edit | planned |
 | 7 | Tray icon and start popup | planned |
 | 8 | Export and Base64 Share | planned |
@@ -97,10 +98,18 @@ page with no build step, embedded in the binary. Open it, edit a rule, and the c
 | `GET /api/state` | settings, rules and what the store reported |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/clear` | remove our filters from the store |
+| `GET /api/events` | the connection feed as a server-sent event stream |
 | `GET /api/health` | liveness, for a future tray icon or supervisor |
 
+Live connections come from WFP's own event stream (`FwpmNetEventSubscribe4`) on a session of the
+monitor's own. Two engine options have to be set on that session first, and both were found the
+hard way: without `FWPM_ENGINE_COLLECT_NET_EVENTS` the subscription is accepted but never fires, and
+without the classifier keyword in `FWPM_ENGINE_NET_EVENT_MATCH_ANY_KEYWORDS` only blocked
+connections are collected at all, so the allowed ones a learning mode needs would be missing. The
+options are per session, so the monitor configures its own and leaves the machine alone.
+
 The server is `std` only: one thread per connection, no async runtime. Every request that matters
-ends in a blocking WFP call anyway, and a long-lived connection is what milestone 5 needs for SSE.
+ends in a blocking WFP call anyway, and a long-lived connection is what SSE needs.
 Because a WFP transaction belongs to a thread rather than to a handle, exactly one worker thread
 owns the engine handle; request threads hand their work to it over a channel and wait.
 
@@ -147,3 +156,4 @@ own, which is why some versions have no milestone of their own.
 | 0.3.2 | Deny outranks allow by filter weight, whatever the order in `rules.toml` is |
 | 0.4.0 | HTTP server and web UI shell: rules page, JSON API, degraded-store banner |
 | 0.4.1 | Show the address the page was served from instead of a hardcoded localhost |
+| 0.5.0 | Live connection events: WFP event stream forwarded to the browser over SSE, plus a page markup fix (the script had been outside its element) |

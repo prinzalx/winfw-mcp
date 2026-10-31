@@ -9,6 +9,17 @@
 //! `winfw-core` rule from PLAN.md section 6: this module is a transport. It reads and writes the
 //! files and forwards store work to the WFP worker, but it decides nothing about the firewall.
 //!
+//! ## Routes
+//!
+//! | method | path | purpose |
+//! |---|---|---|
+//! | GET | `/` | the single-page UI |
+//! | GET | `/api/state` | settings, rules, store summary, recent events |
+//! | GET | `/api/events` | the event log as a server-sent event stream |
+//! | GET | `/api/health` | liveness, no state involved |
+//! | POST | `/api/rules` | replace the rules, write the file, rebuild the store |
+//! | POST | `/api/clear` | remove our filters from the store |
+//!
 //! ## Threading
 //!
 //! A WFP transaction belongs to a thread rather than to a handle (see `wfp::Engine::transaction`),
@@ -28,6 +39,7 @@ use serde::Serialize;
 use tracing::{debug, info, warn};
 
 use crate::config::Settings;
+use crate::monitor::{EventLog, NetEvent};
 use crate::paths::DataPaths;
 use crate::rules::RuleFile;
 
@@ -36,6 +48,14 @@ const INDEX_HTML: &str = include_str!("../web/index.html");
 
 /// How long the accept loop blocks before it checks whether the process is shutting down.
 const ACCEPT_POLL: Duration = Duration::from_millis(200);
+
+/// How often an SSE connection looks at the event log. A poll, not a wake-up: the callbacks come
+/// from RPC threads and the log is the only shared state, which keeps the locking trivial.
+const EVENT_POLL: Duration = Duration::from_millis(500);
+
+/// How many recent events `/api/state` carries, enough for the panel to render without a second
+/// request.
+const STATE_EVENTS: usize = 50;
 
 /// Everything a request handler may touch.
 ///
@@ -46,14 +66,22 @@ pub struct AppState {
     paths: DataPaths,
     settings: Settings,
     rules: Mutex<RuleFile>,
+    /// The live connection feed, filled by the monitor thread.
+    events: Arc<EventLog>,
 }
 
 impl AppState {
-    pub fn new(paths: DataPaths, settings: Settings, rules: RuleFile) -> Self {
+    pub fn new(
+        paths: DataPaths,
+        settings: Settings,
+        rules: RuleFile,
+        events: Arc<EventLog>,
+    ) -> Self {
         Self {
             paths,
             settings,
             rules: Mutex::new(rules),
+            events,
         }
     }
 }
@@ -470,6 +498,8 @@ impl Server {
 
                 Response::json(200, &state_json)
             }
+            // `/api/events` is answered by `stream_events`, because a response that never ends
+            // cannot be a buffered body.
             ("GET", "/api/health") => Ok(Response::text(200, "ok")),
             ("POST", "/api/clear") => {
                 let outcome = worker.ask(StoreWork::Clear)?;
@@ -489,11 +519,17 @@ struct StateJson {
     log_level: String,
     rules: RuleFile,
     store: StoreOutcome,
+    /// The newest events first, so the panel shows the interesting end even when it is truncated.
+    events: Vec<NetEvent>,
 }
 
 impl StateJson {
     fn new(state: &AppState, store: &StoreOutcome) -> Self {
         let rules = state.rules.lock().expect("rules lock poisoned").clone();
+
+        let mut events = state.events.snapshot();
+        events.reverse();
+        events.truncate(STATE_EVENTS);
 
         Self {
             port: state.settings.port,
@@ -501,13 +537,55 @@ impl StateJson {
             log_level: state.settings.log_level.clone(),
             rules,
             store: store.clone(),
+            events,
         }
+    }
+}
+
+/// Push the event stream until the client goes away.
+///
+/// Each connection gets its own thread already, so the only cost of a poll loop is the latency,
+/// and a write failure is how a closed browser tab is noticed.
+fn stream_events(stream: &mut TcpStream, log: &EventLog) -> Result<()> {
+    stream
+        .write_all(
+            b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+              cache-control: no-store\r\nconnection: close\r\n\r\n",
+        )
+        .context("write event stream header")?;
+
+    let mut last = 0;
+
+    loop {
+        let new_events = log.since(last);
+
+        if new_events.is_empty() {
+            // An SSE comment is the keepalive. Writing something every poll is also how a client
+            // that went away is noticed: flushing an idle socket with nothing to send reports no
+            // error, so without this a closed tab would keep its thread forever.
+            stream
+                .write_all(b": keepalive\n\n")
+                .context("event stream closed")?;
+        }
+
+        for event in new_events {
+            let body = serde_json::to_string(&event).context("serialize event")?;
+
+            stream
+                .write_all(format!("data: {body}\n\n").as_bytes())
+                .context("write event")?;
+
+            last = event.seq;
+        }
+
+        stream.flush().context("flush event stream")?;
+        thread::sleep(EVENT_POLL);
     }
 }
 
 /// Read one request, write one response.
 fn handle_connection(
-    stream: TcpStream,
+    mut stream: TcpStream,
     state: Arc<AppState>,
     worker: Arc<WfpWorker>,
 ) -> Result<()> {
@@ -572,6 +650,10 @@ fn handle_connection(
 
     debug!(method = %request.method, path = %request.path, "request");
 
+    if request.path == "/api/events" {
+        return stream_events(&mut stream, &state.events);
+    }
+
     let response = Server::route(&state, &worker, &request)
         .unwrap_or_else(|error| Response::text(500, format!("{error:#}")));
 
@@ -607,6 +689,10 @@ mod tests {
     use crate::rules::Rule;
 
     fn state() -> AppState {
+        state_with(Arc::new(EventLog::new()))
+    }
+
+    fn state_with(events: Arc<EventLog>) -> AppState {
         let scratch = crate::testutil::scratch_dir("server");
         let paths = DataPaths::under(scratch.join("data"));
 
@@ -621,7 +707,20 @@ mod tests {
                     enabled: true,
                 }],
             },
+            events,
         )
+    }
+
+    fn connection(app: &str) -> crate::monitor::NetEvent {
+        crate::monitor::NetEvent {
+            seq: 0,
+            time_ms: 0,
+            app: app.to_owned(),
+            remote_port: 443,
+            protocol: 6,
+            allowed: true,
+            kind: "allowed".to_owned(),
+        }
     }
 
     #[test]
@@ -671,6 +770,91 @@ mod tests {
         assert_eq!(response.status, 200);
         assert!(body.contains("\"browser\""), "{body}");
         assert!(body.contains("\"rules\""), "{body}");
+    }
+
+    /// The state response carries the newest events first, so the panel renders in one request.
+    #[test]
+    fn the_state_endpoint_carries_recent_events() {
+        let events = Arc::new(EventLog::new());
+        events.push(connection("older.exe"));
+        events.push(connection("newer.exe"));
+
+        let server_state = state_with(Arc::clone(&events));
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains("newer.exe"), "{body}");
+        assert!(
+            body.find("newer.exe") < body.find("older.exe"),
+            "the newest event must come first: {body}",
+        );
+    }
+
+    /// The stream is not a buffered response, so it is exercised over a socket.
+    #[test]
+    fn the_event_stream_serves_headers_and_then_events() {
+        let events = Arc::new(EventLog::new());
+        let server = Server::bind(
+            0,
+            state_with(Arc::clone(&events)),
+            Arc::new(WfpWorker::start()),
+        )
+        .expect("bind");
+        let addr = server.addr();
+
+        let join = thread::spawn(move || server.serve_once());
+
+        let mut socket = TcpStream::connect(addr).expect("connect");
+        socket
+            .write_all(b"GET /api/events HTTP/1.1\r\nhost: localhost\r\n\r\n")
+            .expect("send request");
+
+        // The first read can only see what had been written by then, which is the header.
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+
+        let mut header = [0u8; 20];
+        socket.read_exact(&mut header).expect("read stream header");
+        assert_eq!(
+            &header,
+            b"HTTP/1.1 200 OK\r\ncon",
+            "{}",
+            String::from_utf8_lossy(&header),
+        );
+
+        events.push(connection("late.exe"));
+
+        // The remaining header bytes are already buffered, so reading until the event shows up is
+        // what the stream actually promises rather than one read returning it.
+        let mut text = String::new();
+        let mut chunk = [0u8; 512];
+
+        while !text.contains("late.exe") {
+            let read = socket.read(&mut chunk).expect("read event");
+
+            assert_ne!(
+                read, 0,
+                "the stream closed before the event arrived: {text}"
+            );
+            text.push_str(&String::from_utf8_lossy(&chunk[..read]));
+        }
+
+        assert!(text.contains("data: "), "{text}");
+
+        drop(socket);
+
+        // The stream only ends because the client went away, which is reported as a write error.
+        let outcome = join.join().expect("the serving thread panicked");
+        assert!(outcome.is_err(), "a closed client must end the stream");
     }
 
     /// The whole loop over a real socket, on an ephemeral port.

@@ -13,7 +13,7 @@ The C implementation is the **functional specification**, not a code base to por
   plus `builder/` (upstream packaging only)
 - Target platform: **Windows only** — no cross-platform abstraction layer needed
 - Language of all code, identifiers, UI strings and docs: **English only**
-- Status: **implementing** — M0 to M4 done, M5 (connection events over SSE) next
+- Status: **implementing** — M0 to M5 done, M6 (learning mode) next
 
 
 ---
@@ -286,6 +286,26 @@ The consequence to remember: a request thread that touches the store **blocks** 
 the store work is funnelled through one worker thread (a WFP transaction belongs to a thread, not
 to a handle). That thread is also what stops two full filter rebuilds from racing each other.
 
+### Confirmed approach: how WFP hands out connection events (M5)
+
+Getting the live feed to work needed three things that are not obvious from the API surface, each
+verified against a running store rather than assumed:
+
+- The subscription needs a session of its own. A subscription on a handle opened with the default
+  (NULL) session is accepted but never fires.
+- `FWPM_ENGINE_COLLECT_NET_EVENTS` must be set on that session, or the engine collects nothing and
+  the callback stays silent. It **cannot** be set on a dynamic session — the engine answers
+  `FWP_E_DYNAMIC_SESSION_IN_PROGRESS` — so the monitor's session is deliberately not dynamic. It
+  installs no filters, so there is nothing for it to clean up either.
+- By default only **blocked** connections are collected. Allowed connections — the ones learning
+  mode is built on — need `FWPM_NET_EVENT_KEYWORD_CLASSIFY_ALLOW` in
+  `FWPM_ENGINE_NET_EVENT_MATCH_ANY_KEYWORDS`.
+
+Two details of the payload are worth remembering for M6: the application path in an event is a
+**UTF-16** blob with a trailing NUL (`size` counts bytes), and it is a **device path**
+(`\device\harddiskvolume3\...`) rather than a drive path. A rule created from a Detected entry has
+to deal with that form, not with `C:\...`.
+
 ### Knowledge taken from `mcp-template`
 
 `mcp-template` is the standing template for our MCP projects. It is **not** a dependency of
@@ -316,7 +336,7 @@ Small, each one independently useful, each one testable without the next.
 | 2 | **WFP read path** ✅ | engine handle, enumerate providers/sublayers/filters, each reported on its own | reports the live store; degrades to a warning when unelevated |
 | 3 | **Rules model + write path** ✅ | `rules.toml` ↔ WFP, add/remove/enable/disable, elevated-write check | toggling a rule changes live WFP state *and* the file |
 | 4 | **HTTP server + web UI shell** ✅ | static assets, Rules area, JSON API | browser shows rules, change in UI is on disk instantly |
-| 5 | **Live events via SSE** ← next | `FwpmNetEventSubscribe` → SSE stream | connection log scrolls live in browser |
+| 5 | **Live events via SSE** ✅ | `FwpmNetEventSubscribe` → SSE stream | connection log scrolls live in browser |
 | 6 | **Learning mode** | Detected list, `learn.bin`, Allow/Deny/Edit, wildcard matching | unknown app appears, Allow creates a rule, entry leaves list |
 | 7 | **Tray + start popup** | tray icon, click opens browser, `Quit` | no console window, works from double-click |
 | 8 | **Export + Share** | per-area export to `export\`, Base64 rule encode/decode | Base64 string pastes back into a second machine |
