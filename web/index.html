@@ -208,6 +208,7 @@
           <th style="width: 7rem">Action</th>
           <th>Pattern</th>
           <th style="width: 4rem"></th>
+          <th style="width: 5rem"></th>
         </tr>
       </thead>
       <tbody id="rules"></tbody>
@@ -232,7 +233,11 @@
       <button id="add">Add rule</button>
       <button id="apply">Apply to WFP</button>
       <button id="clear">Clear our filters</button>
+      <button id="export">Export</button>
+      <button id="import">Import</button>
     </div>
+
+    <p class="sub" id="share"></p>
 
     <p class="sub">
       A deny always beats an allow, whatever the order of the list. Patterns accept the wildcards
@@ -381,6 +386,12 @@
           });
           row.appendChild(element("td", null)).appendChild(remove);
 
+          // The Base64 form is for copy and paste, so it goes into the line under the table and
+          // into the clipboard, whichever of the two the user reaches for.
+          const share = element("button", null, "share");
+          share.addEventListener("click", () => shareRule(index));
+          row.appendChild(element("td", null)).appendChild(share);
+
           if (rule.action === "deny") {
             name.classList.add("deny");
           }
@@ -518,6 +529,22 @@
         source.onerror = () => status("event stream interrupted");
       }
 
+      async function shareRule(index) {
+        try {
+          const text = await request("POST", "/api/rules/share", { index });
+
+          el("share").textContent = "Share: " + text;
+
+          // The clipboard needs a secure context; over plain http on a loopback address the
+          // browser allows it, but a failure here must not hide the string on the page.
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(text).catch(() => {});
+          }
+        } catch (error) {
+          status("could not share: " + error.message);
+        }
+      }
+
       function apply(state) {
         rules = state.rules.rule;
         detected = state.detected;
@@ -595,6 +622,31 @@
           status("removed " + store.removed + " filters");
         } catch (error) {
           status("could not clear: " + error.message);
+        }
+      });
+
+      el("export").addEventListener("click", async () => {
+        try {
+          const report = await request("POST", "/api/export", {});
+
+          status("exported " + report.files.length + " files to " + report.dir);
+        } catch (error) {
+          status("could not export: " + error.message);
+        }
+      });
+
+      el("import").addEventListener("click", async () => {
+        const text = window.prompt("Paste a share string");
+
+        if (text === null || text.trim() === "") {
+          return;
+        }
+
+        try {
+          apply(await request("POST", "/api/rules/import", { share: text }));
+          status("imported one rule");
+        } catch (error) {
+          status("could not import: " + error.message);
         }
       });
 

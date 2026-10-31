@@ -21,6 +21,9 @@
 //! | POST | `/api/detected` | turn a detected application into a rule and rebuild the store |
 //! | POST | `/api/detected/dismiss` | drop a detected application without allowing it |
 //! | POST | `/api/clear` | remove our filters from the store |
+//! | POST | `/api/export` | copy rules, config and the Detected list into `export\` |
+//! | POST | `/api/rules/share` | one rule as a Base64 string, for copy and paste |
+//! | POST | `/api/rules/import` | append the rule a Base64 string carries |
 //!
 //! ## Threading
 //!
@@ -41,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::config::Settings;
+use crate::export::{self, Area};
 use crate::learn::{Detected, Detector};
 use crate::monitor::{EventLog, NetEvent};
 use crate::paths::DataPaths;
@@ -579,6 +583,48 @@ impl Server {
 
                 Response::json(200, &outcome)
             }
+            ("POST", "/api/export") => {
+                // An empty body exports everything, which is what the button in the UI sends.
+                let body: Backup = parse_or_default(&request.body)?;
+                let report = export::run(&state.paths, body.area.unwrap_or(Area::All))?;
+
+                Response::json(200, &report)
+            }
+            ("POST", "/api/rules/share") => {
+                let body: ShareIndex =
+                    serde_json::from_slice(&request.body).context("body must name a rule index")?;
+                let rules = state.rules.lock().expect("rules lock poisoned").clone();
+
+                let Some(rule) = rules.rule.get(body.index) else {
+                    bail!("there is no rule at index {}", body.index);
+                };
+
+                Ok(Response::text(200, export::encode(rule)?))
+            }
+            ("POST", "/api/rules/import") => {
+                let body: Share = serde_json::from_slice(&request.body)
+                    .context("body must carry a share string")?;
+                let incoming = export::decode(&body.share)?;
+
+                let applied = {
+                    let mut current = state.rules.lock().expect("rules lock poisoned");
+
+                    // Appended rather than merged: an import must never replace something the user
+                    // already has, whatever the Base64 string came from.
+                    current.rule.push(incoming);
+                    current
+                        .save(&state.paths.rules)
+                        .context("write rules.toml")?;
+                    current.clone()
+                };
+
+                let outcome = worker.ask(StoreWork::Apply {
+                    rules: applied,
+                    known: state.detector.apps(),
+                })?;
+
+                Response::json(200, &StateJson::new(state, &outcome))
+            }
             _ => Ok(Response::text(404, "not found")),
         }
     }
@@ -640,6 +686,38 @@ struct Decision {
 #[derive(Debug, Clone, Deserialize)]
 struct Dismissal {
     app: String,
+}
+
+/// The body of `POST /api/export`.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct Backup {
+    #[serde(default)]
+    area: Option<Area>,
+}
+
+/// The body of `POST /api/rules/share`: which rule to encode.
+#[derive(Debug, Clone, Deserialize)]
+struct ShareIndex {
+    index: usize,
+}
+
+/// The body of `POST /api/rules/import`.
+#[derive(Debug, Clone, Deserialize)]
+struct Share {
+    share: String,
+}
+
+/// Parse a JSON body that may legitimately be empty, as `curl -d ''` and a UI button that sends no
+/// payload both produce.
+fn parse_or_default<T>(body: &[u8]) -> Result<T>
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    if body.is_empty() {
+        return Ok(T::default());
+    }
+
+    Ok(serde_json::from_slice(body).context("body must be a JSON object")?)
 }
 
 /// Push the event stream until the client goes away.
@@ -903,6 +981,78 @@ mod tests {
             String::from_utf8_lossy(&response.body).contains("<html"),
             "the embedded page must be a document",
         );
+    }
+
+    #[test]
+    fn the_export_endpoint_copies_the_files_of_every_area() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/export", br#"{}"#.to_vec()),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert_eq!(response.status, 200, "{body}");
+        assert!(body.contains("\"files\""), "{body}");
+    }
+
+    #[test]
+    fn a_rule_can_be_shared_and_imported_again() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let shared = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/rules/share", br#"{"index":0}"#.to_vec()),
+        )
+        .expect("route");
+
+        assert_eq!(shared.status, 200);
+
+        let text = String::from_utf8(shared.body).expect("share is text");
+
+        // Importing it has to add a second rule, and the added rule must be the shared one.
+        let imported = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules/import",
+                format!(r#"{{"share":"{text}"}}"#).into_bytes(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&imported.body).into_owned();
+
+        assert_eq!(imported.status, 200, "{body}");
+        assert_eq!(
+            body.matches(r#""name":"browser""#).count(),
+            2,
+            "the shared rule must be appended, not replace the existing one: {body}",
+        );
+    }
+
+    #[test]
+    fn an_index_outside_the_rule_list_is_refused() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/rules/share", br#"{"index":9}"#.to_vec()),
+        )
+        .err()
+        .expect("index 9 does not exist");
+
+        assert!(format!("{response:#}").contains("index 9"), "{response:#}");
     }
 
     #[test]

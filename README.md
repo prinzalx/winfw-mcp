@@ -15,12 +15,13 @@ exposed over MCP, so an agent can allow or deny a connection too.
 
 ## Status
 
-Milestone 7 of 10. The tool owns its data directory, reads its config and rules, reads the live
+Milestone 8 of 10. The tool owns its data directory, reads its config and rules, reads the live
 WFP store, translates `rules.toml` into persistent WFP filters with deny ranked above allow, and
 serves a web UI that edits those rules. It follows live connections over SSE, and learning mode
 collects every application no rule speaks about yet in a Detected list where each entry can be
 allowed, denied or dismissed from the browser. In a release build it runs without a console window
-and lives as a tray icon: left click opens the browser, right click offers `Quit`.
+and lives as a tray icon: left click opens the browser, right click offers `Quit`. Any area can be
+copied into `export\` on demand, and one rule travels as a Base64 string you can paste anywhere.
 
 | # | Milestone | State |
 |---|---|---|
@@ -32,8 +33,8 @@ and lives as a tray icon: left click opens the browser, right click offers `Quit
 | 5 | Live connection events over SSE | done |
 | 6 | Learning mode: Detected list, Allow / Deny / Edit | done |
 | 7 | Tray icon and start popup | done |
-| 8 | Export and Base64 Share | next |
-| 9 | MCP endpoint | planned |
+| 8 | Export and Base64 Share | done |
+| 9 | MCP endpoint | next |
 | 10 | Named profiles | planned |
 
 ## Build and run
@@ -107,6 +108,9 @@ page with no build step, embedded in the binary. Open it, edit a rule, and the c
 | `POST /api/detected` | turn one detected application into a rule and rebuild the store |
 | `POST /api/detected/dismiss` | drop a detected application without deciding |
 | `POST /api/clear` | remove our filters from the store |
+| `POST /api/export` | copy the rules, the config and the Detected list into `export\` |
+| `POST /api/rules/share` | one rule as a Base64 string, for copy and paste |
+| `POST /api/rules/import` | append the rule a Base64 string carries |
 | `GET /api/events` | the connection feed as a server-sent event stream |
 | `GET /api/health` | liveness, for a supervisor or the MCP transport |
 
@@ -184,3 +188,4 @@ own, which is why some versions have no milestone of their own.
 | 0.5.0 | Live connection events: WFP event stream forwarded to the browser over SSE, plus a page markup fix (the script had been outside its element) |
 | 0.6.0 | Learning mode: Detected list in the UI, wildcard patterns, device path ↔ drive path translation |
 | 0.7.0 | Tray icon without a console window: left click opens the browser, right click offers `Quit` |
+| 0.8.0 | Export of any area into `export\`, plus Share and Import of a single rule as Base64 |
