@@ -13,7 +13,7 @@ The C implementation is the **functional specification**, not a code base to por
   plus `builder/` (upstream packaging only)
 - Target platform: **Windows only** — no cross-platform abstraction layer needed
 - Language of all code, identifiers, UI strings and docs: **English only**
-- Status: **implementing** — M0 and M1 done, M2 (WFP read path) next
+- Status: **implementing** — M0 to M2 done, M3 (rules write path) next
 
 
 ---
@@ -172,6 +172,16 @@ These are facts from the C code that constrain the Rust design:
   on first WFP write. If it fails, show a banner in the web UI offering
   "relaunch elevated". Do **not** hard-code `requireAdministrator`, or the portable
   double-click becomes a UAC prompt every time.
+- **Measured here (M2): reading the store needs elevation too.** An unelevated process opens the
+  engine happily, but every `Fwpm*CreateEnumHandle0` answers `0x00000005` (access denied) — not
+  just for providers, for filters as well. So the banner in the web UI is not a write-only
+  concern: without elevation there is nothing to show at all. `FwpmEngineOpen0` succeeding is
+  therefore not proof of a usable session, and "degraded" must be a state the UI renders.
+- **`windows`-crate layout, measured on 0.62.2**: `Fwpm*` lives in
+  `Win32::NetworkManagement::WindowsFilteringPlatform` (not in WinSock), and
+  `FwpmEngineOpen0` is additionally gated behind `Win32_System_Rpc` because of its credentials
+  parameter. The filter structs only implement `Default` when `Win32_Security` is on. Worth
+  knowing before the first `cargo add` guesses the wrong feature set.
 - **Window-bound leftovers** we must replace when going headless:
   `WM_DEVICECHANGE` / `DBT_DEVICEARRIVAL` for volume changes (`src/main.c:2733`) and
   window-based `_r_sys_settimer`. Both solvable with a message-only window
@@ -232,7 +242,7 @@ Suggested crate choices (to confirm at implementation time):
 
 | Concern | Choice | Why |
 |---|---|---|
-| Win32 / WFP | `windows` | official, covers all 38 `Fwpm*` calls |
+| Win32 / WFP | `windows` **0.62** | official; verified reading the live store (§8) |
 | HTTP server | `axum` + `tokio` | SSE support, plays well with MCP |
 | Serialization | `serde` + `serde_json` + `toml` | config and API in one model system |
 | XML (profile compat) | `quick-xml` | reading existing simplewall profiles |
@@ -270,7 +280,7 @@ Small, each one independently useful, each one testable without the next.
 |---|---|---|---|
 | 0 | **Toolchain** | Rust installed, hello-world binary builds | `cargo build` produces an `.exe` ✅ done (§8) |
 | 1 | **Core skeleton** | `winfw-core`, config load from `%APPDATA%\winfw-mcp`, atomic writes | binary reads config, logs resolved paths |
-| 2 | **WFP read path** | engine handle, enumerate providers/sublayers/filters (read-only, no admin needed) | prints/lists live filters |
+| 2 | **WFP read path** | engine handle, enumerate providers/sublayers/filters, each reported on its own | reports the live store; degrades to a warning when unelevated |
 | 3 | **Rules model + write path** | `rules.toml` ↔ WFP, add/remove/enable/disable, elevated-write check | toggling a rule changes live WFP state *and* the file |
 | 4 | **HTTP server + web UI shell** | static assets, Rules area, JSON API | browser shows rules, change in UI is on disk instantly |
 | 5 | **Live events via SSE** | `FwpmNetEventSubscribe` → SSE stream | connection log scrolls live in browser |
@@ -327,11 +337,11 @@ Ordered by how much pain they could cause.
    be expanded/evaluated at ALE time. Needs a decision: static expansion at rule-add time
    (simpler, stale if paths change) or a callout/sublayer approach (correct, heavier).
    → Spike this early, before milestone 6.
-2. **Elevation model.** Portable + `asInvoker` + WFP writes need admin. A portable
-   double-click that silently runs non-elevated means the user sees rules but cannot edit
-   them. Needs a clear banner + "relaunch elevated" affordance, and the decision whether
-   the Startup entry uses a scheduled task with "highest privileges" (cleaner than a UAC
-   prompt on every logon).
+2. **Elevation model.** Portable + `asInvoker`, and since M2 we know **reads** need admin too,
+   not just writes. A portable double-click that silently runs non-elevated therefore shows an
+   empty store rather than a wrong one, which is easy to mistake for "no rules". Needs a clear
+   banner + "relaunch elevated" affordance, and the decision whether the Startup entry uses a
+   scheduled task with "highest privileges" (cleaner than a UAC prompt on every logon).
 3. **Persistent filters outliving the app.** Good for enforcement, but a crashed/quit tray
    app leaves "detected" collection stopped while policy still applies. The UI should say
    plainly when the monitor is not running.

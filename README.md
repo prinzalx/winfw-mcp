@@ -15,15 +15,15 @@ exposed over MCP, so an agent can allow or deny a connection too.
 
 ## Status
 
-Milestone 1 of 10. The crate builds and runs; it owns its data directory and reads its config.
-Nothing touches WFP yet.
+Milestone 2 of 10. The tool owns its data directory, reads its config and rules, and can read the
+live WFP store. It changes nothing yet and has no UI.
 
 | # | Milestone | State |
 |---|---|---|
 | 0 | Toolchain: Rust builds an `.exe` | done |
 | 1 | Data directory, config and rules load, atomic writes | done |
-| 2 | WFP read path: enumerate providers, sublayers, filters | next |
-| 3 | Rules model and write path: `rules.toml` ↔ WFP | planned |
+| 2 | WFP read path: open the engine, enumerate providers, sublayers, filters | done |
+| 3 | Rules model and write path: `rules.toml` ↔ WFP | next |
 | 4 | HTTP server and web UI shell | planned |
 | 5 | Live connection events over SSE | planned |
 | 6 | Learning mode: Detected list, Allow / Deny / Edit | planned |
@@ -58,15 +58,25 @@ On the first run the binary creates its data directory and the two files inside 
 `RUST_LOG` overrides `log_level` from `config.toml` for a single run. Logging goes to stderr,
 because stdout belongs to the MCP stdio transport.
 
+### Reading the store needs elevation
+
+Measured on Windows 11: an unelevated process opens the WFP engine without problem, but every
+enumeration answers access denied. So `cargo run` in a plain shell logs a warning per store class
+and prints no filters, while an elevated run lists them. That is a supported degraded state, not a
+failure, and the web UI will say so on a banner instead of showing an empty list.
+
 ## Data model decisions
 
 - **Load once, write immediately.** All settings are read at startup; every change made in the web
   UI is written straight back to disk. No save button, no dirty state.
 - **Atomic writes.** Files are written to `*.tmp` and renamed, so a crash never leaves a half
-  written config behind. This matters because the WFP filters we install are persistent and outlive
-  the process.
+  written config behind. This matters because the WFP filters we install are persistent and
+  outlive the process.
 - **Unknown config keys are an error,** not a warning. A typo in `config.toml` fails loudly instead
   of quietly keeping the default.
+- **Store classes are reported separately.** WFP grants read access per class, so providers,
+  sublayers and filters each carry their own result. A refused provider store is not a reason to
+  throw away the filters we did read.
 - **Wildcards are ours, not the kernel's.** Rules match on `*` and `?`; the translation to WFP is
   done by this program, in one place.
 
@@ -78,3 +88,4 @@ in `Cargo.toml` is the source of truth.
 | Version | Milestone |
 |---|---|
 | 0.1.0 | Data directory, config and rules load, atomic writes |
+| 0.2.0 | WFP read path: engine handle, enumeration of the live store, degraded when unelevated |

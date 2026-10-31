@@ -2,12 +2,14 @@ mod config;
 mod paths;
 mod rules;
 mod store;
+#[cfg(windows)]
+mod wfp;
 
 #[cfg(test)]
 mod testutil;
 
 use anyhow::Result;
-use tracing::info;
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::config::Settings;
@@ -41,8 +43,47 @@ fn main() -> Result<()> {
     );
     info!(count = rules.rule.len(), "rules loaded");
 
+    log_inventory();
+
     Ok(())
 }
+
+/// Report what the live store holds, one line per class. WFP grants read access per class, so an
+/// unelevated process normally reads the filters and is refused the provider store. That is a
+/// degraded state rather than a failed start, so it stays a warning.
+#[cfg(windows)]
+fn log_inventory() {
+    let engine = match wfp::Engine::open() {
+        Ok(engine) => engine,
+        Err(error) => {
+            warn!("{error:#}");
+            return;
+        }
+    };
+
+    let inventory = engine.inventory();
+    report("providers", &inventory.providers);
+    report("sublayers", &inventory.sublayers);
+    report("filters", &inventory.filters);
+}
+
+#[cfg(windows)]
+fn report(category: &str, entries: &wfp::Entries) {
+    match entries {
+        Ok(names) => {
+            info!(count = names.len(), category, "WFP store read");
+
+            for name in names {
+                debug!(category, entry = %name, "WFP entry");
+            }
+        }
+        Err(error) => warn!(category, reason = %format!("{error:#}"), "WFP store unreadable"),
+    }
+}
+
+/// The non-Windows variant exists only so the crate still builds for a doc tool.
+#[cfg(not(windows))]
+fn log_inventory() {}
 
 /// Logging goes to stderr: stdout belongs to the MCP stdio transport.
 fn init_tracing(settings: &Settings) {

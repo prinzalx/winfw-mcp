@@ -8,7 +8,8 @@ on:
 jobs:
   build-test:
     # Windows only by design: the tool is a WFP controller, so there is nothing to gain from a
-    # second operating system here.
+    # second operating system here. The runner is elevated, so the WFP test reads real entries
+    # instead of reporting access denied.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,4 +19,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo build --all-targets
-      - run: cargo test
+
+      # --nocapture so the log shows whether the store was read or the run was skipped.
+      - run: cargo test -- --nocapture
