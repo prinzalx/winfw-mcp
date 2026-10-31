@@ -58,6 +58,10 @@ use crate::rules::{Action, Rule, RuleFile};
 /// The page served at `/`, embedded so the binary stays a single file.
 const INDEX_HTML: &str = include_str!("../web/index.html");
 
+/// How many consecutive ports `Server::bind` walks through before it gives up on a busy
+/// configured port.
+const PORT_ATTEMPTS: u16 = 8;
+
 /// How long the accept loop blocks before it checks whether the process is shutting down.
 const ACCEPT_POLL: Duration = Duration::from_millis(200);
 
@@ -459,21 +463,59 @@ impl Server {
     /// Bind `127.0.0.1:{port}`. Port 0 is allowed and resolves to an ephemeral port, which is what
     /// the tests use.
     pub fn bind(port: u16, state: AppState, worker: Arc<WfpWorker>) -> Result<Self> {
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        // A conflict on the configured port must not kill the tray app (PLAN.md section 9), so a
+        // busy port is answered by the next one. Port 0 asks the OS for an ephemeral port and
+        // cannot meaningfully fall forward.
+        let attempts = if port == 0 { 1 } else { PORT_ATTEMPTS };
 
-        let listener = TcpListener::bind(addr).with_context(|| format!("bind {addr} failed"))?;
-        listener
-            .set_nonblocking(true)
-            .context("could not switch the listener to non-blocking")?;
+        let mut failures = Vec::new();
 
-        let bound = listener.local_addr().context("local_addr failed")?;
+        for offset in 0..attempts {
+            let Some(candidate) = port.checked_add(offset) else {
+                break;
+            };
 
-        Ok(Self {
-            listener,
-            addr: bound,
-            state: Arc::new(state),
-            worker,
-        })
+            let addr = SocketAddr::from(([127, 0, 0, 1], candidate));
+
+            let listener = match TcpListener::bind(addr) {
+                Ok(listener) => listener,
+                Err(error) => {
+                    failures.push(format!("{addr}: {error}"));
+
+                    continue;
+                }
+            };
+
+            if offset > 0 {
+                warn!(
+                    configured = port,
+                    actual = candidate,
+                    "configured port was busy, listened on the next free one instead"
+                );
+            }
+
+            listener
+                .set_nonblocking(true)
+                .context("could not switch the listener to non-blocking")?;
+
+            let bound = listener.local_addr().context("local_addr failed")?;
+
+            return Ok(Self {
+                listener,
+                addr: bound,
+                state: Arc::new(state),
+                worker,
+            });
+        }
+
+        bail!(
+            "bind {port} failed: {}",
+            if failures.is_empty() {
+                "no port in range".to_owned()
+            } else {
+                failures.join(", ")
+            }
+        )
     }
 
     /// The address we actually listen on, useful when port 0 was requested.
@@ -1825,5 +1867,22 @@ mod tests {
 
         assert!(raw.starts_with("HTTP/1.1 200 OK"), "{raw}");
         assert!(raw.contains("\"rules\""), "{raw}");
+    }
+
+    /// A busy configured port is answered by the next free one rather than by an error, which is
+    /// what keeps a port conflict from killing the tray app.
+    #[test]
+    fn a_busy_port_makes_the_server_fall_forward() {
+        let blocker = TcpListener::bind("127.0.0.1:0").expect("blocker");
+        let port = blocker.local_addr().expect("blocker address").port();
+
+        let server = Server::bind(port, state(), Arc::new(WfpWorker::start())).expect("bind");
+        let bound = server.addr().port();
+
+        assert_ne!(bound, port, "the busy port cannot be taken twice");
+        assert!(
+            bound > port && bound < port + PORT_ATTEMPTS,
+            "fell forward to {bound} from a busy {port}"
+        );
     }
 }

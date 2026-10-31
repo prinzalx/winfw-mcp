@@ -6,6 +6,10 @@
 page with no build step, embedded in the binary. Open it, edit a rule, and the change is written to
 `rules.toml` and pushed to the store immediately.
 
+A port that is already taken does not end the app: the server takes the next free one of the
+following eight, warns about it in the log, and the tray icon opens the browser at the port it
+actually got.
+
 ## What is on the page
 
 - **Profile** selector, which switches the live rule file.
