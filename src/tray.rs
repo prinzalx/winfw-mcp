@@ -10,6 +10,7 @@
 //! thread that pumps its messages, which is also why the tray cannot live on one of the server's
 //! request threads.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -21,6 +22,13 @@ use std::thread::{self, JoinHandle};
 /// acceptable rather than merely convenient.
 #[cfg(windows)]
 static UI_URL: Mutex<String> = Mutex::new(String::new());
+
+/// The flag that keeps the server's accept loop alive, cleared by `Quit`.
+///
+/// The window procedure needs it and, like [`UI_URL`], cannot be handed a capture, so it lives in
+/// the process next to it. There is exactly one tray per process here too.
+#[cfg(windows)]
+static SERVER_RUNNING: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 
 /// Our icon's identifier among this window's icons.
 #[cfg(windows)]
@@ -45,20 +53,26 @@ impl Tray {
     ///
     /// A machine where the icon cannot be added is not a failure of the tool: the server answers
     /// anyway and the user types the address, so a refused icon is only logged.
-    pub fn start(url: String) -> Self {
+    ///
+    /// `running` is the server's flag: choosing `Quit` clears it, which is what ends the process
+    /// rather than only the tray thread.
+    pub fn start(url: String, running: Arc<AtomicBool>) -> Self {
         let thread = Arc::new(Mutex::new(None));
         let (ready, ready_receiver) = channel::<bool>();
 
-        // The window procedure is a bare function pointer, so it reads the URL from the process
-        // rather than from a capture. It is set before the thread that could answer a click starts.
+        // The window procedure is a bare function pointer, so it reads the URL and the flag from
+        // the process rather than from a capture. Both are set before the thread that could answer
+        // a click starts.
         #[cfg(windows)]
         {
             *UI_URL.lock().expect("url lock poisoned") = url;
+            *SERVER_RUNNING.lock().expect("running lock poisoned") = Some(running);
         }
 
         #[cfg(not(windows))]
         {
             let _ = url;
+            let _ = running;
         }
 
         let join = {
@@ -331,6 +345,17 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
         DestroyMenu(menu).ok();
 
         if choice.0 == MENU_QUIT as i32 {
+            // Clearing the flag is what stops the accept loop and with it the process. On its own
+            // `PostQuitMessage` ends only this thread's message loop, which would leave a running
+            // server behind with no icon in the notification area.
+            if let Some(running) = SERVER_RUNNING
+                .lock()
+                .expect("running lock poisoned")
+                .as_ref()
+            {
+                running.store(false, Ordering::SeqCst);
+            }
+
             PostQuitMessage(0);
         }
     }

@@ -240,6 +240,7 @@
       <button id="clear">Clear our filters</button>
       <button id="export">Export</button>
       <button id="import">Import</button>
+      <button id="quit" title="Stop this tool; the rules stay in the firewall">Quit</button>
     </div>
 
     <p class="sub" id="share"></p>
@@ -673,6 +674,19 @@
           status("imported one rule");
         } catch (error) {
           status("could not import: " + error.message);
+        }
+      });
+
+      // Stopping ends the process, so the page says what happened rather than reloading a server
+      // that is no longer there. The filters stay installed; `Clear our filters` is what removes
+      // them.
+      el("quit").addEventListener("click", async () => {
+        try {
+          await request("POST", "/api/shutdown", {});
+
+          status("stopped");
+        } catch (error) {
+          status("could not stop: " + error.message);
         }
       });
 

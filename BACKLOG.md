@@ -21,10 +21,15 @@ These are not missing features; they are behaviour that differs from what the co
 
 | # | Finding | Evidence |
 |---|---|---|
-| B1 | **`Quit` in the tray does not stop the process.** `Quit` posts `PostQuitMessage`, which ends the *tray thread's* message loop only. The main thread is blocked in `Server::serve()`, whose accept loop checks no shutdown flag, so the icon disappears and the server keeps serving. | [verified] `src/tray.rs:334`, `src/server.rs:463-486`, `src/main.rs:185` |
+| B1 | **`Quit` in the tray did not stop the process.** `Quit` posted `PostQuitMessage`, which ends the *tray thread's* message loop only, while the accept loop in `Server::serve()` checked no flag: the icon disappeared and the server kept serving. **Fixed in 0.11.0** — `AppState::running` is now the flag the accept loop waits on, and both `Quit` and `POST /api/shutdown` clear it. | [verified] fixed; `src/server.rs` (`AppState::running`, `request_stop`), `src/tray.rs` (`SERVER_RUNNING`) |
 | B2 | **`learn_mode` is inert.** The setting is read, stored and reported, but the monitor collects unconditionally, so `learn_mode = false` still fills the Detected list. | `src/monitor.rs:349`, `src/main.rs:137-141` |
 | B3 | **A port conflict terminates the app.** `Server::bind` returns an error and `--serve` propagates it, while PLAN.md §9 asked for a fallback so a conflict does not kill the tray app. | `src/server.rs:436-452`, `src/main.rs:155` |
 | B4 | **A wildcard rule silently misses applications until something writes.** Expansion is rebuilt only when a write happens, from the applications the detector has seen; a one-shot run expands against nothing. | `src/wfp.rs:564-583`, `src/main.rs:229` |
+
+There was also an open question behind B1: stopping the tool from the browser needed a route that
+did not exist, so stopping meant `taskkill`. It exists since 0.11.0 as `POST /api/shutdown`, is
+offered by a `Quit` button on the page, and is an MCP tool of its own. Every way of stopping leaves
+the persistent filters in place, which is what item 6 of §2 asked about.
 
 Found while auditing, and worth knowing even though it is not a bug: the filter key is derived from
 the rule name **plus its index** (`src/wfp.rs:510`), so the UI's repeated default name `new rule`

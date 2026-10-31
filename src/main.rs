@@ -152,6 +152,10 @@ fn serve(
         active_rules,
         active_name,
     );
+    // Taken before `state` moves into the server, because `Quit` on the tray has to reach the same
+    // flag the routes set.
+    let running = state.stop_handle();
+
     let server = server::Server::bind(port, state, Arc::new(server::WfpWorker::start()))?;
 
     let url = format!("http://{}", server.addr());
@@ -160,7 +164,7 @@ fn serve(
 
     // Held by this scope for as long as the server runs, which is what takes the icon out of the
     // notification area again when the process is asked to stop.
-    let _tray = tray::Tray::start(url.clone());
+    let _tray = tray::Tray::start(url.clone(), running);
 
     let tray_status = if _tray.added() {
         "tray icon added"

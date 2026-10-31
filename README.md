@@ -72,6 +72,11 @@ no terminal window at all: `--serve` puts an icon in the notification area, a le
 the browser on the UI, and the right button offers `Quit`. Debug builds keep the console, because
 that is where the log goes while the tool is being developed.
 
+Stopping the tool takes either of those two routes, and both end the process rather than only the
+tray thread. The UI does it over `POST /api/shutdown`, and `Quit` clears the same flag. Because the
+filters we install are persistent, the rules stay in the live firewall after the process is gone;
+`--clear` is what takes them out.
+
 Applying is a full rebuild, not a diff: our filters are removed and re-added in rule order inside
 one transaction, so the order in `rules.toml` is exactly the order WFP evaluates. Because the
 filters are persistent, `--clear` is the clean way to take the tool out again.
@@ -116,6 +121,7 @@ page with no build step, embedded in the binary. Open it, edit a rule, and the c
 | `POST /api/detected` | turn one detected application into a rule and rebuild the store |
 | `POST /api/detected/dismiss` | drop a detected application without deciding |
 | `POST /api/clear` | remove our filters from the store |
+| `POST /api/shutdown` | stop the server, which ends the process; the filters stay installed |
 | `POST /api/export` | copy the rules, the config and the Detected list into `export\` |
 | `POST /api/rules/share` | one rule as a Base64 string, for copy and paste |
 | `POST /api/rules/import` | append the rule a Base64 string carries |
@@ -143,6 +149,7 @@ tool name may be used as the method directly.
 | `export` | copy an area (`rules`, `config`, `detected`, `all`) into `export\` | yes |
 | `profiles.list` | the active profile and the stored profile names | no |
 | `profile.use` | switch the live profile (takes `name`) | yes |
+| `shutdown` | stop the process; the filters stay in the firewall | yes |
 
 Reads are always allowed. Writes go through `mcp_writes` in `config.toml`, which is `none` by
 default: an agent should be able to ask questions before anyone allows it to answer them. A
@@ -231,3 +238,4 @@ own, which is why some versions have no milestone of their own.
 | 0.8.0 | Export of any area into `export\`, plus Share and Import of a single rule as Base64 |
 | 0.9.0 | MCP endpoint: JSON-RPC 2.0 over `POST /mcp`, read-only by default, gated writes |
 | 0.10.0 | Named profiles: `profiles\<name>.toml`, switchable from the UI and over MCP |
+| 0.11.0 | Stopping the tool: `POST /api/shutdown`, a `Quit` button, and a `Quit` on the tray that ends the process rather than only its tray thread |

@@ -21,6 +21,7 @@
 //! | POST | `/api/detected` | turn a detected application into a rule and rebuild the store |
 //! | POST | `/api/detected/dismiss` | drop a detected application without allowing it |
 //! | POST | `/api/clear` | remove our filters from the store |
+//! | POST | `/api/shutdown` | stop the server, which ends the process |
 //! | POST | `/api/export` | copy rules, config and the Detected list into `export\` |
 //! | POST | `/api/rules/share` | one rule as a Base64 string, for copy and paste |
 //! | POST | `/api/rules/import` | append the rule a Base64 string carries |
@@ -36,6 +37,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -58,6 +60,9 @@ const INDEX_HTML: &str = include_str!("../web/index.html");
 
 /// How long the accept loop blocks before it checks whether the process is shutting down.
 const ACCEPT_POLL: Duration = Duration::from_millis(200);
+
+/// How long the accept loop waits after a stop request before it lets the process end.
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(250);
 
 /// How often an SSE connection looks at the event log. A poll, not a wake-up: the callbacks come
 /// from RPC threads and the log is the only shared state, which keeps the locking trivial.
@@ -89,6 +94,10 @@ pub struct AppState {
     active_file: Mutex<PathBuf>,
     /// The active profile name, or empty for `rules.toml` itself.
     active_name: Mutex<String>,
+    /// Kept set while the process should keep accepting connections. `POST /api/shutdown` and the
+    /// tray's `Quit` both clear it, which is the only way either of them has of ending a process
+    /// whose main thread is parked in the accept loop.
+    running: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -110,7 +119,23 @@ impl AppState {
             events,
             active_file: Mutex::new(active_file),
             active_name: Mutex::new(active_name),
+            running: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    /// The handle the tray needs in order to stop the server. The same flag the routes set, so the
+    /// two ways of quitting cannot disagree about whether the process is on its way out.
+    pub fn stop_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.running)
+    }
+
+    /// Ask the process to stop, and report whether this call was the one that did it. A repeated
+    /// request gets `false`, which is how a client tells "I stopped it" from "it was already
+    /// on its way out".
+    fn request_stop(&self) -> bool {
+        self.running
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
     }
 
     /// The file the active rules live in. Read on every save, because a switch changes it.
@@ -463,7 +488,7 @@ impl Server {
     pub fn serve(&self) -> Result<()> {
         info!(addr = %self.addr, "listening");
 
-        loop {
+        while self.state.running.load(Ordering::SeqCst) {
             match self.listener.accept() {
                 Ok((stream, peer)) => {
                     let state = Arc::clone(&self.state);
@@ -483,6 +508,15 @@ impl Server {
                 Err(error) => return Err(error).context("accept failed"),
             }
         }
+
+        info!(addr = %self.addr, "accept loop stopped");
+
+        // The request thread that asked to stop is still writing its response when the loop notices,
+        // and the process ends as soon as this function returns. Without the pause the client that
+        // asked would see the connection cut instead of the reply it was waiting for.
+        thread::sleep(SHUTDOWN_GRACE);
+
+        Ok(())
     }
 
     /// Answer exactly one connection. Intended for tests, where an infinite loop would hang.
@@ -606,6 +640,15 @@ impl Server {
             }
             // `/api/events` is answered by `stream_events`, because a response that never ends
             // cannot be a buffered body.
+            // Stopping is a flag rather than a signal: the main thread is parked in `accept`, and
+            // only the accept loop itself can leave it.
+            ("POST", "/api/shutdown") => {
+                let stopping = state.request_stop();
+
+                info!(first = stopping, "shutdown requested");
+
+                Response::json(200, &serde_json::json!({ "stopping": stopping }))
+            }
             ("GET", "/api/health") => Ok(Response::text(200, "ok")),
             ("POST", "/api/clear") => {
                 let outcome = worker.ask(StoreWork::Clear)?;
@@ -773,6 +816,10 @@ fn tool_list() -> Vec<serde_json::Value> {
         (
             "profile.use",
             "switch the live profile; takes a name (empty selects rules.toml)",
+        ),
+        (
+            "shutdown",
+            "stop the process; the filters stay in the firewall",
         ),
     ]
     .into_iter()
@@ -965,6 +1012,17 @@ fn mcp_tool(
             Ok(mcp::tool_json(
                 serde_json::to_value(report).map_err(|error| (mcp::REFUSED, error.to_string()))?,
             ))
+        }
+        "shutdown" => {
+            // Stopping is gated as a write, because a process that ends at the wrong moment
+            // surprises an agent more than a rule it has to redo does.
+            if state.settings.mcp_writes == Writes::None {
+                return Ok(mcp::tool_refusal("shutdown refused: mcp_writes is none"));
+            }
+
+            Ok(mcp::tool_json(serde_json::json!({
+                "stopping": state.request_stop(),
+            })))
         }
         other => Err((
             mcp::METHOD_NOT_FOUND,
@@ -1395,6 +1453,32 @@ mod tests {
         assert!(body.contains("work"), "the new profile is listed: {body}");
     }
 
+    /// `tools/list` is what an agent reads before it acts, so a tool that exists must be in it:
+    /// `shutdown` is reachable as a method only because `is_tool` finds it in this list.
+    #[test]
+    fn the_tool_list_offers_shutdown() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains(r#""name":"shutdown""#),
+            "a tool that is not listed cannot be discovered: {body}"
+        );
+    }
+
     /// An agent may name a tool directly rather than wrapping it in `tools/call`, which is the
     /// shortest form it can send and therefore the one it is most likely to guess.
     #[test]
@@ -1440,6 +1524,92 @@ mod tests {
         .expect("route");
 
         assert_eq!(response.status, 404);
+    }
+
+    /// `POST /api/shutdown` clears the flag the accept loop waits on, which is what lets the
+    /// process end rather than run on with no tray icon and no way to stop it.
+    #[test]
+    fn a_shutdown_request_stops_the_accept_loop() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/shutdown", vec![]),
+        )
+        .expect("route");
+
+        assert_eq!(response.status, 200);
+        assert!(
+            !server_state.running.load(Ordering::SeqCst),
+            "the flag the accept loop waits on must be cleared",
+        );
+
+        // A second request says it was not the one that stopped the loop, so a client can tell a
+        // first quit from a repeated one.
+        let repeated = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/shutdown", vec![]),
+        )
+        .expect("route");
+
+        let body: serde_json::Value =
+            serde_json::from_slice(&repeated.body).expect("the shutdown answer is json");
+
+        assert_eq!(body["stopping"], false, "only the first request stops");
+    }
+
+    /// The endpoint can be asked to stop as well, but only at a write level that permits it:
+    /// `mcp_writes = none` is what keeps an agent from switching the tool off.
+    #[test]
+    fn the_mcp_shutdown_tool_stops_the_process() {
+        let worker = WfpWorker::start();
+
+        let mut allowed = state();
+        allowed.settings.mcp_writes = Writes::All;
+
+        let response = Server::route(
+            &allowed,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                br#"{"jsonrpc":"2.0","id":1,"method":"shutdown"}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        assert_eq!(response.status, 200);
+        assert!(
+            !allowed.running.load(Ordering::SeqCst),
+            "the tool must clear the flag the accept loop waits on",
+        );
+
+        let refused = state();
+
+        let response = Server::route(
+            &refused,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                br#"{"jsonrpc":"2.0","id":2,"method":"shutdown"}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains("mcp_writes is none"),
+            "the refusal must say why: {body}"
+        );
+        assert!(
+            refused.running.load(Ordering::SeqCst),
+            "a refused shutdown must leave the process running",
+        );
     }
 
     #[test]
