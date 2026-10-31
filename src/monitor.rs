@@ -104,6 +104,9 @@ struct Sink {
     log: Arc<EventLog>,
     detector: Arc<crate::learn::Detector>,
     rules: Arc<Mutex<crate::rules::RuleFile>>,
+    /// `learn_mode` from the settings. Read once at startup, like every other setting, so the
+    /// callback does not have to reach for the config on every connection.
+    learning: bool,
 }
 
 /// The thread that keeps a subscription open.
@@ -125,10 +128,11 @@ impl Monitor {
         log: Arc<EventLog>,
         detector: Arc<crate::learn::Detector>,
         rules: Arc<Mutex<crate::rules::RuleFile>>,
+        learning: bool,
     ) -> Self {
         let (shutdown, receiver) = channel();
 
-        let join = thread::spawn(move || listen(log, detector, rules, receiver));
+        let join = thread::spawn(move || listen(log, detector, rules, learning, receiver));
 
         Self {
             shutdown: Some(shutdown),
@@ -153,6 +157,7 @@ fn listen(
     log: Arc<EventLog>,
     detector: Arc<crate::learn::Detector>,
     rules: Arc<Mutex<crate::rules::RuleFile>>,
+    learning: bool,
     shutdown: Receiver<()>,
 ) {
     use std::ffi::c_void;
@@ -256,6 +261,7 @@ fn listen(
         log,
         detector,
         rules,
+        learning,
     })) as *mut c_void;
 
     let mut events = HANDLE::default();
@@ -341,8 +347,13 @@ fn listen(
         };
 
         // Learning mode looks at the application behind the connection, not at the connection
-        // itself, so the log gets a copy and the detector gets the original.
+        // itself, so the log gets a copy and the detector gets the original. With `learn_mode`
+        // off the log still fills, because it is what the connection panel shows.
         sink.log.push(entry.clone());
+
+        if !sink.learning {
+            return;
+        }
 
         let covered = sink.rules.lock().expect("rules lock poisoned").clone();
 
@@ -360,6 +371,7 @@ fn listen(
     _log: Arc<EventLog>,
     _detector: Arc<crate::learn::Detector>,
     _rules: Arc<Mutex<crate::rules::RuleFile>>,
+    _learning: bool,
     shutdown: Receiver<()>,
 ) {
     let _ = shutdown.recv();

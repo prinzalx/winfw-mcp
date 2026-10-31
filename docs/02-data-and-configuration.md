@@ -25,7 +25,7 @@ On the first run the binary creates its data directory and the files inside it:
 |---|---|
 | `port` | the loopback port the web server binds (8788 by default) |
 | `log_level` | default tracing level; `RUST_LOG` overrides it for a single run |
-| `learn_mode` | whether learning mode collects applications |
+| `learn_mode` | whether learning mode collects applications; off means the Detected list stays empty while the connection log keeps filling, and changing it takes a restart |
 | `theme` | presentation preference carried by the page |
 | `mcp_writes` | how much the MCP endpoint may write: `none`, `rules` or `all` |
 | `active_profile` | the live profile name; empty selects `rules.toml` itself |

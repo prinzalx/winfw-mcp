@@ -65,6 +65,7 @@ their own.
 | 0.10.0 | Named profiles: `profiles\<name>.toml`, switchable from the UI and over MCP |
 | 0.11.0 | Stopping the tool: `POST /api/shutdown`, a `Quit` button, and a `Quit` on the tray that ends the process rather than only its tray thread |
 | 0.11.1 | Documentation split into chapters under `docs/`; the README is the index rather than every answer |
+| 0.11.2 | `learn_mode` is honoured: with it off the Detected list stays empty while the connection log keeps filling, and the page says learning is off |
 
 ---
 

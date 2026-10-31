@@ -138,6 +138,7 @@ fn serve(
         Arc::clone(&events),
         Arc::clone(&detector),
         Arc::clone(&rules),
+        settings.learn_mode,
     );
 
     // Taken before `paths` moves into the state.

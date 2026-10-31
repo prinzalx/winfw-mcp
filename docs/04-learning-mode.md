@@ -32,6 +32,14 @@ The path in the row is editable on purpose: widening `C:\Program Files\Nodejs\no
 either way. A new application shows up in the list without a reload, but only this one list is
 refreshed from the event stream, so what the user is typing in the rules table is not thrown away.
 
+## The switch
+
+Collection is controlled by `learn_mode` in `config.toml`. While it is off, nothing new reaches the
+Detected list, but the connection log keeps filling, so the events panel is unaffected. The setting
+is read when the process starts, which means changing it takes a restart; a way to flip it from the
+web page is on the [backlog](../BACKLOG.md). With learning off the Detected table says so instead of
+claiming that nothing is waiting for a decision.
+
 ## What learning mode is not
 
 It is not a log of blocked traffic. The event panel is fed separately; see
