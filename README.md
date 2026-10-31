@@ -1,0 +1,80 @@
+# winfw-mcp
+
+**A portable, web-driven Windows Firewall (WFP) controller with an MCP interface.**
+
+A rewrite of [simplewall](https://github.com/henrypp/simplewall) in Rust. The C original is the
+functional specification, not a code base to port line by line. Instead of a native GUI it runs a
+small web server: start it, click the tray icon, the browser opens the UI. The same core is later
+exposed over MCP, so an agent can allow or deny a connection too.
+
+- Target platform: **Windows only**, no cross-platform abstraction layer
+- Runs **portable**: no service, no installer, no registry state
+- All settings, rules and logs live in `%APPDATA%\winfw-mcp`
+- Everything in the repo is English: code, identifiers, UI strings, docs
+- Plan and rationale: [PLAN.md](PLAN.md)
+
+## Status
+
+Milestone 1 of 10. The crate builds and runs; it owns its data directory and reads its config.
+Nothing touches WFP yet.
+
+| # | Milestone | State |
+|---|---|---|
+| 0 | Toolchain: Rust builds an `.exe` | done |
+| 1 | Data directory, config and rules load, atomic writes | done |
+| 2 | WFP read path: enumerate providers, sublayers, filters | next |
+| 3 | Rules model and write path: `rules.toml` ↔ WFP | planned |
+| 4 | HTTP server and web UI shell | planned |
+| 5 | Live connection events over SSE | planned |
+| 6 | Learning mode: Detected list, Allow / Deny / Edit | planned |
+| 7 | Tray icon and start popup | planned |
+| 8 | Export and Base64 Share | planned |
+| 9 | MCP endpoint | planned |
+| 10 | Named profiles | planned |
+
+## Build and run
+
+Requires the `x86_64-pc-windows-msvc` toolchain and an MSVC linker (Visual Studio Build Tools are
+enough; Visual Studio itself is not).
+
+```
+cargo build
+cargo test
+cargo run
+```
+
+On the first run the binary creates its data directory and the two files inside it:
+
+```
+%APPDATA%\winfw-mcp\
+    config.toml          settings, written with defaults on first run
+    rules.toml           user rules, order significant: the first match wins
+    profiles\            named profiles, one file each
+    learn.bin            collected Detected entries (learning mode)
+    logs\                rotating log files
+    export\              destination for on-demand exports
+```
+
+`RUST_LOG` overrides `log_level` from `config.toml` for a single run. Logging goes to stderr,
+because stdout belongs to the MCP stdio transport.
+
+## Data model decisions
+
+- **Load once, write immediately.** All settings are read at startup; every change made in the web
+  UI is written straight back to disk. No save button, no dirty state.
+- **Atomic writes.** Files are written to `*.tmp` and renamed, so a crash never leaves a half
+  written config behind. This matters because the WFP filters we install are persistent and outlive
+  the process.
+- **Unknown config keys are an error,** not a warning. A typo in `config.toml` fails loudly instead
+  of quietly keeping the default.
+- **Wildcards are ours, not the kernel's.** Rules match on `*` and `?`; the translation to WFP is
+  done by this program, in one place.
+
+## Releases
+
+Every milestone is released: version bumped here, `README.md` updated, tagged, pushed. The version
+in `Cargo.toml` is the source of truth.
+
+| Version | Milestone |
+|---|---|
+| 0.1.0 | Data directory, config and rules load, atomic writes |

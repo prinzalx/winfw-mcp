@@ -7,13 +7,13 @@ The C implementation is the **functional specification**, not a code base to por
 
 - Repo: `winfw-mcp` — <https://github.com/prinzalx/winfw-mcp> (public, branch `main`),
   local path `winfw-mcp/`
-- Scaffold: [`mcp-template`](https://github.com/prinzalx/mcp-template), local path
-  `../../mcp-template` (outside this project root)
+- Scaffold reference: [`mcp-template`](https://github.com/prinzalx/mcp-template) — a
+  template only, **not** a dependency and not vendored here
 - Reference sources: `simplewall/` (the C app) and `routine/` (Henry++'s utility library),
   plus `builder/` (upstream packaging only)
 - Target platform: **Windows only** — no cross-platform abstraction layer needed
 - Language of all code, identifiers, UI strings and docs: **English only**
-- Status: planning — toolchain and Rust MCP transport are verified (§8)
+- Status: **implementing** — M0 and M1 done, M2 (WFP read path) next
 
 
 ---
@@ -243,13 +243,14 @@ Suggested crate choices (to confirm at implementation time):
 Frontend stays **build-step free**: plain HTML/CSS/JS + SSE, embedded into the binary.
 That avoids shipping Node and keeps "portable" honest.
 
-### Starting point: `mcp-template`
+### Knowledge taken from `mcp-template`
 
-Every new MCP project starts from **<https://github.com/prinzalx/mcp-template>**, which is
-now a Rust crate (`rmcp` 3.8.0 over stdio, `tokio`, `anyhow`, `tracing`). It is proven to
-compile and answer `initialize` / `tools/list` / `tools/call` on this machine.
+`mcp-template` is the standing template for our MCP projects. It is **not** a dependency of
+`winfw-mcp`, nothing is vendored from it, and this crate does not track its checkout. What
+we took from it is knowledge, verified on this machine: `rmcp` 3.8.0 compiles, and an
+`rmcp` server built on it answers `initialize` / `tools/list` / `tools/call` over stdio.
 
-Two caveats carried over from its TypeScript origin:
+Two caveats that came out of that exercise:
 
 - `rmcp` 3.x serves Streamable HTTP through **`transport-streamable-http-server`**, which is
   built on `tower`/`http-body`, **not** on axum. So axum stays our *web UI + JSON API* host
@@ -280,8 +281,10 @@ Small, each one independently useful, each one testable without the next.
 | 10 | **Profiles** | named profiles, switch, per-profile files | switching profile changes WFP state |
 
 Milestone 0 is **done** (§8). Milestones 1-3 are the risky core; do them first and keep
-4-10 additive. Milestone 1 starts from a copy of `mcp-template` rather than
-`cargo new`, which also settles the `rmcp` feature set early.
+4-10 additive.
+
+Each milestone is a release: bump the version, update `README.md`, push, tag. The repo is
+meant to stay alive, so there is no big-bang release at the end.
 
 
 ---
@@ -342,11 +345,9 @@ Ordered by how much pain they could cause.
    list statistics (`ITEM_NETWORK` in `src/main.h:437-440`) — effectively data races that
    C tolerates. In Rust these become explicit atomics; getting the lock boundaries right
    around the 196 queued-lock use sites is fiddly but mechanical.
-7. **`mcp-template` is polyglot right now.** It carries the TypeScript kernel (its own CI,
-   `smoke-*.mjs` scripts, `tsconfig.json`) plus the new Rust skeleton. Until that is
-   resolved, a fresh clone is ambiguous about which workflow a project copies. Nothing is
-   lost either way: the TypeScript baseline is commit `4b8dcca`, so dropping it stays
-   reversible.
+7. **`rmcp` arrives late by design.** Until milestone 9 the crate has no MCP dependency, so
+   the `rmcp` feature set in §6 is unconfirmed against our own tree. Re-check it then; do
+   not add it early just because the template has it.
 
 ### Open questions for you
 
@@ -354,5 +355,4 @@ Ordered by how much pain they could cause.
 - Roaming vs. Local AppData (plan says Roaming, matching simplewall).
 - Should `Quit` in the tray also *remove* winfw's WFP filters, or leave enforcement in place?
 - Is the Detected list capped and persisted across restarts, or allowed to grow?
-- Should `mcp-template` become **Rust-only** (TypeScript kernel dropped, still in history) or
-  stay polyglot so future TypeScript MCP projects can use it too?
+- Do Detected entries expire on a timeout as well as a count cap?
