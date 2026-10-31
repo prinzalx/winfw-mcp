@@ -15,16 +15,16 @@ exposed over MCP, so an agent can allow or deny a connection too.
 
 ## Status
 
-Milestone 2 of 10. The tool owns its data directory, reads its config and rules, and can read the
-live WFP store. It changes nothing yet and has no UI.
+Milestone 3 of 10. The tool owns its data directory, reads its config and rules, reads the live
+WFP store, and can translate `rules.toml` into persistent WFP filters. It has no UI yet.
 
 | # | Milestone | State |
 |---|---|---|
 | 0 | Toolchain: Rust builds an `.exe` | done |
 | 1 | Data directory, config and rules load, atomic writes | done |
 | 2 | WFP read path: open the engine, enumerate providers, sublayers, filters | done |
-| 3 | Rules model and write path: `rules.toml` ↔ WFP | next |
-| 4 | HTTP server and web UI shell | planned |
+| 3 | Rules model and write path: `rules.toml` ↔ WFP | done |
+| 4 | HTTP server and web UI shell | next |
 | 5 | Live connection events over SSE | planned |
 | 6 | Learning mode: Detected list, Allow / Deny / Edit | planned |
 | 7 | Tray icon and start popup | planned |
@@ -43,6 +43,20 @@ cargo test
 cargo run
 ```
 
+### Commands
+
+Until milestone 4 puts the web server in front of it, the two store operations are command line
+flags. Both are the operations the web UI will expose first as well.
+
+```
+winfw-mcp            load rules.toml and install it in the live store
+winfw-mcp --clear    remove our filters from the live store
+```
+
+Applying is a full rebuild, not a diff: our filters are removed and re-added in rule order inside
+one transaction, so the order in `rules.toml` is exactly the order WFP evaluates. Because the
+filters are persistent, `--clear` is the clean way to take the tool out again.
+
 On the first run the binary creates its data directory and the two files inside it:
 
 ```
@@ -60,10 +74,11 @@ because stdout belongs to the MCP stdio transport.
 
 ### Reading the store needs elevation
 
-Measured on Windows 11: an unelevated process opens the WFP engine without problem, but every
-enumeration answers access denied. So `cargo run` in a plain shell logs a warning per store class
-and prints no filters, while an elevated run lists them. That is a supported degraded state, not a
-failure, and the web UI will say so on a banner instead of showing an empty list.
+Measured on Windows 11: an unelevated process opens the WFP engine without problem, but every read
+answers access denied and every write is refused. So `cargo run` in a plain shell logs a warning per
+store class, prints no filters and reports `WFP write refused`, while an elevated run lists the
+store and installs the rules. That is a supported degraded state, not a failure, and the web UI will
+say so on a banner instead of showing an empty list.
 
 ## Data model decisions
 
@@ -90,3 +105,4 @@ in `Cargo.toml` is the source of truth.
 | 0.1.0 | Data directory, config and rules load, atomic writes |
 | 0.2.0 | WFP read path: engine handle, enumeration of the live store, degraded when unelevated |
 | 0.2.1 | Fix heap corruption while releasing an enumerated store |
+| 0.3.0 | Rules model and write path: `rules.toml` ↔ WFP, full rebuild in one transaction |

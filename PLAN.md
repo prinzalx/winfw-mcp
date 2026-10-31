@@ -13,7 +13,7 @@ The C implementation is the **functional specification**, not a code base to por
   plus `builder/` (upstream packaging only)
 - Target platform: **Windows only** — no cross-platform abstraction layer needed
 - Language of all code, identifiers, UI strings and docs: **English only**
-- Status: **implementing** — M0 to M2 done, M3 (rules write path) next
+- Status: **implementing** — M0 to M3 done, M4 (HTTP server + web UI shell) next
 
 
 ---
@@ -279,10 +279,10 @@ Small, each one independently useful, each one testable without the next.
 | # | Milestone | Content | Exit test |
 |---|---|---|---|
 | 0 | **Toolchain** | Rust installed, hello-world binary builds | `cargo build` produces an `.exe` ✅ done (§8) |
-| 1 | **Core skeleton** | `winfw-core`, config load from `%APPDATA%\winfw-mcp`, atomic writes | binary reads config, logs resolved paths |
-| 2 | **WFP read path** | engine handle, enumerate providers/sublayers/filters, each reported on its own | reports the live store; degrades to a warning when unelevated |
-| 3 | **Rules model + write path** | `rules.toml` ↔ WFP, add/remove/enable/disable, elevated-write check | toggling a rule changes live WFP state *and* the file |
-| 4 | **HTTP server + web UI shell** | static assets, Rules area, JSON API | browser shows rules, change in UI is on disk instantly |
+| 1 | **Core skeleton** ✅ | `winfw-core`, config load from `%APPDATA%\winfw-mcp`, atomic writes | binary reads config, logs resolved paths |
+| 2 | **WFP read path** ✅ | engine handle, enumerate providers/sublayers/filters, each reported on its own | reports the live store; degrades to a warning when unelevated |
+| 3 | **Rules model + write path** ✅ | `rules.toml` ↔ WFP, add/remove/enable/disable, elevated-write check | toggling a rule changes live WFP state *and* the file |
+| 4 | **HTTP server + web UI shell** ← next | static assets, Rules area, JSON API | browser shows rules, change in UI is on disk instantly |
 | 5 | **Live events via SSE** | `FwpmNetEventSubscribe` → SSE stream | connection log scrolls live in browser |
 | 6 | **Learning mode** | Detected list, `learn.bin`, Allow/Deny/Edit, wildcard matching | unknown app appears, Allow creates a rule, entry leaves list |
 | 7 | **Tray + start popup** | tray icon, click opens browser, `Quit` | no console window, works from double-click |
@@ -358,6 +358,52 @@ Ordered by how much pain they could cause.
 7. **`rmcp` arrives late by design.** Until milestone 9 the crate has no MCP dependency, so
    the `rmcp` feature set in §6 is unconfirmed against our own tree. Re-check it then; do
    not add it early just because the template has it.
+
+
+---
+
+## 10. MCP access model (milestone 9)
+
+Rough shape, decided 2026-10-31, deliberately minimal.
+
+An agent talking to the MCP endpoint may **read everything** — settings, rules, profiles,
+the live WFP inventory, the Detected list. **Writes are gated**, and by default there are
+none: the endpoint starts out read-only on the policies.
+
+The gate belongs in the **core**, not in the transport. The same functions serve the browser
+and the agent, so a permission check pushed down to the HTTP layer could be walked around by
+the MCP layer and vice versa. Concretely this wants one config string:
+
+```toml
+# config.toml — how much the MCP endpoint may change
+mcp_writes = "none"   # "none" | "rules" | "all"
+```
+
+- `none` — read-only. Anything that would mutate a file or the store is rejected with a clear
+  error naming the setting.
+- `rules` — may add, edit, remove and reorder entries in `rules.toml` and apply them. This is
+  the intended everyday setting.
+- `all` — may also flip settings and switch profiles.
+
+A per-service × per-target allow-list is the natural refinement once we see what an agent
+actually touches; it is explicitly **not** part of the first cut.
+
+### Where this can fail
+
+These are the ways an agent escapes its sandbox, and they apply to the web UI too:
+
+1. **Write races.** The browser user and the agent share one core. Applying is a full rebuild,
+   so the last writer wins and an edit made a second earlier can be silently undone. Needs at
+   least a cheap "store changed underneath you" check before M9.
+2. **Persistent filters outlive the process.** There is no notion of a *temporary* rule yet, so
+   an agent's experiment stays in the store after it is gone. A temporary rule (WFP non-
+   persistent filter plus a volatile entry in our own state) is the open question.
+3. **File versus store.** Both `rules.toml` and WFP are written. Which one is authoritative has
+   to be defined before two clients can write; the plan is *file first, then store*, and a load
+   always reads the file.
+4. **Reads need elevation too.** If the process is not elevated the agent reads an empty store
+   and can conclude "no rules exist". Reporting that as *unknown* rather than *empty* is part of
+   the same work as the banner in §9.2.
 
 ### Open questions for you
 

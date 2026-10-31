@@ -1,27 +1,99 @@
-//! Read-only access to the Windows Filtering Platform store.
+//! The only module that talks to the Windows Filtering Platform.
 //!
-//! This is the only module that talks to WFP, and for now it only looks: open the engine, then
-//! enumerate providers, sublayers and filters. Writes come with milestone 3, inside a
-//! transaction, from a single worker task.
+//! The read path opens the engine and enumerates the store. The write path turns the rule file
+//! into live filters, always inside a transaction, always through the one engine handle.
 
 use std::ffi::c_void;
 
 use anyhow::{Result, bail};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FWPM_DISPLAY_DATA0, FWPM_FILTER0, FWPM_PROVIDER0, FWPM_SUBLAYER0, FwpmEngineClose0,
-    FwpmEngineOpen0, FwpmFilterCreateEnumHandle0, FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0,
-    FwpmFreeMemory0, FwpmProviderCreateEnumHandle0, FwpmProviderDestroyEnumHandle0,
-    FwpmProviderEnum0, FwpmSubLayerCreateEnumHandle0, FwpmSubLayerDestroyEnumHandle0,
-    FwpmSubLayerEnum0,
+    FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE, FWP_CONDITION_VALUE0,
+    FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_UINT8, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
+    FWPM_CONDITION_ALE_APP_ID, FWPM_DISPLAY_DATA0, FWPM_FILTER_CONDITION0,
+    FWPM_FILTER_ENUM_TEMPLATE0, FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_FILTER_FLAG_INDEXED,
+    FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+    FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+    FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6, FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_PROVIDER0,
+    FWPM_SUBLAYER_FLAG_PERSISTENT, FWPM_SUBLAYER0, FwpmEngineClose0, FwpmEngineOpen0,
+    FwpmFilterAdd0, FwpmFilterCreateEnumHandle0, FwpmFilterDeleteByKey0,
+    FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0,
+    FwpmProviderAdd0, FwpmProviderCreateEnumHandle0, FwpmProviderDestroyEnumHandle0,
+    FwpmProviderEnum0, FwpmSubLayerAdd0, FwpmSubLayerCreateEnumHandle0,
+    FwpmSubLayerDestroyEnumHandle0, FwpmSubLayerEnum0, FwpmTransactionAbort0,
+    FwpmTransactionBegin0, FwpmTransactionCommit0,
 };
-use windows::core::PCWSTR;
+use windows::core::{GUID, PCWSTR, PWSTR};
+
+use crate::rules::{Action, Rule, RuleFile};
+
+/// The name the store shows for us, in provider, sublayer and filter display data alike.
+const APP_NAME: &str = env!("CARGO_PKG_NAME");
+
+/// The provider everything we install belongs to.
+///
+/// Tagging is what makes "remove our filters" a targeted operation instead of a sweep through the
+/// several hundred filters other software owns. The GUID is fixed rather than generated, because
+/// a persistent filter has to be findable by a program that was restarted, rebooted, or upgraded
+/// underneath the store.
+pub const PROVIDER_KEY: GUID = GUID::from_u128(0x6f1a3ce2_8d94_4f6a_b0c7_2e5d9a1f4b83);
+
+/// The sublayer all our filters are installed into.
+///
+/// A sublayer of our own gives us a weight of our own, so our rules are consulted before the
+/// filters of software that did not bother to create one.
+pub const SUBLAYER_KEY: GUID = GUID::from_u128(0x38c5b71e_4a26_4d09_9f81_7c6b2e0a5d14);
 
 /// `RPC_C_AUTHN_DEFAULT`, spelled out instead of pulling in the RPC module for one constant.
 const RPC_C_AUTHN_DEFAULT: u32 = 0xFFFF_FFFF;
 
+/// `ERROR_ALREADY_EXISTS`, which `FwpmProviderAdd0` and `FwpmSubLayerAdd0` answer when we are
+/// already in the store. Installing again is the normal case, not a failure.
+const ERROR_ALREADY_EXISTS: u32 = 183;
+
+/// `FWW_IMPORTANT`, the reference implementation's weight for a filter that has to win.
+const WEIGHT_IMPORTANT: u8 = 0x0F;
+
+/// `FWW_SUBLAYER`, the top of a `u16` sublayer weight.
+const WEIGHT_SUBLAYER: u16 = 0xFFFF;
+
+/// The four ALE authorization layers a rule is installed on: outbound connect and inbound accept,
+/// for both address families.
+const LAYERS: [GUID; 4] = [
+    FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+    FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+    FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+    FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+];
+
+/// FNV-1a parameters, used to derive a filter key from a rule name.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
 /// The display names of one class of store entries.
+///
+/// Each class carries its own result, because WFP grants read access per class. A process can be
+/// allowed to read the filters and still be refused the provider store, so a refusal on one class
+/// is recorded rather than propagated.
 pub type Entries = Result<Vec<String>>;
+
+/// What each class of store entry reported. The outcomes stay separate on purpose: collapsing
+/// them into one error would hide which part of the store we are missing.
+#[derive(Debug)]
+pub struct Inventory {
+    pub providers: Entries,
+    pub sublayers: Entries,
+    pub filters: Entries,
+}
+
+/// The difference one `apply` made to the live store.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Applied {
+    /// Filters that carried our provider key and are gone now.
+    pub removed: usize,
+    /// Filters installed from the enabled rules, counted per layer.
+    pub installed: usize,
+}
 
 /// Run one of the three enumeration sequences end to end and collect the display names.
 ///
@@ -31,8 +103,8 @@ pub type Entries = Result<Vec<String>>;
 /// Everything is requested in a single call, the way the C reference does it. Not only is that
 /// one round trip instead of several, it also keeps the ownership rule simple: the whole result
 /// is one WFP allocation, released by handing the *array pointer* to `FwpmFreeMemory0`. Freeing
-/// the individual elements as well corrupts the heap, because they were never allocated apart
-/// from the array.
+/// the individual elements as well corrupts the heap, because they were never allocated apart from
+/// the array.
 macro_rules! enumerate {
     ($engine:expr, $create:ident, $fetch:ident, $destroy:ident, $entry:ty) => {{
         let engine = $engine;
@@ -80,21 +152,11 @@ macro_rules! enumerate {
 
 /// A handle to the WFP engine.
 ///
-/// The handle is process-wide and has to outlive every query, so it belongs to the long-running
-/// core rather than to one request (PLAN.md section 5).
+/// The handle is process-wide and has to outlive every query and every write, so it belongs to
+/// the long-running core rather than to one request (PLAN.md section 5).
 #[derive(Debug)]
 pub struct Engine {
     handle: HANDLE,
-}
-
-/// What each class of store entry reported. The outcomes stay separate on purpose: WFP grants
-/// read access per class, so a process can be allowed to read the filters and still be refused
-/// the provider store. Collapsing that into one error would hide which part we are missing.
-#[derive(Debug)]
-pub struct Inventory {
-    pub providers: Entries,
-    pub sublayers: Entries,
-    pub filters: Entries,
 }
 
 impl Engine {
@@ -159,6 +221,288 @@ impl Engine {
             FWPM_FILTER0
         )
     }
+
+    /// Make the live store match `rules`.
+    ///
+    /// Our filters are rebuilt from scratch rather than diffed. That is cruder, but it removes a
+    /// whole class of stale-filter bugs on rule edits, and it makes rule order become filter
+    /// creation order, which is what "the first matching rule wins" is translated from.
+    ///
+    /// Everything happens in one transaction, so no observer can see a store holding only part of
+    /// the rule set.
+    pub fn apply(&self, rules: &RuleFile) -> Result<Applied> {
+        let mut report = Applied::default();
+
+        self.transaction(|| {
+            self.ensure_provider()?;
+            self.ensure_sublayer()?;
+
+            report.removed = self.remove_our_filters()?;
+
+            let mut installed = 0;
+
+            for rule in rules.rule.iter().filter(|rule| rule.enabled) {
+                installed += self.add_rule(rule)?;
+            }
+
+            report.installed = installed;
+
+            Ok(())
+        })?;
+
+        Ok(report)
+    }
+
+    /// Take our filters out of the store, leaving the provider and the sublayer in place.
+    pub fn clear(&self) -> Result<usize> {
+        let mut removed = 0;
+
+        self.transaction(|| {
+            removed = self.remove_our_filters()?;
+            Ok(())
+        })?;
+
+        Ok(removed)
+    }
+
+    /// Run `body` inside a WFP transaction, and abort the transaction if the body fails.
+    ///
+    /// A WFP transaction belongs to a thread rather than to a handle, so an abort on one thread
+    /// can cancel work another thread started. Every write goes through this method, which is
+    /// what makes the single dedicated WFP worker of milestone 4 a requirement rather than a
+    /// preference.
+    fn transaction(&self, body: impl FnOnce() -> Result<()>) -> Result<()> {
+        // SAFETY: a zero flag selects a plain transaction, and the handle is ours.
+        let status = unsafe { FwpmTransactionBegin0(self.handle, 0) };
+
+        if status != 0 {
+            bail!("FwpmTransactionBegin0 failed with 0x{status:08X}");
+        }
+
+        match body() {
+            Ok(()) => {
+                // SAFETY: the transaction opened above is still open here.
+                let status = unsafe { FwpmTransactionCommit0(self.handle) };
+
+                if status != 0 {
+                    // SAFETY: the transaction is still open and belongs to this thread.
+                    unsafe { FwpmTransactionAbort0(self.handle) };
+                    bail!("FwpmTransactionCommit0 failed with 0x{status:08X}");
+                }
+
+                Ok(())
+            }
+            Err(error) => {
+                // SAFETY: the transaction is still open and belongs to this thread.
+                unsafe { FwpmTransactionAbort0(self.handle) };
+                Err(error)
+            }
+        }
+    }
+
+    fn ensure_provider(&self) -> Result<()> {
+        let name = wide(APP_NAME);
+        let description = wide(APP_NAME);
+
+        let provider = FWPM_PROVIDER0 {
+            providerKey: PROVIDER_KEY,
+            displayData: FWPM_DISPLAY_DATA0 {
+                name: PWSTR(name.as_ptr() as *mut _),
+                description: PWSTR(description.as_ptr() as *mut _),
+            },
+            flags: FWPM_PROVIDER_FLAG_PERSISTENT,
+            providerData: FWP_BYTE_BLOB::default(),
+            serviceName: PWSTR::null(),
+        };
+
+        // SAFETY: the struct only borrows the two wide buffers above, which outlive the call.
+        let status = unsafe { FwpmProviderAdd0(self.handle, &provider, None) };
+
+        if status != 0 && status != ERROR_ALREADY_EXISTS {
+            bail!("FwpmProviderAdd0 failed with 0x{status:08X}");
+        }
+
+        Ok(())
+    }
+
+    fn ensure_sublayer(&self) -> Result<()> {
+        let name = wide(APP_NAME);
+        let description = wide(APP_NAME);
+        let mut provider_key = PROVIDER_KEY;
+
+        let sublayer = FWPM_SUBLAYER0 {
+            subLayerKey: SUBLAYER_KEY,
+            displayData: FWPM_DISPLAY_DATA0 {
+                name: PWSTR(name.as_ptr() as *mut _),
+                description: PWSTR(description.as_ptr() as *mut _),
+            },
+            flags: FWPM_SUBLAYER_FLAG_PERSISTENT,
+            providerKey: &mut provider_key,
+            providerData: FWP_BYTE_BLOB::default(),
+            weight: WEIGHT_SUBLAYER,
+        };
+
+        // SAFETY: the struct only borrows buffers owned by this function, which outlive the call.
+        let status = unsafe { FwpmSubLayerAdd0(self.handle, &sublayer, None) };
+
+        if status != 0 && status != ERROR_ALREADY_EXISTS {
+            bail!("FwpmSubLayerAdd0 failed with 0x{status:08X}");
+        }
+
+        Ok(())
+    }
+
+    /// Delete every filter our provider owns, and report how many there were.
+    fn remove_our_filters(&self) -> Result<usize> {
+        let mut provider_key = PROVIDER_KEY;
+
+        let mut template = FWPM_FILTER_ENUM_TEMPLATE0::default();
+        template.providerKey = &mut provider_key;
+
+        let mut enum_handle = HANDLE::default();
+
+        // SAFETY: the template restricts the enumeration to our provider, and the out parameter is
+        // a valid handle slot.
+        let status =
+            unsafe { FwpmFilterCreateEnumHandle0(self.handle, Some(&template), &mut enum_handle) };
+
+        if status != 0 {
+            bail!("FwpmFilterCreateEnumHandle0 failed with 0x{status:08X}");
+        }
+
+        let mut entries: *mut *mut FWPM_FILTER0 = std::ptr::null_mut();
+        let mut returned = 0u32;
+
+        // SAFETY: both out parameters are valid, and the array they receive belongs to WFP.
+        let status = unsafe {
+            FwpmFilterEnum0(
+                self.handle,
+                enum_handle,
+                u32::MAX,
+                &mut entries,
+                &mut returned,
+            )
+        };
+
+        if status != 0 {
+            // SAFETY: the enum handle is still open and belongs to this engine.
+            unsafe { FwpmFilterDestroyEnumHandle0(self.handle, enum_handle) };
+            bail!("FwpmFilterEnum0 failed with 0x{status:08X}");
+        }
+
+        let mut keys = Vec::new();
+
+        if !entries.is_null() {
+            for index in 0..returned {
+                // SAFETY: WFP reported `returned` entries, so this slot is inside the array.
+                let entry = unsafe { *entries.add(index as usize) };
+
+                if !entry.is_null() {
+                    // SAFETY: the entry stays readable until the array is handed back below.
+                    keys.push(unsafe { (*entry).filterKey });
+                }
+            }
+
+            // SAFETY: the array is WFP-owned, and this is the documented way to release it.
+            unsafe { FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut c_void) };
+        }
+
+        // SAFETY: the enum handle is still open and belongs to this engine.
+        unsafe { FwpmFilterDestroyEnumHandle0(self.handle, enum_handle) };
+
+        let mut removed = 0;
+
+        for key in keys {
+            // SAFETY: the key came out of the store a few instructions ago, and deleting one
+            // filter by key does not invalidate the other keys we collected.
+            let status = unsafe { FwpmFilterDeleteByKey0(self.handle, &key) };
+
+            if status != 0 {
+                bail!("FwpmFilterDeleteByKey0 failed with 0x{status:08X}");
+            }
+
+            removed += 1;
+        }
+
+        Ok(removed)
+    }
+
+    /// Install one rule as one filter per layer, so both directions and both address families are
+    /// covered. Returns the number of filters installed.
+    fn add_rule(&self, rule: &Rule) -> Result<usize> {
+        let app = AppId::resolve(&rule.pattern);
+
+        let mut condition = FWPM_FILTER_CONDITION0 {
+            fieldKey: FWPM_CONDITION_ALE_APP_ID,
+            matchType: FWP_MATCH_EQUAL,
+            conditionValue: FWP_CONDITION_VALUE0 {
+                r#type: FWP_BYTE_BLOB_TYPE,
+                Anonymous: FWP_CONDITION_VALUE0_0 {
+                    byteBlob: &raw const app.blob as *mut _,
+                },
+            },
+        };
+
+        let mut provider_key = PROVIDER_KEY;
+
+        let action = match rule.action {
+            Action::Allow => FWP_ACTION_PERMIT,
+            Action::Deny => FWP_ACTION_BLOCK,
+        };
+
+        // A deny has to win over the permit filters around it, which is what clearing the action
+        // right of lower-weight filters does. Mirrors the reference implementation.
+        let mut flags = FWPM_FILTER_FLAG_PERSISTENT | FWPM_FILTER_FLAG_INDEXED;
+
+        if rule.action == Action::Deny {
+            flags |= FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT;
+        }
+
+        let owner = wide(APP_NAME);
+        let label = wide(&rule.name);
+
+        for layer in LAYERS {
+            let mut filter = FWPM_FILTER0::default();
+            filter.filterKey = filter_key(&rule.name, &layer);
+            filter.displayData = FWPM_DISPLAY_DATA0 {
+                name: PWSTR(owner.as_ptr() as *mut _),
+                description: PWSTR(label.as_ptr() as *mut _),
+            };
+            filter.flags = flags;
+            filter.providerKey = &mut provider_key;
+            filter.layerKey = layer;
+            filter.subLayerKey = SUBLAYER_KEY;
+            filter.weight = FWP_VALUE0 {
+                r#type: FWP_UINT8,
+                Anonymous: FWP_VALUE0_0 {
+                    uint8: WEIGHT_IMPORTANT,
+                },
+            };
+            filter.numFilterConditions = 1;
+            filter.filterCondition = &mut condition;
+            filter.action = FWPM_ACTION0 {
+                r#type: action,
+                ..Default::default()
+            };
+
+            let mut filter_id = 0u64;
+
+            // SAFETY: every pointer in the filter points into memory owned by this function, and
+            // all of it outlives the call. WFP copies what it needs.
+            let status =
+                unsafe { FwpmFilterAdd0(self.handle, &filter, None, Some(&mut filter_id)) };
+
+            if status != 0 {
+                bail!(
+                    "FwpmFilterAdd0 failed with 0x{status:08X} for rule '{}' on layer {}",
+                    rule.name,
+                    layer_index(layer),
+                );
+            }
+        }
+
+        Ok(LAYERS.len())
+    }
 }
 
 impl Drop for Engine {
@@ -168,6 +512,130 @@ impl Drop for Engine {
             unsafe { FwpmEngineClose0(self.handle) };
         }
     }
+}
+
+/// The application identity used as a filter condition.
+///
+/// WFP does not match a file name but a device path blob. `FwpmGetAppIdFromFileName0` resolves one
+/// for a file that exists, which is the case for the concrete paths learning mode produces. A
+/// wildcard pattern usually names a file that does not exist; then the pattern is handed over as
+/// it stands and the match becomes exact. Turning patterns into real wildcard matching is
+/// milestone 6's job.
+struct AppId {
+    blob: FWP_BYTE_BLOB,
+    /// Keeps the fallback's wide characters alive while `blob` points into them.
+    _pattern: Vec<u16>,
+    /// Non-null only when WFP allocated the blob and has to be given the memory back.
+    allocated: Option<*mut FWP_BYTE_BLOB>,
+}
+
+impl AppId {
+    fn resolve(pattern: &str) -> Self {
+        let file = wide(pattern);
+        let mut allocated: *mut FWP_BYTE_BLOB = std::ptr::null_mut();
+
+        // SAFETY: `file` is a terminated wide string and `allocated` is an out parameter.
+        let status = unsafe { FwpmGetAppIdFromFileName0(PCWSTR(file.as_ptr()), &mut allocated) };
+
+        if status == 0 && !allocated.is_null() {
+            // SAFETY: WFP reported success, so the pointer it wrote points at a readable blob.
+            let blob = unsafe { *allocated };
+
+            return Self {
+                blob,
+                _pattern: Vec::new(),
+                allocated: Some(allocated),
+            };
+        }
+
+        // The fallback: the pattern itself, in the same wide form WFP would have produced.
+        let mut pattern_units = wide(pattern);
+
+        if pattern_units.last() == Some(&0) {
+            pattern_units.pop();
+        }
+
+        let blob = FWP_BYTE_BLOB {
+            size: (pattern_units.len() * 2) as u32,
+            data: pattern_units.as_ptr() as *mut u8,
+        };
+
+        Self {
+            blob,
+            _pattern: pattern_units,
+            allocated: None,
+        }
+    }
+}
+
+impl Drop for AppId {
+    fn drop(&mut self) {
+        if let Some(pointer) = self.allocated.as_mut() {
+            // SAFETY: the blob came from FwpmGetAppIdFromFileName0 and is released exactly once,
+            // after the last filter that could read it has been added.
+            unsafe { FwpmFreeMemory0(pointer as *mut _ as *mut *mut c_void) };
+        }
+    }
+}
+
+/// Encode a string as the NUL terminated UTF-16 buffer the WFP structs point at.
+fn wide(value: &str) -> Vec<u16> {
+    let mut units: Vec<u16> = value.encode_utf16().collect();
+    units.push(0);
+    units
+}
+
+fn fnv1a(seed: u64, bytes: &[u8]) -> u64 {
+    let mut hash = seed;
+
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    hash
+}
+
+/// The bytes of a GUID in the order a UUID is written down.
+fn guid_bytes(guid: &GUID) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(16);
+
+    bytes.extend_from_slice(&guid.data1.to_be_bytes());
+    bytes.extend_from_slice(&guid.data2.to_be_bytes());
+    bytes.extend_from_slice(&guid.data3.to_be_bytes());
+    bytes.extend_from_slice(&guid.data4);
+
+    bytes
+}
+
+/// A stable filter key for one rule on one layer.
+///
+/// A key derived from the rule name, rather than a randomly generated one, is what lets a rule be
+/// recognised again after a restart. Two FNV-1a chains with different seeds fill the 128 bits; the
+/// second chain also takes the layer, because a filter key has to be unique across the store and
+/// one rule installs a filter per layer. The version and variant nibbles are fixed up so the
+/// result is a well formed UUID if any other tool looks at it.
+pub fn filter_key(name: &str, layer: &GUID) -> GUID {
+    let high = fnv1a(FNV_OFFSET, name.as_bytes());
+    let low = fnv1a(!FNV_OFFSET, &guid_bytes(layer));
+    let low = fnv1a(low, name.as_bytes());
+
+    let mut raw = [0u8; 16];
+    raw[..8].copy_from_slice(&high.to_be_bytes());
+    raw[8..].copy_from_slice(&low.to_be_bytes());
+
+    raw[6] = (raw[6] & 0x0F) | 0x50; // version 5
+    raw[8] = (raw[8] & 0x3F) | 0x80; // RFC 4122 variant
+
+    GUID::from_u128(u128::from_be_bytes(raw))
+}
+
+/// Which of the four layers a GUID is, so an error message can name the position in `LAYERS`.
+fn layer_index(layer: GUID) -> usize {
+    LAYERS
+        .iter()
+        .position(|candidate| *candidate == layer)
+        .unwrap_or(LAYERS.len())
 }
 
 /// Copy a display name out of WFP-owned memory. A null name is not an error; an empty string
@@ -184,6 +652,9 @@ fn display_name(data: &FWPM_DISPLAY_DATA0) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A path that exists on every Windows install, so the application-id resolution succeeds.
+    const TEST_APP: &str = "C:\\Windows\\System32\\cmd.exe";
 
     /// Read the live store, and assert on whatever we are allowed to read.
     ///
@@ -215,6 +686,69 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The write path is exercised against the live store, because that is the only place it has
+    /// to work. Whatever it installs, it removes again before returning.
+    #[test]
+    fn a_rule_is_installed_and_removed_from_the_live_store() {
+        let engine = Engine::open().expect("open engine");
+
+        let rules = RuleFile {
+            rule: vec![Rule {
+                name: "winfw-mcp write test".to_owned(),
+                action: Action::Deny,
+                pattern: TEST_APP.to_owned(),
+                enabled: true,
+            }],
+        };
+
+        // Start from a clean store, so a count of zero means what it says.
+        match engine.clear() {
+            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
+            Err(error) => {
+                let reason = format!("{error:#}");
+                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
+                println!("write path skipped, access denied");
+                return;
+            }
+        }
+
+        let applied = engine.apply(&rules).expect("apply the rule");
+
+        assert_eq!(applied.installed, LAYERS.len(), "one filter per layer");
+        assert_eq!(applied.removed, 0, "the store was cleared first");
+
+        let rebuilt = engine.apply(&rules).expect("apply the same rule again");
+
+        assert_eq!(
+            rebuilt.removed,
+            LAYERS.len(),
+            "a rebuild must remove exactly what the run before installed"
+        );
+
+        let cleared = engine.clear().expect("clear the store");
+
+        assert_eq!(
+            cleared,
+            LAYERS.len(),
+            "clearing removes every filter we installed"
+        );
+    }
+
+    /// A filter key has to survive a restart, and a rule installed on several layers needs a
+    /// distinct key per layer.
+    #[test]
+    fn a_filter_key_is_stable_and_distinct_per_rule_and_layer() {
+        assert_eq!(
+            filter_key("browser", &LAYERS[0]),
+            filter_key("browser", &LAYERS[0])
+        );
+        assert_ne!(
+            filter_key("browser", &LAYERS[0]),
+            filter_key("browser", &LAYERS[1])
+        );
+        assert_ne!(filter_key("one", &LAYERS[0]), filter_key("two", &LAYERS[0]));
     }
 
     /// A handle that was never opened must not be handed to `FwpmEngineClose0`.
