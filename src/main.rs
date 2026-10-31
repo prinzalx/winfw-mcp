@@ -1,3 +1,7 @@
+// A portable tool is started by double-click, and a console window belonging to a tray icon is in
+// the way. Debug builds keep the console, because that is where the log goes while it is developed.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod config;
 mod device;
 mod learn;
@@ -6,6 +10,7 @@ mod paths;
 mod rules;
 mod server;
 mod store;
+mod tray;
 #[cfg(windows)]
 mod wfp;
 
@@ -122,7 +127,13 @@ fn serve(paths: DataPaths, settings: Settings, rules: RuleFile) -> Result<()> {
     let state = server::AppState::new(paths, settings, rules, detector, events);
     let server = server::Server::bind(port, state, Arc::new(server::WfpWorker::start()))?;
 
-    info!(url = %format!("http://{}", server.addr()), "web UI ready");
+    let url = format!("http://{}", server.addr());
+
+    info!(url = %url, "web UI ready");
+
+    // Held by this scope for as long as the server runs, which is what takes the icon out of the
+    // notification area again when the process is asked to stop.
+    let _tray = tray::Tray::start(url);
 
     server.serve()
 }

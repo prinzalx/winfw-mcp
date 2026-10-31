@@ -15,12 +15,12 @@ exposed over MCP, so an agent can allow or deny a connection too.
 
 ## Status
 
-Milestone 6 of 10. The tool owns its data directory, reads its config and rules, reads the live
+Milestone 7 of 10. The tool owns its data directory, reads its config and rules, reads the live
 WFP store, translates `rules.toml` into persistent WFP filters with deny ranked above allow, and
 serves a web UI that edits those rules. It follows live connections over SSE, and learning mode
 collects every application no rule speaks about yet in a Detected list where each entry can be
-allowed, denied or dismissed from the browser. The tray icon that opens the browser is still
-missing.
+allowed, denied or dismissed from the browser. In a release build it runs without a console window
+and lives as a tray icon: left click opens the browser, right click offers `Quit`.
 
 | # | Milestone | State |
 |---|---|---|
@@ -31,8 +31,8 @@ missing.
 | 4 | HTTP server and web UI shell | done |
 | 5 | Live connection events over SSE | done |
 | 6 | Learning mode: Detected list, Allow / Deny / Edit | done |
-| 7 | Tray icon and start popup | next |
-| 8 | Export and Base64 Share | planned |
+| 7 | Tray icon and start popup | done |
+| 8 | Export and Base64 Share | next |
 | 9 | MCP endpoint | planned |
 | 10 | Named profiles | planned |
 
@@ -57,6 +57,11 @@ winfw-mcp --clear    remove our filters from the live store
 
 An apply needs elevation: without it the store reports access denied and the rules are not
 installed.
+
+In a release build the binary is a Windows program rather than a console one, so starting it shows
+no terminal window at all: `--serve` puts an icon in the notification area, a left click on it opens
+the browser on the UI, and the right button offers `Quit`. Debug builds keep the console, because
+that is where the log goes while the tool is being developed.
 
 Applying is a full rebuild, not a diff: our filters are removed and re-added in rule order inside
 one transaction, so the order in `rules.toml` is exactly the order WFP evaluates. Because the
@@ -178,3 +183,4 @@ own, which is why some versions have no milestone of their own.
 | 0.4.1 | Show the address the page was served from instead of a hardcoded localhost |
 | 0.5.0 | Live connection events: WFP event stream forwarded to the browser over SSE, plus a page markup fix (the script had been outside its element) |
 | 0.6.0 | Learning mode: Detected list in the UI, wildcard patterns, device path ↔ drive path translation |
+| 0.7.0 | Tray icon without a console window: left click opens the browser, right click offers `Quit` |

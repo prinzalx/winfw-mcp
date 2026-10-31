@@ -1,6 +1,6 @@
 [package]
 name = "winfw-mcp"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "Portable, web-driven Windows Firewall (WFP) controller with an MCP interface"
 license = "MIT"
@@ -23,9 +23,18 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [target."cfg(windows)".dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    # RegisterClassW and the window class struct are gated behind the GDI module.
+    "Win32_Graphics_Gdi",
     "Win32_NetworkManagement_WindowsFilteringPlatform",
     "Win32_Security",
     # QueryDosDeviceW and GetLogicalDrives, for the drive-to-device path mapping.
     "Win32_Storage_FileSystem",
     "Win32_System_Rpc",
+    # GetCurrentThreadId, for the message posted to the tray thread when it is asked to stop, and
+    # GetModuleHandleW for the window class.
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    # Shell_NotifyIconW for the tray icon, and the window message loop that receives its clicks.
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }

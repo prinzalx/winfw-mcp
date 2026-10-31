@@ -13,7 +13,7 @@ The C implementation is the **functional specification**, not a code base to por
   plus `builder/` (upstream packaging only)
 - Target platform: **Windows only** — no cross-platform abstraction layer needed
 - Language of all code, identifiers, UI strings and docs: **English only**
-- Status: **implementing** — M0 to M6 done, M7 (tray icon) next
+- Status: **implementing** — M0 to M7 done, M8 (export and share) next
 
 
 ---
@@ -344,7 +344,7 @@ Small, each one independently useful, each one testable without the next.
 | 4 | **HTTP server + web UI shell** ✅ | static assets, Rules area, JSON API | browser shows rules, change in UI is on disk instantly |
 | 5 | **Live events via SSE** ✅ | `FwpmNetEventSubscribe` → SSE stream | connection log scrolls live in browser |
 | 6 | **Learning mode** ✅ | Detected list, `learn.json`, Allow/Deny/Dismiss, wildcard matching | unknown app appears, Allow creates a rule, entry leaves list |
-| 7 | **Tray + start popup** | tray icon, click opens browser, `Quit` | no console window, works from double-click |
+| 7 | **Tray + start popup** ✅ | tray icon, click opens browser, `Quit` | no console window, works from double-click |
 | 8 | **Export + Share** | per-area export to `export\`, Base64 rule encode/decode | Base64 string pastes back into a second machine |
 | 9 | **MCP endpoint** | `/mcp` with tools for status, list/allow/deny/edit, encode/decode | an MCP client can allow a Detected entry |
 | 10 | **Profiles** | named profiles, switch, per-profile files | switching profile changes WFP state |
