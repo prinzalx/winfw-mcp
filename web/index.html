@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>winfw-mcp</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #1b1f24;
+        --muted: #5b6570;
+        --line: #d7dee6;
+        --accent: #0b62d0;
+        --deny: #a11111;
+        --banner: #fff4e5;
+        --banner-line: #e2b877;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #14171a;
+          --fg: #e6eaef;
+          --muted: #9aa4af;
+          --line: #2c3238;
+          --accent: #6ab0ff;
+          --deny: #ff6b6b;
+          --banner: #2a2115;
+          --banner-line: #6b5326;
+        }
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.45 system-ui, "Segoe UI", sans-serif;
+        margin: 0 auto;
+        max-width: 60rem;
+        padding: 1.5rem 1rem 3rem;
+      }
+
+      header {
+        align-items: baseline;
+        display: flex;
+        justify-content: space-between;
+      }
+
+      h1 {
+        font-size: 1.35rem;
+        margin: 0 0 0.25rem;
+      }
+
+      .sub {
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+
+      .banner {
+        background: var(--banner);
+        border: 1px solid var(--banner-line);
+        border-radius: 6px;
+        margin: 1rem 0;
+        padding: 0.6rem 0.8rem;
+      }
+
+      .banner code {
+        font-size: 0.8rem;
+      }
+
+      table {
+        border-collapse: collapse;
+        margin-top: 0.75rem;
+        width: 100%;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 0.35rem 0.4rem;
+        text-align: left;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      td.pattern {
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 0.85rem;
+        word-break: break-all;
+      }
+
+      input[type="text"],
+      select {
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        color: inherit;
+        font: inherit;
+        padding: 0.2rem 0.3rem;
+        width: 100%;
+      }
+
+      input[type="text"]:hover,
+      select:hover {
+        border-color: var(--line);
+      }
+
+      input[type="text"]:focus,
+      select:focus {
+        border-color: var(--accent);
+        outline: none;
+      }
+
+      button {
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        padding: 0.25rem 0.6rem;
+      }
+
+      button:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .actions {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+
+      .status {
+        color: var(--muted);
+        font-size: 0.85rem;
+        min-height: 1.2rem;
+      }
+
+      .deny {
+        color: var(--deny);
+      }
+
+      .empty {
+        color: var(--muted);
+        padding: 1rem 0;
+      }
+    </style>
+  </head>
+  <body></body>
+    <header>
+      <</header>div>
+        <h1></h1>winfw-mcp</h1>
+        <div class="sub">
+          <span id="addr">localhost</span> &middot; learning mode
+          <span id="learn-mode">off</span>
+        </div>
+      </div>
+      <div class="status" id="status"></div>
+    </header>
+
+    <div id="banner"></div>
+
+    <h2>Rules</</h2>h2>
+    <table></table>
+      <thead>
+        <</thead>tr>
+          <th style="width: 2rem"></th>
+          <th style="width: 12rem">Name</th>
+          <th style="width: 7rem">Action</th>
+          <th>Pattern</th></th>
+          <th style="width: 4rem"></th>
+        </tr>
+      </thead>
+      <tbody id="rules"></tbody>
+    </table>
+
+    <div class="actions">
+      <button id="add">Add rule</button>
+      <button id="apply">Apply to WFP</button>
+      <button id="clear">Clear our filters</button>
+    </div>
+
+    <p class="sub">
+      A deny always beats an allow, whatever the order of the list. Patterns accept the wildcards
+      <code>*</code> and <code></code>?</code>. Every change is written to <code>rules.toml</code</code>> and
+      pushed to the store immediately.
+    </p>
+
+    <script></script>
+      "use strict";
+
+      let rules = [];
+
+      const el = (id) => document.getElementById(id);
+      const status = (message) => {
+        el("status").textContent = message;
+      };
+
+      function element(tag, className, text) {
+        const node = document.createElement(tag);
+
+        if (className) {
+          node.className = className;
+        }
+        if (text !== undefined) {
+          node.textContent = text;
+        }
+
+        return node;
+      }
+
+      function renderBanner(store) {
+        const banner = el("banner");
+
+        banner.replaceChildren();
+
+        if (store.ok) {
+          const read = [];
+
+          if (store.inventory.providers !== null) {
+            read.push(store.inventory.providers + " providers");
+          }
+          if (store.inventory.sublayers !== null) {
+            read.push(store.inventory.sublayers + " sublayers");
+          }
+          if (store.inventory.filters !== null) {
+            read.push(store.inventory.filters + " filters");
+          }
+
+          banner.appendChild(
+            element("p", "sub", "Store readable (" + read.join(", ") + ")."),
+          );
+
+          return;
+        }
+
+        const note = element("div", "banner");
+
+        note.appendChild(
+          element(
+            "strong",
+            null,
+            "The store refused us: " + (store.reason || "unknown reason") + ".",
+          ),
+        );
+        note.appendChild(
+          element(
+            "span",
+            "sub",
+            " Start this tool as administrator to read or change the live firewall.",
+          ),
+        );
+        banner.appendChild(note);
+      }
+
+      function renderRules() {
+        const body = el("rules");
+
+        body.replaceChildren();
+
+        if (rules.length === 0) {
+          const row = element("tr");
+
+          row.appendChild(element("td", "empty", "No rules yet. Use “Add rule”."));
+          body.appendChild(row);
+
+          return;
+        }
+
+        rules.forEach((rule, index) => {
+          const row = element("tr");
+
+          const enabled = element("input");
+          enabled.type = "checkbox";
+          enabled.checked = rule.enabled;
+          enabled.title = rule.enabled ? "enabled" : "disabled";
+          enabled.addEventListener("change", () => {
+            rule.enabled = enabled.checked;
+            save();
+          });
+          row.appendChild(element("td", null)).appendChild(enabled);
+
+          const name = element("input");
+          name.type = "text";
+          name.value = rule.name;
+          name.addEventListener("change", () => {
+            rule.name = name.value;
+            save();
+          });
+          row.appendChild(element("td", null)).appendChild(name);
+
+          const action = element("select");
+
+          for (const choice of ["allow", "deny"]) {
+            const option = element("option", null, choice);
+
+            option.value = choice;
+            option.selected = rule.action === choice;
+            action.appendChild(option);
+          }
+          action.addEventListener("change", () => {
+            rule.action = action.value;
+            save();
+          });
+          row.appendChild(element("td", null)).appendChild(action);
+
+          const pattern = element("input");
+          pattern.type = "text";
+          pattern.value = rule.pattern;
+          pattern.spellcheck = false;
+          pattern.addEventListener("change", () => {
+            rule.pattern = pattern.value;
+            save();
+          });
+          row.appendChild(element("td", "pattern")).appendChild(pattern);
+
+          const remove = element("button", null, "remove");
+          remove.addEventListener("click", () => {
+            rules.splice(index, 1);
+            save();
+          });
+          row.appendChild(element("td", null)).appendChild(remove);
+
+          if (rule.action === "deny") {
+            name.classList.add("deny");
+          }
+        });
+      }
+
+      function apply(state) {
+        rules = state.rules.rule;
+        el("learn-mode").textContent = state.learn_mode ? "on" : "off";
+        renderRules();
+        renderBanner(state.store);
+
+        const store = state.store;
+
+        if (store.ok && (store.removed || store.installed)) {
+          status("removed " + store.removed + ", installed " + store.installed);
+        } else {
+          status("");
+        }
+      }
+
+      async function request(method, path, payload) {
+        const response = await fetch(path, {
+          method,
+          headers: payload ? { "content-type": "application/json" } : {},
+          body: payload ? JSON.stringify(payload) : undefined,
+        });
+
+        if (!response.ok) {
+          throw new Error(path + " answered " + response.status);
+        }
+
+        return response.json();
+      }
+
+      async function load() {
+        try {
+          apply(await request("GET", "/api/state"));
+        } catch (error) {
+          status("could not read the state: " + error.message);
+        }
+      }
+
+      async function save() {
+        try {
+          apply(await request("POST", "/api/rules", { rule: rules }));
+        } catch (error) {
+          status("could not save: " + error.message);
+        }
+      }
+
+      el("add").addEventListener("click", () => {
+        rules.push({
+          name: "new rule",
+          action: "allow",
+          pattern: "C:\\Program Files\\*",
+          enabled: true,
+        });
+        save();
+      });
+
+      el("apply").addEventListener("click", save);
+
+      el("clear").addEventListener("click", async () => {
+        try {
+          const store = await request("POST", "/api/clear", {});
+
+          renderBanner(store);
+          status("removed " + store.removed + " filters");
+        } catch (error) {
+          status("could not clear: " + error.message);
+        }
+      });
+
+      load();
+    </script>
+  </body>
+</html>

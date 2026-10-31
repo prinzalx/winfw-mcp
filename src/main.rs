@@ -1,12 +1,15 @@
 mod config;
 mod paths;
 mod rules;
+mod server;
 mod store;
 #[cfg(windows)]
 mod wfp;
 
 #[cfg(test)]
 mod testutil;
+
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use tracing::{debug, info, warn};
@@ -18,8 +21,8 @@ use crate::rules::RuleFile;
 
 /// What the process should do with the live store.
 ///
-/// This is deliberately the whole user interface until milestone 4 puts the web server in front of
-/// it, but the two operations are the two the web UI will expose first as well.
+/// The two one-shot operations are the two the web UI exposes as well; `Serve` is the mode the
+/// tool is meant to run in, and it keeps the process alive instead of applying and exiting.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum Command {
     /// Push the loaded rules into the live store.
@@ -27,6 +30,8 @@ enum Command {
     Apply,
     /// Take our filters out of the live store again.
     Clear,
+    /// Run the web server until the process is stopped.
+    Serve,
 }
 
 impl Command {
@@ -36,7 +41,8 @@ impl Command {
         match args {
             [] => Ok(Self::default()),
             [flag] if flag == "--clear" => Ok(Self::Clear),
-            [flag] => bail!("unknown argument '{flag}'; expected --clear"),
+            [flag] if flag == "--serve" => Ok(Self::Serve),
+            [flag] => bail!("unknown argument '{flag}'; expected --clear or --serve"),
             _ => bail!("too many arguments; expected at most one flag"),
         }
     }
@@ -47,7 +53,7 @@ fn main() -> Result<()> {
 
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "winfw-mcp [ --clear ]\n\n    (no flag)  load the rules and install them in the live store\n    --clear   remove our filters from the live store\n\nReading and writing the store needs elevation."
+            "winfw-mcp [ --serve | --clear ]\n\n    (no flag)  load the rules and install them in the live store\n    --serve   run the web server until stopped\n    --clear   remove our filters from the live store\n\nReading and writing the store needs elevation."
         );
         return Ok(());
     }
@@ -80,9 +86,28 @@ fn main() -> Result<()> {
     );
     info!(count = rules.rule.len(), "rules loaded");
 
+    if command == Command::Serve {
+        return serve(paths, settings, rules);
+    }
+
     sync_store(&rules, command);
 
     Ok(())
+}
+
+/// Run the web server: the state is already loaded, so the first request sees the same rules the
+/// process read at startup.
+///
+/// The store work happens on the WFP worker thread, which is the thread that opens the engine
+/// handle, because a WFP transaction belongs to a thread rather than to a handle.
+fn serve(paths: DataPaths, settings: Settings, rules: RuleFile) -> Result<()> {
+    let port = settings.port;
+    let state = server::AppState::new(paths, settings, rules);
+    let server = server::Server::bind(port, state, Arc::new(server::WfpWorker::start()))?;
+
+    info!(url = %format!("http://{}", server.addr()), "web UI ready");
+
+    server.serve()
 }
 
 /// Report what the live store holds, then carry out the command on it.
@@ -119,6 +144,8 @@ fn sync_store(rules: &RuleFile, command: Command) {
         Command::Clear => engine.clear().map(|removed| {
             info!(removed, "our filters removed from WFP");
         }),
+        // `serve` returns before `sync_store` is reached, so this only keeps the match honest.
+        Command::Serve => Ok(()),
     };
 
     if let Err(error) = outcome {

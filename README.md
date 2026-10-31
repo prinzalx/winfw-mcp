@@ -15,9 +15,9 @@ exposed over MCP, so an agent can allow or deny a connection too.
 
 ## Status
 
-Milestone 3 of 10. The tool owns its data directory, reads its config and rules, reads the live
-WFP store, and translates `rules.toml` into persistent WFP filters, with deny ranked above allow.
-It has no UI yet.
+Milestone 4 of 10. The tool owns its data directory, reads its config and rules, reads the live
+WFP store, translates `rules.toml` into persistent WFP filters with deny ranked above allow, and
+serves a web UI that edits those rules. The tray icon that opens the browser is still missing.
 
 | # | Milestone | State |
 |---|---|---|
@@ -25,8 +25,8 @@ It has no UI yet.
 | 1 | Data directory, config and rules load, atomic writes | done |
 | 2 | WFP read path: open the engine, enumerate providers, sublayers, filters | done |
 | 3 | Rules model and write path: `rules.toml` ↔ WFP | done |
-| 4 | HTTP server and web UI shell | next |
-| 5 | Live connection events over SSE | planned |
+| 4 | HTTP server and web UI shell | done |
+| 5 | Live connection events over SSE | next |
 | 6 | Learning mode: Detected list, Allow / Deny / Edit | planned |
 | 7 | Tray icon and start popup | planned |
 | 8 | Export and Base64 Share | planned |
@@ -46,14 +46,14 @@ cargo run
 
 ### Commands
 
-Until milestone 4 puts the web server in front of it, the two store operations are command line
-flags. Both are the operations the web UI will expose first as well. An apply needs elevation:
-without it the store reports access denied and the rules are not installed.
-
 ```
-winfw-mcp            load rules.toml and install it in the live store
+winfw-mcp            load rules.toml and install it in the live store, then exit
+winfw-mcp --serve    run the web server until stopped
 winfw-mcp --clear    remove our filters from the live store
 ```
+
+An apply needs elevation: without it the store reports access denied and the rules are not
+installed.
 
 Applying is a full rebuild, not a diff: our filters are removed and re-added in rule order inside
 one transaction, so the order in `rules.toml` is exactly the order WFP evaluates. Because the
@@ -85,13 +85,32 @@ On the first run the binary creates its data directory and the two files inside 
 `RUST_LOG` overrides `log_level` from `config.toml` for a single run. Logging goes to stderr,
 because stdout belongs to the MCP stdio transport.
 
+### Web UI
+
+`--serve` binds `127.0.0.1` on the `port` from `config.toml` (8788 by default) and serves a single
+page with no build step, embedded in the binary. Open it, edit a rule, and the change is written to
+`rules.toml` and pushed to the store immediately.
+
+| Route | Purpose |
+|---|---|
+| `GET /` | the page itself |
+| `GET /api/state` | settings, rules and what the store reported |
+| `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
+| `POST /api/clear` | remove our filters from the store |
+| `GET /api/health` | liveness, for a future tray icon or supervisor |
+
+The server is `std` only: one thread per connection, no async runtime. Every request that matters
+ends in a blocking WFP call anyway, and a long-lived connection is what milestone 5 needs for SSE.
+Because a WFP transaction belongs to a thread rather than to a handle, exactly one worker thread
+owns the engine handle; request threads hand their work to it over a channel and wait.
+
 ### Reading the store needs elevation
 
 Measured on Windows 11: an unelevated process opens the WFP engine without problem, but every read
 answers access denied and every write is refused. So `cargo run` in a plain shell logs a warning per
 store class, prints no filters and reports `WFP write refused`, while an elevated run lists the
-store and installs the rules. That is a supported degraded state, not a failure, and the web UI will
-say so on a banner instead of showing an empty list.
+store and installs the rules. That is a supported degraded state, not a failure: `/api/state`
+answers `store.ok` with the reason, and the web UI shows a banner instead of an empty list.
 
 ## Data model decisions
 
@@ -126,3 +145,4 @@ own, which is why some versions have no milestone of their own.
 | 0.3.0 | Rules model and write path: `rules.toml` ↔ WFP, full rebuild in one transaction |
 | 0.3.1 | Fix the write path: find our filters without a template, accept `FWP_E_ALREADY_EXISTS` |
 | 0.3.2 | Deny outranks allow by filter weight, whatever the order in `rules.toml` is |
+| 0.4.0 | HTTP server and web UI shell: rules page, JSON API, degraded-store banner |

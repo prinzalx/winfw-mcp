@@ -13,7 +13,7 @@ The C implementation is the **functional specification**, not a code base to por
   plus `builder/` (upstream packaging only)
 - Target platform: **Windows only** — no cross-platform abstraction layer needed
 - Language of all code, identifiers, UI strings and docs: **English only**
-- Status: **implementing** — M0 to M3 done, M4 (HTTP server + web UI shell) next
+- Status: **implementing** — M0 to M4 done, M5 (connection events over SSE) next
 
 
 ---
@@ -261,7 +261,7 @@ Suggested crate choices (to confirm at implementation time):
 | Concern | Choice | Why |
 |---|---|---|
 | Win32 / WFP | `windows` **0.62** | official; verified reading the live store (§8) |
-| HTTP server | `axum` + `tokio` | SSE support, plays well with MCP |
+| HTTP server | **`std` only** (deviation, confirmed in M4) | see below |
 | Serialization | `serde` + `serde_json` + `toml` | config and API in one model system |
 | XML (profile compat) | `quick-xml` | reading existing simplewall profiles |
 | Frontend assets | `rust-embed` | keeps the single-binary/portable promise |
@@ -270,6 +270,21 @@ Suggested crate choices (to confirm at implementation time):
 
 Frontend stays **build-step free**: plain HTML/CSS/JS + SSE, embedded into the binary.
 That avoids shipping Node and keeps "portable" honest.
+
+### Confirmed deviation: no async runtime
+
+M4 implemented the HTTP server on `std` instead of `axum` + `tokio`, and that turned out to be the
+right call rather than a shortcut:
+
+- Every request that matters ends in a **blocking WFP call**, so an async runtime would only move
+  the blocking into `spawn_blocking` without making anything concurrent that was concurrent before.
+- One thread per connection keeps the portable single binary small and the start instant, which is
+  what a tray app that the user clicks open is judged on.
+- The same long-lived connection model gives M5 (SSE) exactly what it needs for free.
+
+The consequence to remember: a request thread that touches the store **blocks** for the answer, so
+the store work is funnelled through one worker thread (a WFP transaction belongs to a thread, not
+to a handle). That thread is also what stops two full filter rebuilds from racing each other.
 
 ### Knowledge taken from `mcp-template`
 
@@ -300,8 +315,8 @@ Small, each one independently useful, each one testable without the next.
 | 1 | **Core skeleton** ✅ | `winfw-core`, config load from `%APPDATA%\winfw-mcp`, atomic writes | binary reads config, logs resolved paths |
 | 2 | **WFP read path** ✅ | engine handle, enumerate providers/sublayers/filters, each reported on its own | reports the live store; degrades to a warning when unelevated |
 | 3 | **Rules model + write path** ✅ | `rules.toml` ↔ WFP, add/remove/enable/disable, elevated-write check | toggling a rule changes live WFP state *and* the file |
-| 4 | **HTTP server + web UI shell** ← next | static assets, Rules area, JSON API | browser shows rules, change in UI is on disk instantly |
-| 5 | **Live events via SSE** | `FwpmNetEventSubscribe` → SSE stream | connection log scrolls live in browser |
+| 4 | **HTTP server + web UI shell** ✅ | static assets, Rules area, JSON API | browser shows rules, change in UI is on disk instantly |
+| 5 | **Live events via SSE** ← next | `FwpmNetEventSubscribe` → SSE stream | connection log scrolls live in browser |
 | 6 | **Learning mode** | Detected list, `learn.bin`, Allow/Deny/Edit, wildcard matching | unknown app appears, Allow creates a rule, entry leaves list |
 | 7 | **Tray + start popup** | tray icon, click opens browser, `Quit` | no console window, works from double-click |
 | 8 | **Export + Share** | per-area export to `export\`, Base64 rule encode/decode | Base64 string pastes back into a second machine |
