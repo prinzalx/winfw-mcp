@@ -118,6 +118,42 @@ impl RuleFile {
     }
 }
 
+/// A profile name is the stem of one file in `profiles\`: a single component, no separators.
+///
+/// The empty name is not a profile at all — it means `rules.toml` itself — so it is rejected here;
+/// the caller decides what empty means before asking.
+pub fn is_valid_profile_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':'])
+}
+
+/// The names of the profiles stored in `dir`, sorted, without the `.toml` suffix.
+///
+/// A directory that does not exist or cannot be read simply has no profiles, which is what a
+/// fresh install looks like.
+pub fn list_names(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
+            {
+                return None;
+            }
+
+            Some(path.file_stem()?.to_str()?.to_owned())
+        })
+        .collect();
+
+    names.sort();
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +237,28 @@ mod tests {
         RuleFile::default().save(&path).expect("save");
 
         assert_eq!(RuleFile::load_or_create(&path).expect("load").rule.len(), 0);
+    }
+
+    #[test]
+    fn a_profile_name_is_a_single_component() {
+        assert!(is_valid_profile_name("work"));
+        assert!(is_valid_profile_name("home.v2"));
+        assert!(!is_valid_profile_name(""));
+        assert!(!is_valid_profile_name(".."));
+        assert!(!is_valid_profile_name("a\\b"));
+        assert!(!is_valid_profile_name("a/b"));
+        assert!(!is_valid_profile_name("c:d"));
+    }
+
+    #[test]
+    fn profile_names_are_listed_without_their_suffix() {
+        let dir = crate::testutil::scratch_dir("profile-names");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        std::fs::write(dir.join("work.toml"), "").expect("write work");
+        std::fs::write(dir.join("home.toml"), "").expect("write home");
+        std::fs::write(dir.join("notes.txt"), "").expect("write notes");
+
+        assert_eq!(list_names(&dir), vec!["home".to_owned(), "work".to_owned()]);
     }
 
     #[test]

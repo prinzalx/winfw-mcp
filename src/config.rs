@@ -25,6 +25,11 @@ pub struct Settings {
     /// `none` is the default on purpose: an agent talking to a firewall it did not configure should
     /// be able to ask questions before it is allowed to answer them.
     pub mcp_writes: Writes,
+    /// The named profile whose rules are live, or empty for `rules.toml` itself.
+    ///
+    /// A profile is a rule file under `profiles\<name>.toml`; naming it here is what makes the
+    /// choice survive a restart (PLAN.md section 10).
+    pub active_profile: String,
 }
 
 /// What the MCP endpoint is allowed to modify.
@@ -48,6 +53,7 @@ impl Default for Settings {
             learn_mode: true,
             theme: "dark".to_owned(),
             mcp_writes: Writes::None,
+            active_profile: String::new(),
         }
     }
 }
@@ -87,6 +93,7 @@ mod tests {
             learn_mode: false,
             theme: "light".to_owned(),
             mcp_writes: Writes::Rules,
+            active_profile: "work".to_owned(),
         };
 
         settings.save(&path).expect("save");
@@ -134,6 +141,10 @@ mod tests {
             settings.mcp_writes,
             Writes::None,
             "a missing key must not silently enable writes"
+        );
+        assert_eq!(
+            settings.active_profile, "",
+            "a missing profile must mean the default rules.toml"
         );
     }
 }

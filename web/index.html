@@ -199,6 +199,11 @@
 
     <div id="banner"></div>
 
+    <div class="actions">
+      <span class="sub">Profile</span>
+      <select id="profile" title="Named rule set"></select>
+    </div>
+
     <h2>Rules</h2>
     <table>
       <thead>
@@ -592,6 +597,27 @@
           status("could not read the state: " + error.message);
           setTimeout(load, 2000);
         }
+
+        fillProfiles();
+      }
+
+      // Kept out of apply() so a refresh cannot reset a selection the user is mid-click on.
+      async function fillProfiles() {
+        try {
+          const profiles = await request("GET", "/api/profiles");
+          const select = el("profile");
+
+          select.replaceChildren();
+          for (const name of ["", ...profiles.names]) {
+            const option = document.createElement("option");
+            option.value = name;
+            option.textContent = name === "" ? "default" : name;
+            select.appendChild(option);
+          }
+          select.value = profiles.active;
+        } catch (error) {
+          // A missing profile list must not hide the rules.
+        }
       }
 
       async function save() {
@@ -647,6 +673,18 @@
           status("imported one rule");
         } catch (error) {
           status("could not import: " + error.message);
+        }
+      });
+
+      el("profile").addEventListener("change", async () => {
+        const name = el("profile").value;
+
+        try {
+          apply(await request("POST", "/api/profiles/switch", { name }));
+          status("switched to " + (name === "" ? "the default profile" : name));
+          fillProfiles();
+        } catch (error) {
+          status("could not switch profile: " + error.message);
         }
       });
 

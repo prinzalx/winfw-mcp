@@ -15,14 +15,16 @@ exposed over MCP, so an agent can allow or deny a connection too.
 
 ## Status
 
-Milestone 9 of 10. The tool owns its data directory, reads its config and rules, reads the live
+Milestone 10 of 10, all of them done. The tool owns its data directory, reads its config and rules, reads the live
 WFP store, translates `rules.toml` into persistent WFP filters with deny ranked above allow, and
 serves a web UI that edits those rules. It follows live connections over SSE, and learning mode
 collects every application no rule speaks about yet in a Detected list where each entry can be
 allowed, denied or dismissed from the browser. In a release build it runs without a console window
 and lives as a tray icon: left click opens the browser, right click offers `Quit`. Any area can be
 copied into `export\` on demand, and one rule travels as a Base64 string you can paste anywhere.
-The same core now answers a second client: an MCP agent talks JSON-RPC to `POST /mcp`.
+The same core answers a second client: an MCP agent talks JSON-RPC to `POST /mcp`. Rules are
+organised into named profiles; switching one moves the live rule set to another file and rebuilds
+the store, and the choice survives a restart.
 
 | # | Milestone | State |
 |---|---|---|
@@ -36,7 +38,7 @@ The same core now answers a second client: an MCP agent talks JSON-RPC to `POST 
 | 7 | Tray icon and start popup | done |
 | 8 | Export and Base64 Share | done |
 | 9 | MCP endpoint | done |
-| 10 | Named profiles | next |
+| 10 | Named profiles | done |
 
 ## Build and run
 
@@ -112,6 +114,8 @@ page with no build step, embedded in the binary. Open it, edit a rule, and the c
 | `POST /api/export` | copy the rules, the config and the Detected list into `export\` |
 | `POST /api/rules/share` | one rule as a Base64 string, for copy and paste |
 | `POST /api/rules/import` | append the rule a Base64 string carries |
+| `GET /api/profiles` | the active profile and the names of the stored profiles |
+| `POST /api/profiles/switch` | make another profile live (an empty name selects `rules.toml`) |
 | `GET /api/events` | the connection feed as a server-sent event stream |
 | `GET /api/health` | liveness, for a supervisor or the MCP transport |
 | `POST /mcp` | the Model Context Protocol endpoint (JSON-RPC 2.0) |
@@ -132,6 +136,8 @@ tool name may be used as the method directly.
 | `detected.list` | what learning mode collected | no |
 | `events.list` | recent connection events | no |
 | `export` | copy an area (`rules`, `config`, `detected`, `all`) into `export\` | yes |
+| `profiles.list` | the active profile and the stored profile names | no |
+| `profile.use` | switch the live profile (takes `name`) | yes |
 
 Reads are always allowed. Writes go through `mcp_writes` in `config.toml`, which is `none` by
 default: an agent should be able to ask questions before anyone allows it to answer them. A
@@ -171,6 +177,10 @@ answers `store.ok` with the reason, and the web UI shows a banner instead of an 
 
 ## Data model decisions
 
+- **A profile is a file, not a table.** The active profile is a name in `config.toml`; its rules are
+  one file in `profiles\`. The unnamed default profile keeps using `rules.toml`, so a config from an
+  earlier version needs no migration. Switching writes the current rules back to the file they came
+  from before the new one is read, so no rule is ever only in memory.
 - **Load once, write immediately.** All settings are read at startup; every change made in the web
   UI is written straight back to disk. No save button, no dirty state.
 - **Deny always beats allow.** A deny filter is installed one weight above an allow filter, so a
@@ -215,3 +225,4 @@ own, which is why some versions have no milestone of their own.
 | 0.7.0 | Tray icon without a console window: left click opens the browser, right click offers `Quit` |
 | 0.8.0 | Export of any area into `export\`, plus Share and Import of a single rule as Base64 |
 | 0.9.0 | MCP endpoint: JSON-RPC 2.0 over `POST /mcp`, read-only by default, gated writes |
+| 0.10.0 | Named profiles: `profiles\<name>.toml`, switchable from the UI and over MCP |

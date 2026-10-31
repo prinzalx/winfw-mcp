@@ -35,6 +35,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -83,15 +84,23 @@ pub struct AppState {
     detector: Arc<Detector>,
     /// The live connection feed, filled by the monitor thread.
     events: Arc<EventLog>,
+    /// The file the active rules are read from and written back to: `rules.toml` for the default
+    /// profile, `profiles\<name>.toml` otherwise. A switch changes it.
+    active_file: Mutex<PathBuf>,
+    /// The active profile name, or empty for `rules.toml` itself.
+    active_name: Mutex<String>,
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         paths: DataPaths,
         settings: Settings,
         rules: Arc<Mutex<RuleFile>>,
         detector: Arc<Detector>,
         events: Arc<EventLog>,
+        active_file: PathBuf,
+        active_name: String,
     ) -> Self {
         Self {
             paths,
@@ -99,7 +108,25 @@ impl AppState {
             rules,
             detector,
             events,
+            active_file: Mutex::new(active_file),
+            active_name: Mutex::new(active_name),
         }
+    }
+
+    /// The file the active rules live in. Read on every save, because a switch changes it.
+    fn rules_path(&self) -> PathBuf {
+        self.active_file
+            .lock()
+            .expect("rules path lock poisoned")
+            .clone()
+    }
+
+    /// The active profile name, or empty for `rules.toml`.
+    fn active_name(&self) -> String {
+        self.active_name
+            .lock()
+            .expect("active name lock poisoned")
+            .clone()
     }
 }
 
@@ -508,8 +535,8 @@ impl Server {
                     .rules
                     .lock()
                     .expect("rules lock poisoned")
-                    .save(&state.paths.rules)
-                    .context("write rules.toml")?;
+                    .save(&state.rules_path())
+                    .context("write the rules file")?;
 
                 let outcome = worker.ask(StoreWork::Apply {
                     rules,
@@ -551,8 +578,8 @@ impl Server {
                     });
 
                     current
-                        .save(&state.paths.rules)
-                        .context("write rules.toml")?;
+                        .save(&state.rules_path())
+                        .context("write the rules file")?;
                     current.clone()
                 };
 
@@ -615,8 +642,8 @@ impl Server {
                     // already has, whatever the Base64 string came from.
                     current.rule.push(incoming);
                     current
-                        .save(&state.paths.rules)
-                        .context("write rules.toml")?;
+                        .save(&state.rules_path())
+                        .context("write the rules file")?;
                     current.clone()
                 };
 
@@ -624,6 +651,20 @@ impl Server {
                     rules: applied,
                     known: state.detector.apps(),
                 })?;
+
+                Response::json(200, &StateJson::new(state, &outcome))
+            }
+            ("GET", "/api/profiles") => {
+                let body = serde_json::json!({
+                    "active": state.active_name(),
+                    "names": crate::rules::list_names(&state.paths.profiles),
+                });
+
+                Response::json(200, &body)
+            }
+            ("POST", "/api/profiles/switch") => {
+                let body: ProfileSwitch = parse_or_default(&request.body)?;
+                let outcome = switch_profile(state, worker, &body.name)?;
 
                 Response::json(200, &StateJson::new(state, &outcome))
             }
@@ -670,6 +711,14 @@ fn mcp_endpoint(state: &AppState, worker: &WfpWorker, request: &Request) -> Resu
             }
             Ok(value) => value,
         },
+        // A tool may also be called by its own name, which is the shortest form an agent can
+        // choose, so it is answered here rather than sent to the "unknown method" branch.
+        other if is_tool(other) => match mcp_tool(state, worker, &call) {
+            Err(error) => {
+                return Response::json(200, &mcp::Response::error(id, error.0, error.1));
+            }
+            Ok(value) => value,
+        },
         other => {
             return Response::json(
                 200,
@@ -679,6 +728,13 @@ fn mcp_endpoint(state: &AppState, worker: &WfpWorker, request: &Request) -> Resu
     };
 
     Response::json(200, &mcp::Response::result(id, reply))
+}
+
+/// Whether a method name is one of the tools, which makes it callable without `tools/call`.
+fn is_tool(name: &str) -> bool {
+    tool_list()
+        .iter()
+        .any(|tool| tool["name"].as_str() == Some(name))
 }
 
 /// The tools the endpoint offers, in the shape `tools/list` wants.
@@ -710,6 +766,14 @@ fn tool_list() -> Vec<serde_json::Value> {
             "the connections the firewall reported recently",
         ),
         ("export", "copy the data files into export\\; takes an area"),
+        (
+            "profiles.list",
+            "the active profile and the names of the stored profiles",
+        ),
+        (
+            "profile.use",
+            "switch the live profile; takes a name (empty selects rules.toml)",
+        ),
     ]
     .into_iter()
     .map(|(name, description)| {
@@ -759,6 +823,7 @@ fn mcp_tool(
                 "port": state.settings.port,
                 "learn_mode": state.settings.learn_mode,
                 "mcp_writes": state.settings.mcp_writes,
+                "profile": state.active_name(),
                 "rules": rules,
                 "detected": detected,
                 "store": {
@@ -832,7 +897,7 @@ fn mcp_tool(
                     enabled: true,
                 });
                 current
-                    .save(&state.paths.rules)
+                    .save(&state.rules_path())
                     .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
                 current.clone()
             };
@@ -864,6 +929,29 @@ fn mcp_tool(
                 serde_json::to_value(events).map_err(|error| (mcp::REFUSED, error.to_string()))?,
             ))
         }
+        "profiles.list" => Ok(mcp::tool_json(serde_json::json!({
+            "active": state.active_name(),
+            "names": crate::rules::list_names(&state.paths.profiles),
+        }))),
+        "profile.use" => {
+            // A profile switch rewrites the settings as well as the rules, so it needs the widest
+            // write permission rather than the `rules` one.
+            if state.settings.mcp_writes != Writes::All {
+                return Ok(mcp::tool_refusal(
+                    "profile.use refused: mcp_writes is not all",
+                ));
+            }
+
+            let name = call.string_arg("name").unwrap_or_default();
+            let outcome = switch_profile(state, worker, &name)
+                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+
+            Ok(mcp::tool_json(serde_json::json!({
+                "active": state.active_name(),
+                "installed": outcome.installed,
+                "store": outcome.ok,
+            })))
+        }
         "export" => {
             let area = match call.string_arg("area") {
                 Some(text) => serde_json::from_value::<Area>(serde_json::Value::String(text))
@@ -891,6 +979,7 @@ struct StateJson {
     port: u16,
     learn_mode: bool,
     log_level: String,
+    profile: String,
     rules: RuleFile,
     store: StoreOutcome,
     /// The newest events first, so the panel shows the interesting end even when it is truncated.
@@ -914,6 +1003,7 @@ impl StateJson {
             port: state.settings.port,
             learn_mode: state.settings.learn_mode,
             log_level: state.settings.log_level.clone(),
+            profile: state.active_name(),
             rules,
             store: store.clone(),
             events,
@@ -960,6 +1050,58 @@ struct ShareIndex {
 #[derive(Debug, Clone, Deserialize)]
 struct Share {
     share: String,
+}
+
+/// The body of `POST /api/profiles/switch`: which profile to make live. An empty name selects
+/// `rules.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ProfileSwitch {
+    #[serde(default)]
+    name: String,
+}
+
+/// Persist the current rules, point the tool at another profile, and rebuild the store.
+///
+/// The rules being left are written back first, so a change made in the browser survives the
+/// switch. An empty name selects `rules.toml`; any other name must be a single file stem, and its
+/// file is created empty when it does not exist yet.
+fn switch_profile(state: &AppState, worker: &WfpWorker, name: &str) -> Result<StoreOutcome> {
+    if !name.is_empty() && !crate::rules::is_valid_profile_name(name) {
+        bail!("'{name}' is not a valid profile name");
+    }
+
+    let leaving = state.rules.lock().expect("rules lock poisoned").clone();
+    let old = state.rules_path();
+    leaving
+        .save(&old)
+        .context("write the rules before switching")?;
+
+    let new_file = if name.is_empty() {
+        state.paths.rules.clone()
+    } else {
+        state.paths.profile_file(name)
+    };
+
+    let incoming = RuleFile::load_or_create(&new_file)?;
+
+    {
+        let mut current = state.rules.lock().expect("rules lock poisoned");
+        *current = incoming.clone();
+    }
+    *state.active_file.lock().expect("rules path lock poisoned") = new_file;
+    *state.active_name.lock().expect("active name lock poisoned") = name.to_owned();
+
+    // The active profile is a setting, so it belongs in config.toml. Nothing else changes while
+    // the server runs, so the in-memory copy is accurate apart from this one field.
+    let mut next = state.settings.clone();
+    next.active_profile = name.to_owned();
+    next.save(&state.paths.config)
+        .context("write the active profile")?;
+
+    worker.ask(StoreWork::Apply {
+        rules: incoming,
+        known: state.detector.apps(),
+    })
 }
 
 /// Parse a JSON body that may legitimately be empty, as `curl -d ''` and a UI button that sends no
@@ -1133,6 +1275,8 @@ mod tests {
 
         let detector = Detector::load(&paths.learn).expect("load the detected list");
 
+        let active_file = paths.rules.clone();
+
         AppState::new(
             paths,
             Settings::default(),
@@ -1146,6 +1290,8 @@ mod tests {
             })),
             Arc::new(detector),
             events,
+            active_file,
+            String::new(),
         )
     }
 
@@ -1205,6 +1351,79 @@ mod tests {
         assert!(
             written.contains("C:\\Windows\\System32\\thing.exe"),
             "the drive form is what the file holds: {written}"
+        );
+    }
+
+    /// Switching to a new profile keeps the rules we had in the file they came from, points the
+    /// tool at the new (empty) file, and lists the new profile as the active one.
+    #[test]
+    fn switching_profile_moves_the_live_rules_to_a_new_file() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/profiles/switch",
+                br#"{"name":"work"}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        assert_eq!(response.status, 200);
+
+        let left = std::fs::read_to_string(&server_state.paths.rules).expect("rules.toml");
+        assert!(
+            left.contains("browser"),
+            "the file we left keeps its rules: {left}"
+        );
+
+        let listed = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/profiles", vec![]),
+        )
+        .expect("route");
+        let body = String::from_utf8_lossy(&listed.body).into_owned();
+
+        assert!(
+            body.contains(r#""active":"work""#),
+            "the new profile is active: {body}",
+        );
+        assert!(body.contains("work"), "the new profile is listed: {body}");
+    }
+
+    /// An agent may name a tool directly rather than wrapping it in `tools/call`, which is the
+    /// shortest form it can send and therefore the one it is most likely to guess.
+    #[test]
+    fn a_tool_can_be_called_by_its_own_name() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                br#"{"jsonrpc":"2.0","id":1,"method":"profiles.list"}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        assert_eq!(response.status, 200);
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            !body.contains("unknown method"),
+            "a tool name is a method too: {body}"
+        );
+        assert!(
+            body.contains("structuredContent"),
+            "the tool itself answered: {body}"
         );
     }
 

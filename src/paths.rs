@@ -50,6 +50,14 @@ impl DataPaths {
         ))
     }
 
+    /// The file a named profile lives in: `profiles\<name>.toml`.
+    ///
+    /// The name is trusted to have been checked already (see `rules::is_valid_profile_name`);
+    /// building a path is not the place to reject one.
+    pub fn profile_file(&self, name: &str) -> PathBuf {
+        self.profiles.join(format!("{name}.toml"))
+    }
+
     /// Create the directories that may hold files we do not write at startup.
     pub fn ensure(&self) -> Result<()> {
         for dir in [&self.root, &self.profiles, &self.logs, &self.export] {

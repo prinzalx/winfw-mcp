@@ -78,14 +78,22 @@ fn main() -> Result<()> {
     // All state is read here, once. Later milestones keep the in-memory copy authoritative and
     // write every change straight back (PLAN.md section 2).
     let settings = Settings::load_or_create(&paths.config)?;
-    let rules = RuleFile::load_or_create(&paths.rules)?;
+
+    // A named profile is an ordinary rule file under `profiles\`; an empty name means the rules
+    // of `rules.toml` itself, which is what a fresh install has.
+    let active_rules = match settings.active_profile.as_str() {
+        "" => paths.rules.clone(),
+        name => paths.profile_file(name),
+    };
+    let rules = RuleFile::load_or_create(&active_rules)?;
 
     init_tracing(&settings);
 
     info!(root = %paths.root.display(), "data directory ready");
     info!(
         config = %paths.config.display(),
-        rules_file = %paths.rules.display(),
+        rules_file = %active_rules.display(),
+        profile = %settings.active_profile,
         "files resolved",
     );
     info!(
@@ -97,7 +105,7 @@ fn main() -> Result<()> {
     info!(count = rules.rule.len(), "rules loaded");
 
     if command == Command::Serve {
-        return serve(paths, settings, rules);
+        return serve(paths, settings, rules, active_rules);
     }
     sync_store(&rules, command);
 
@@ -109,8 +117,14 @@ fn main() -> Result<()> {
 ///
 /// The store work happens on the WFP worker thread, which is the thread that opens the engine
 /// handle, because a WFP transaction belongs to a thread rather than to a handle.
-fn serve(paths: DataPaths, settings: Settings, rules: RuleFile) -> Result<()> {
+fn serve(
+    paths: DataPaths,
+    settings: Settings,
+    rules: RuleFile,
+    active_rules: std::path::PathBuf,
+) -> Result<()> {
     let port = settings.port;
+    let active_name = settings.active_profile.clone();
 
     // The rules and the detected applications are shared between the request threads and the
     // monitor's callbacks, which is what the locks are for.
@@ -129,7 +143,15 @@ fn serve(paths: DataPaths, settings: Settings, rules: RuleFile) -> Result<()> {
     // Taken before `paths` moves into the state.
     let logfile = paths.logs.join("winfw-mcp.log");
 
-    let state = server::AppState::new(paths, settings, rules, detector, events);
+    let state = server::AppState::new(
+        paths,
+        settings,
+        rules,
+        detector,
+        events,
+        active_rules,
+        active_name,
+    );
     let server = server::Server::bind(port, state, Arc::new(server::WfpWorker::start()))?;
 
     let url = format!("http://{}", server.addr());

@@ -347,7 +347,7 @@ Small, each one independently useful, each one testable without the next.
 | 7 | **Tray + start popup** ✅ | tray icon, click opens browser, `Quit` | no console window, works from double-click |
 | 8 | **Export + Share** ✅ | per-area export to `export\`, Base64 rule encode/decode | Base64 string pastes back into a second machine |
 | 9 | **MCP endpoint** ✅ | `/mcp` JSON-RPC 2.0 with tools for status, list/allow/deny, share, export | an MCP client can allow a Detected entry |
-| 10 | **Profiles** | named profiles, switch, per-profile files | switching profile changes WFP state |
+| 10 | **Profiles** ✅ | named profiles, switch, per-profile files | switching profile changes WFP state |
 
 Milestone 0 is **done** (§8). Milestones 1-3 are the risky core; do them first and keep
 4-10 additive.
