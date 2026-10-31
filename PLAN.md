@@ -5,11 +5,15 @@
 Rewrite of [simplewall](https://github.com/henrypp/simplewall) (C, ~28k LOC) in Rust.
 The C implementation is the **functional specification**, not a code base to port line by line.
 
-- Repo: `winfw-mcp` (local path `../winfw-mcp`, branch `main`)
-- Reference sources: `../simplewall` (app), `../routine` (Henry++'s utility library)
+- Repo: `winfw-mcp` — <https://github.com/prinzalx/winfw-mcp> (public, branch `main`),
+  local path `winfw-mcp/`
+- Scaffold: [`mcp-template`](https://github.com/prinzalx/mcp-template), local path
+  `../../mcp-template` (outside this project root)
+- Reference sources: `simplewall/` (the C app) and `routine/` (Henry++'s utility library),
+  plus `builder/` (upstream packaging only)
 - Target platform: **Windows only** — no cross-platform abstraction layer needed
 - Language of all code, identifiers, UI strings and docs: **English only**
-- Status: planning
+- Status: planning — toolchain and Rust MCP transport are verified (§8)
 
 
 ---
@@ -233,11 +237,26 @@ Suggested crate choices (to confirm at implementation time):
 | Serialization | `serde` + `serde_json` + `toml` | config and API in one model system |
 | XML (profile compat) | `quick-xml` | reading existing simplewall profiles |
 | Frontend assets | `rust-embed` | keeps the single-binary/portable promise |
-| MCP | `rmcp` | streamable-HTTP transport |
+| MCP | `rmcp` **3.8.0** | streamable-HTTP transport, verified compiling here (§8) |
 | Logging | `tracing` | structured, area-scoped |
 
 Frontend stays **build-step free**: plain HTML/CSS/JS + SSE, embedded into the binary.
 That avoids shipping Node and keeps "portable" honest.
+
+### Starting point: `mcp-template`
+
+Every new MCP project starts from **<https://github.com/prinzalx/mcp-template>**, which is
+now a Rust crate (`rmcp` 3.8.0 over stdio, `tokio`, `anyhow`, `tracing`). It is proven to
+compile and answer `initialize` / `tools/list` / `tools/call` on this machine.
+
+Two caveats carried over from its TypeScript origin:
+
+- `rmcp` 3.x serves Streamable HTTP through **`transport-streamable-http-server`**, which is
+  built on `tower`/`http-body`, **not** on axum. So axum stays our *web UI + JSON API* host
+  and we mount `StreamableHttpService` alongside it; `axum` is not an `rmcp` dependency.
+- The template's `docs/`, `scripts/` and `skills/` still describe the Node workflow
+  (`npm run init`, `smoke-*.mjs`). For `winfw-mcp` we reuse the *structure* (contract doc,
+  smoke tests per tool, skill file) rather than the Node scripts themselves.
 
 
 ---
@@ -248,7 +267,7 @@ Small, each one independently useful, each one testable without the next.
 
 | # | Milestone | Content | Exit test |
 |---|---|---|---|
-| 0 | **Toolchain** | Rust installed, hello-world binary builds | `cargo build` produces an `.exe` |
+| 0 | **Toolchain** | Rust installed, hello-world binary builds | `cargo build` produces an `.exe` ✅ done (§8) |
 | 1 | **Core skeleton** | `winfw-core`, config load from `%APPDATA%\winfw-mcp`, atomic writes | binary reads config, logs resolved paths |
 | 2 | **WFP read path** | engine handle, enumerate providers/sublayers/filters (read-only, no admin needed) | prints/lists live filters |
 | 3 | **Rules model + write path** | `rules.toml` ↔ WFP, add/remove/enable/disable, elevated-write check | toggling a rule changes live WFP state *and* the file |
@@ -260,50 +279,38 @@ Small, each one independently useful, each one testable without the next.
 | 9 | **MCP endpoint** | `/mcp` with tools for status, list/allow/deny/edit, encode/decode | an MCP client can allow a Detected entry |
 | 10 | **Profiles** | named profiles, switch, per-profile files | switching profile changes WFP state |
 
-Milestone 0 is currently blocked (§8). Milestones 1-3 are the risky core; do them first
-and keep 4-9 additive.
+Milestone 0 is **done** (§8). Milestones 1-3 are the risky core; do them first and keep
+4-10 additive. Milestone 1 starts from a copy of `mcp-template` rather than
+`cargo new`, which also settles the `rmcp` feature set early.
 
 
 ---
 
 ## 8. Environment check: can we build Rust here?
 
-**Verified 2026-10-31 on this machine:**
+**Verified 2026-10-31 on this machine — the answer is yes.**
 
 | Item | Result |
 |---|---|
-| `rustc`, `cargo`, `rustup` | **not installed** (not in PATH, no `~/.cargo/bin`, no `%USERPROFILE%\.rustup`) |
+| `rustc` / `cargo` | **1.99.1** ✅ (installed by hand, default toolchain `stable-x86_64-pc-windows-msvc`) |
+| Default target | `x86_64-pc-windows-msvc` installed ✅ |
 | C linker for the MSVC backend (`link.exe`) | **present** — VS 2022 BuildTools, MSVC 14.44.35207, `Hostx64/x64` ✅ |
-| Windows SDK | 10.0.26100.0 with `Lib\um\x64` ✅ |
-| Package manager `winget` | **available** ✅ |
-| `choco` / `scoop` | not installed |
+| Windows SDK | 10.0.26100.0 with `Lib\um\{x64,x86,arm64}` ✅ |
+| crates.io reachable | yes — `cargo add` and a full dependency fetch worked ✅ |
+| End-to-end build | `cargo build` in `mcp-template` produced `target\debug\mcp-template.exe` in ~23 s ✅ |
+| Runtime smoke test | the `.exe` answered `initialize`, `tools/list` and `tools/call` over stdio ✅ |
 
-**Conclusion:** nothing structural is missing. The MSVC toolchain that Rust's default
-`x86_64-pc-windows-msvc` target needs (linker + SDK headers/libs) is already installed, so
-Visual Studio 2026 is **not** required — which is consistent with dropping the C build
-anyway. The only missing piece is Rust itself.
+**Conclusion:** nothing is missing, and Visual Studio 2026 is **not** required — the VS 2022
+BuildTools already provide the linker plus SDK libs that the `msvc` target needs. That is
+consistent with dropping the C build entirely.
 
-**To do (needs your approval, it installs software):**
+Two working notes for this shell:
 
-```
-winget install --id Rustlang.Rustup -e
-```
-
-Then in a **new** shell (PATH only updates for new processes):
-
-```
-rustup default stable-msvc
-cargo --version
-```
-
-If `winget` is inconvenient, the alternative is `rustup-init.exe` from
-<https://rustup.rs>, choosing the default `x86_64-pc-windows-msvc` toolchain.
-
-**Note for this Git-Bash shell:** `cargo` is a `.exe`, so after install it must be invoked
-by full path (`~/.cargo/bin/cargo.exe`) or the shell must be restarted.
-
-If you want ARM64 builds later, add the target explicitly:
-`rustup target add aarch64-pc-windows-msvc`. x86_64 is the primary target for now.
+- Zed was started before Rust was installed, so `cargo` is **not in PATH** here. Every
+  command needs `export PATH="$HOME/.cargo/bin:$PATH"` first (each terminal call is a fresh
+  shell), or must call `~/.cargo/bin/cargo.exe` directly. A restart of Zed fixes it.
+- If ARM64 builds are wanted later: `rustup target add aarch64-pc-windows-msvc`. x86_64 is
+  the primary target for now.
 
 
 ---
@@ -335,6 +342,11 @@ Ordered by how much pain they could cause.
    list statistics (`ITEM_NETWORK` in `src/main.h:437-440`) — effectively data races that
    C tolerates. In Rust these become explicit atomics; getting the lock boundaries right
    around the 196 queued-lock use sites is fiddly but mechanical.
+7. **`mcp-template` is polyglot right now.** It carries the TypeScript kernel (its own CI,
+   `smoke-*.mjs` scripts, `tsconfig.json`) plus the new Rust skeleton. Until that is
+   resolved, a fresh clone is ambiguous about which workflow a project copies. Nothing is
+   lost either way: the TypeScript baseline is commit `4b8dcca`, so dropping it stays
+   reversible.
 
 ### Open questions for you
 
@@ -342,3 +354,5 @@ Ordered by how much pain they could cause.
 - Roaming vs. Local AppData (plan says Roaming, matching simplewall).
 - Should `Quit` in the tray also *remove* winfw's WFP filters, or leave enforcement in place?
 - Is the Detected list capped and persisted across restarts, or allowed to grow?
+- Should `mcp-template` become **Rust-only** (TypeScript kernel dropped, still in history) or
+  stay polyglot so future TypeScript MCP projects can use it too?
