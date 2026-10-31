@@ -108,7 +108,7 @@ page with no build step, embedded in the binary. Open it, edit a rule, and the c
 | `POST /api/detected/dismiss` | drop a detected application without deciding |
 | `POST /api/clear` | remove our filters from the store |
 | `GET /api/events` | the connection feed as a server-sent event stream |
-| `GET /api/health` | liveness, for a future tray icon or supervisor |
+| `GET /api/health` | liveness, for a supervisor or the MCP transport |
 
 The Detected list is the learning mode. Every application that connects while no enabled rule
 covers it is collected there, with its hit count and whether the firewall allowed or blocked it, and

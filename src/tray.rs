@@ -36,6 +36,8 @@ pub struct Tray {
     /// which is what lets the shutdown reach it from another thread.
     thread: Arc<Mutex<Option<u32>>>,
     join: Option<JoinHandle<()>>,
+    /// Whether the icon reached the notification area.
+    added: bool,
 }
 
 impl Tray {
@@ -45,7 +47,7 @@ impl Tray {
     /// anyway and the user types the address, so a refused icon is only logged.
     pub fn start(url: String) -> Self {
         let thread = Arc::new(Mutex::new(None));
-        let (ready, ready_receiver) = channel::<()>();
+        let (ready, ready_receiver) = channel::<bool>();
 
         // The window procedure is a bare function pointer, so it reads the URL from the process
         // rather than from a capture. It is set before the thread that could answer a click starts.
@@ -67,12 +69,19 @@ impl Tray {
 
         // Waiting for the thread keeps the shutdown honest: posting to a thread that has not got its
         // window yet would drop the message and leave the thread running until the process ends.
-        let _ = ready_receiver.recv();
+        // The thread only sends when the icon is really there, so a closed channel means it gave up.
+        let added = ready_receiver.recv().unwrap_or(false);
 
         Self {
             thread,
             join: Some(join),
+            added,
         }
+    }
+
+    /// Whether the icon is in the notification area.
+    pub fn added(&self) -> bool {
+        self.added
     }
 }
 
@@ -98,7 +107,7 @@ impl Drop for Tray {
 
 /// Register the icon and pump the window's messages until the process is done with it.
 #[cfg(windows)]
-fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<()>) {
+fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
     use tracing::{debug, warn};
     use windows::Win32::Foundation::HINSTANCE;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -204,7 +213,7 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<()>) {
         return;
     }
 
-    let _ = ready.send(());
+    let _ = ready.send(true);
     debug!("tray icon added");
 
     let mut message = MSG::default();
@@ -352,9 +361,10 @@ fn current_thread_id() -> u32 {
 
 /// The non-Windows tray exists so the crate still builds for a doc tool.
 #[cfg(not(windows))]
-fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<()>) {
+fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
     let _ = thread;
-    let _ = ready.send(());
+    // Nothing is sent, so the icon counts as not added.
+    drop(ready);
 }
 
 #[cfg(test)]

@@ -124,6 +124,9 @@ fn serve(paths: DataPaths, settings: Settings, rules: RuleFile) -> Result<()> {
         Arc::clone(&rules),
     );
 
+    // Taken before `paths` moves into the state.
+    let logfile = paths.logs.join("winfw-mcp.log");
+
     let state = server::AppState::new(paths, settings, rules, detector, events);
     let server = server::Server::bind(port, state, Arc::new(server::WfpWorker::start()))?;
 
@@ -133,9 +136,44 @@ fn serve(paths: DataPaths, settings: Settings, rules: RuleFile) -> Result<()> {
 
     // Held by this scope for as long as the server runs, which is what takes the icon out of the
     // notification area again when the process is asked to stop.
-    let _tray = tray::Tray::start(url);
+    let _tray = tray::Tray::start(url.clone());
+
+    let tray_status = if _tray.added() {
+        "tray icon added"
+    } else {
+        warn!("tray icon skipped");
+
+        "tray icon skipped"
+    };
+
+    // The release binary has no console, so the startup lines and the outcome of adding the icon
+    // are appended to the log in the data dir as well.
+    log(
+        &logfile,
+        &format!(
+            "{} {} serving {url}",
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION")
+        ),
+    );
+    log(&logfile, &tray_status);
 
     server.serve()
+}
+
+/// Appends a line to the log file. Failure to write it cannot be reported anywhere, so it is
+/// ignored.
+fn log(path: &std::path::Path, message: &str) {
+    use std::io::Write;
+
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    let _ = writeln!(&mut file, "{message}");
 }
 
 /// Report what the live store holds, then carry out the command on it.
