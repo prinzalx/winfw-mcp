@@ -14,6 +14,12 @@ failure of the tool: the server answers anyway and the user types the address, s
 only logged. Because the release binary has no console, the startup lines and the outcome of adding
 the icon are appended to the log file in the data directory as well.
 
+The logo in the notification area is our own, and it comes out of the executable rather than from a
+file beside it: `build.rs` puts `assets\winfw-mcp.ico` in the binary's resources and the tray loads
+it from there, which is what keeps a single `.exe` portable. If the resource is missing — a build
+without a resource compiler — the tray falls back to the system's default application icon and the
+tool still works.
+
 A tray icon is not a widget: `Shell_NotifyIconW` binds an icon to a *window* and delivers its clicks
 as messages to that window's procedure. So the tray owns a message-only window and the thread that
 pumps its messages, which is also why the tray cannot live on one of the server's request threads.

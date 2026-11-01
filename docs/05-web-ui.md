@@ -10,6 +10,9 @@ A port that is already taken does not end the app: the server takes the next fre
 following eight, warns about it in the log, and the tray icon opens the browser at the port it
 actually got.
 
+The page is served from the binary and so is its icon: `GET /favicon.ico` answers with the same
+file the tray and the shell use, so a browser tab shows the logo without a single file on disk.
+
 ## What is on the page
 
 - **Profile** selector, which switches the live rule file.

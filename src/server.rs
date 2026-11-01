@@ -58,6 +58,10 @@ use crate::rules::{Action, Cidr, Direction, PortRange, Protocol, Rule, RuleFile}
 /// The page served at `/`, embedded so the binary stays a single file.
 const INDEX_HTML: &str = include_str!("../web/index.html");
 
+/// The icon for the browser tab: the same file `build.rs` compiles into the executable's resources,
+/// so the tray, the shell and the tab all show one logo from one source.
+const FAVICON_ICO: &[u8] = include_bytes!("../assets/winfw-mcp.ico");
+
 /// How many consecutive ports `Server::bind` walks through before it gives up on a busy
 /// configured port.
 const PORT_ATTEMPTS: u16 = 8;
@@ -675,6 +679,11 @@ impl Server {
                 status: 200,
                 content_type: "text/html; charset=utf-8",
                 body: INDEX_HTML.as_bytes().to_vec(),
+            }),
+            ("GET", "/favicon.ico") => Ok(Response {
+                status: 200,
+                content_type: "image/x-icon",
+                body: FAVICON_ICO.to_vec(),
             }),
             ("GET", "/api/state") => {
                 let outcome = worker.ask(StoreWork::Inventory)?;
@@ -2207,6 +2216,31 @@ mod tests {
             String::from_utf8_lossy(&response.body).contains("<html"),
             "the embedded page must be a document",
         );
+    }
+
+    /// The browser asks for this on every page load, and a missing file would mean a 404 in the
+    /// developer console for a page that otherwise has nothing to complain about.
+    #[test]
+    fn the_favicon_is_served_from_the_binary_too() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/favicon.ico", vec![]),
+        )
+        .expect("route");
+
+        assert_eq!(response.status, 200);
+
+        // An ICO file starts with the reserved zero, the type 1 and a count, so six bytes already
+        // say whether the asset made it into the binary at all.
+        assert!(
+            response.body.len() > 4096,
+            "the icon must be a real file, not an empty asset",
+        );
+        assert_eq!(&response.body[..4], &[0, 0, 1, 0], "an ICO header");
     }
 
     #[test]

@@ -34,6 +34,13 @@ static SERVER_RUNNING: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 #[cfg(windows)]
 const ICON_ID: u32 = 1;
 
+/// The id of the icon `build.rs` put in the executable's resources.
+///
+/// `winresource` always writes the icon under id 1, and `MAKEINTRESOURCE` is a pointer-sized integer
+/// rather than a string, which is what [`LoadIconW`] takes for a resource that is named by number.
+#[cfg(windows)]
+const APP_ICON: u16 = 1;
+
 /// The identifier of the `Quit` menu item.
 #[cfg(windows)]
 const MENU_QUIT: usize = 0x100;
@@ -145,15 +152,20 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
         }
     };
 
-    // The system's default application icon. A custom one would mean a resource file and a build
-    // step, which a single portable executable is better off without for as long as it looks right.
-    let icon = unsafe {
-        LoadIconW(
-            None,
-            windows::Win32::UI::WindowsAndMessaging::IDI_APPLICATION,
-        )
-    }
-    .unwrap_or_default();
+    // Our own icon, taken out of the executable rather than from a file next to it, so a single
+    // portable `.exe` is still enough. Should the resource be missing — a build without `build.rs`,
+    // which happens when the resource compiler is not installed — the system's default application
+    // icon is a perfectly good fallback.
+    let icon = match unsafe { LoadIconW(Some(instance), PCWSTR(APP_ICON as *const u16)) } {
+        Ok(icon) => icon,
+        Err(_) => unsafe {
+            LoadIconW(
+                None,
+                windows::Win32::UI::WindowsAndMessaging::IDI_APPLICATION,
+            )
+        }
+        .unwrap_or_default(),
+    };
 
     let class = wide("winfw-mcp-tray");
     let title = wide("winfw-mcp");

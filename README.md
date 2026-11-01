@@ -63,6 +63,7 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.16.0**, in which a second instance no longer starts: it notices the
-first one, asks the shell for a browser, and exits. What is known to be missing or fragile is
-listed in the [backlog](BACKLOG.md), ranked in its last section.
+The current release is **0.17.0**, in which the tool gets its own logo: an icon generated into the
+executable, loaded by the tray, read by the shell as version information, and served to the browser
+as the favicon. What is known to be missing or fragile is listed in the
+[backlog](BACKLOG.md), ranked in its last section.
