@@ -78,6 +78,12 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 | `GET /api/health` | liveness, for a supervisor or the MCP transport |
 | `POST /mcp` | the Model Context Protocol endpoint (JSON-RPC 2.0) |
 
+A request body the server cannot read answers **400 Bad Request** since **0.34.0**, and only a
+body: a JSON syntax error, a field of the wrong type, a name outside an enum like a theme that is
+not `light`, `dark` or `auto`, a field the route does not know. Anything else that can fail — a
+store that refused the change, a file that would not write, an index past the end of the rule list
+— stays **500**, because then the refusal is about the state and not about what the client sent.
+
 ## Export, import, share
 
 Export answers which files it copied and where, which is the manual backup path: every area can be

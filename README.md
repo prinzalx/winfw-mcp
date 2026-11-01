@@ -59,15 +59,15 @@ the tray or over MCP — leaves the filters in place.
 | 5 | Live connection events over SSE | done |
 | 6 | Learning mode: Detected list, Allow / Deny / Edit | done |
 | 7 | Tray icon and start popup | done |
-| 8 | Export and Base64 Share | done |
+| 8 | Export, Base64 Share and whole-file Restore | done |
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.33.0**, in which an export can be put back: `Restore` on the page and
-the MCP `rules.import` tool take the text of a whole rules file and replace the live list with it,
-using the same reader that reads `rules.toml` at startup, so a file this build cannot read is
-refused before the file on disk is touched
-([the web UI](docs/05-web-ui.md#export-import-share)).
+The current release is **0.34.0**, in which a request body the server cannot read answers as the
+client's mistake it is: an unreadable theme, a misspelled field or a JSON syntax error now returns
+`400 Bad Request` instead of `500 Internal Server Error`, while failures that are about the state —
+a refused store, an index past the end of the rule list — stay `500`
+([the web UI](docs/05-web-ui.md#routes)).
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
 the `theme` setting reached the page in **0.32.0**, where the header cycles `light -> dark -> auto`

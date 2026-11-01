@@ -78,11 +78,17 @@ Kept as asked, with the two audits now folded in below.
   and so does the MCP `settings.set` tool, and `learn_mode` and `default_policy` take effect at
   once. The other two are written to the file and only honoured on the next run: the port is
   already bound, and the log level is the filter `tracing` installed at startup.
-- **A bad value in a settings body answers `500 Internal Server Error`.** A theme, policy or log
-  level the server cannot read is refused before anything is written, which is right, but
-  `status_text` has no branch for it and the client is told the server broke. Found by a live run of
-  0.32.0 and pre-existing: it has answered that way for `default_policy` since the route existed.
-  The fix is a status for a body the server could not read, not a change to the refusal.
+- ~~**A bad value in a settings body answers `500 Internal Server Error`.**~~ — closed in 0.34.0.
+  A theme, policy or log level the server cannot read was refused before anything was written,
+  which was right, but `status_text` had no branch for it and the client was told the server
+  broke. Found by a live run of 0.32.0 and pre-existing: it had answered that way for
+  `default_policy` since the route existed. Body parsing now fails as a `BadRequest`, and one
+  helper maps it to `400` at the single place a route result becomes a response. What is **not**
+  remapped is a refusal about the state — a store that says no, an index past the end — which
+  stays `500` on purpose. A TOML text the restore reader rejects (`RuleFile::from_text`) and a
+  pattern that fails `validate_pattern` are still `500` too; whether "the file content makes no
+  sense" belongs to the client or the server is an open question for the next time one of them
+  bites.
 - ~~**`theme` is decorative.**~~ — closed in 0.32.0. The field existed in config, was reported in the
   state, and appeared nowhere in `web/index.html`. It is now an enumerated setting (`light`, `dark`,
   `auto`), the header cycles it with a click, and the page applies it: `data-theme` on the root for
@@ -735,3 +741,24 @@ unmeasured state saying so instead of claiming a diff.
   its value cleared afterwards or the same file chosen twice looks like nothing happened.
 - The share string keeps appending on purpose. A pasted rule and a restored file are different
   intentions, and one route that guesses between them would be a third thing nobody asked for.
+
+## 25. Bad-request status round notes
+
+- The refusal was always right; only its status lied. Every failure inside `Server::route` was
+  printed into a `500` at one call site, so "you sent me something I cannot read" and "the store
+  said no" were the same sentence to the client.
+- The distinction is carried in the error, not in the status: a `BadRequest` marker type is what
+  body parsing fails with, and `respond` downcasts once. Adding a route needs no thought about
+  status afterwards, which is the reason the mapping moved out of the call site.
+- `anyhow`'s `downcast_ref` sees the outermost error only, so a body parse must not run through
+  `.context()` on its way out or the marker disappears inside the context wrapper. That is why
+  `parse_body` builds the message itself.
+- The old `parse_or_default` wrapped a `context` on a `Result` inside `Ok(...?)`, which is the
+  shape clippy has been calling "enclosing `Ok` and `?` are unneeded" about since the route
+  existed. The rewrite is what the lint wanted, and the warning count went down rather than up.
+- Only the body was remapped. A refused store, a file that would not write and a share index past
+  the end stay `500`, because those refusals are about the state and the client cannot fix them by
+  sending the same body differently.
+- Verified live as well as in tests: `theme: "neon"`, a truncated `{` and a misspelled field each
+  answered `400`, a good theme still answered `200`, and `rules/share` at an index past the end
+  answered `500`.

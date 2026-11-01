@@ -873,8 +873,7 @@ impl Server {
                 Response::json(200, &StateJson::new(state, &outcome))
             }
             ("POST", "/api/rules") => {
-                let rules: RuleFile = serde_json::from_slice(&request.body)
-                    .context("body must be a rule file object")?;
+                let rules: RuleFile = parse_body(&request.body, "a rule file object")?;
 
                 for rule in &rules.rule {
                     validate_pattern(&rule.pattern)
@@ -904,8 +903,7 @@ impl Server {
                 Response::json(200, &state_json)
             }
             ("POST", "/api/detected") => {
-                let decision: Decision = serde_json::from_slice(&request.body)
-                    .context("body must be a detected decision object")?;
+                let decision: Decision = parse_body(&request.body, "a detected decision object")?;
 
                 let pattern = decision.pattern.unwrap_or_else(|| {
                     // No edited pattern given: the drive form of what the firewall reported.
@@ -966,8 +964,7 @@ impl Server {
                 Response::json(200, &StateJson::new(state, &outcome))
             }
             ("POST", "/api/detected/dismiss") => {
-                let body: Dismissal = serde_json::from_slice(&request.body)
-                    .context("body must be a dismissal object")?;
+                let body: Dismissal = parse_body(&request.body, "a dismissal object")?;
 
                 let removed = state.detector.dismiss(&body.app, body.remote.as_deref())?;
 
@@ -998,8 +995,7 @@ impl Server {
                 Response::json(200, &report)
             }
             ("POST", "/api/rules/share") => {
-                let body: ShareIndex =
-                    serde_json::from_slice(&request.body).context("body must name a rule index")?;
+                let body: ShareIndex = parse_body(&request.body, "a rule index")?;
                 let rules = state.rules.lock().expect("rules lock poisoned").clone();
 
                 let Some(rule) = rules.rule.get(body.index) else {
@@ -1009,8 +1005,7 @@ impl Server {
                 Ok(Response::text(200, export::encode(rule)?))
             }
             ("POST", "/api/rules/import") => {
-                let body: Share = serde_json::from_slice(&request.body)
-                    .context("body must carry a share string")?;
+                let body: Share = parse_body(&request.body, "a share string")?;
                 let incoming = export::decode(&body.share)?;
 
                 validate_pattern(&incoming.pattern)?;
@@ -1036,8 +1031,7 @@ impl Server {
                 Response::json(200, &StateJson::new(state, &outcome))
             }
             ("POST", "/api/rules/replace") => {
-                let body: Import = serde_json::from_slice(&request.body)
-                    .context("body must carry the rules file text")?;
+                let body: Import = parse_body(&request.body, "the rules file text")?;
                 let incoming = RuleFile::from_text(&body.text)?;
 
                 // Every pattern goes through the check a single rule goes through, because a file
@@ -2142,6 +2136,29 @@ fn rename_profile(
     })
 }
 
+/// A request body the server could not read. The client sent it and the client can fix it, so a
+/// route that fails this way answers `400` rather than `500`.
+#[derive(Debug)]
+struct BadRequest(String);
+
+impl std::fmt::Display for BadRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BadRequest {}
+
+/// Parse a JSON request body. Anything the server cannot read — a syntax error, a wrong field
+/// type, a name outside an enum — is the client's mistake, not the server's.
+fn parse_body<T>(body: &[u8], what: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_slice(body)
+        .map_err(|error| anyhow::Error::new(BadRequest(format!("body must be {what}: {error}"))))
+}
+
 /// Parse a JSON body that may legitimately be empty, as `curl -d ''` and a UI button that sends no
 /// payload both produce.
 fn parse_or_default<T>(body: &[u8]) -> Result<T>
@@ -2152,7 +2169,21 @@ where
         return Ok(T::default());
     }
 
-    Ok(serde_json::from_slice(body).context("body must be a JSON object")?)
+    parse_body(body, "a JSON object")
+}
+
+/// Turn a routed result into a response. A body the server could not read answers `400`; any
+/// other failure — a store that refused the change, a file that would not write — is `500`.
+fn respond(result: Result<Response>) -> Response {
+    result.unwrap_or_else(|error| {
+        let status = if error.downcast_ref::<BadRequest>().is_some() {
+            400
+        } else {
+            500
+        };
+
+        Response::text(status, format!("{error:#}"))
+    })
 }
 
 /// Push the event stream until the client goes away.
@@ -2267,8 +2298,7 @@ fn handle_connection(
         return stream_events(&mut stream, &state.events);
     }
 
-    let response = Server::route(&state, &worker, &request)
-        .unwrap_or_else(|error| Response::text(500, format!("{error:#}")));
+    let response = respond(Server::route(&state, &worker, &request));
 
     write_response(stream, &response)
 }
@@ -2950,6 +2980,41 @@ mod tests {
         );
 
         assert!(response.is_err(), "a typo must not be accepted silently");
+    }
+
+    /// A body the server could not read is the client's mistake and must answer as one. Found by
+    /// a live run of 0.32.0: an unreadable theme answered `500`, which told the user the server
+    /// had broken rather than that the value was wrong.
+    #[test]
+    fn an_unreadable_settings_body_answers_bad_request() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        for body in [r#"{"theme":"neon"}"#, r#"{"policy":"deny"}"#, "{"] {
+            let response = respond(Server::route(
+                &server_state,
+                &worker,
+                &Request::new("POST", "/api/settings", body.as_bytes().to_vec()),
+            ));
+
+            assert_eq!(response.status, 400, "not the server's fault: {body}");
+        }
+    }
+
+    /// The other half of the mapping: a failure that is not a bad body stays a `500`. Naming an
+    /// index outside the rule list parses fine, so only the refusal path can answer for it.
+    #[test]
+    fn a_failure_that_is_not_a_bad_body_stays_internal() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = respond(Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/rules/share", br#"{"index":40}"#.to_vec()),
+        ));
+
+        assert_eq!(response.status, 500, "a refusal is not a parse error");
     }
 
     /// The MCP gate is the same one a profile switch runs into: settings belong to `all`.
