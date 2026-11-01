@@ -56,7 +56,7 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 | `POST /api/detected/dismiss` | drop a detected application or destination without deciding |
 | `POST /api/clear` | remove our filters from the store |
 | `POST /api/shutdown` | stop the server, which ends the process; the filters stay installed |
-| `POST /api/export` | copy the rules, the config and the Detected list into `export\` |
+| `POST /api/export` | copy the rules, the config, the Detected list and the profiles into `export\` |
 | `POST /api/rules/share` | one rule as a Base64 string, for copy and paste |
 | `POST /api/rules/import` | append the rule a Base64 string carries |
 | `GET /api/profiles` | the active profile and the names of the stored profiles |
@@ -71,10 +71,13 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 ## Export, import, share
 
 Export answers which files it copied and where, which is the manual backup path: every area can be
-copied into `export\` on demand. Import is deliberately narrow — it appends the one rule a share
-string carries, rather than replacing anything, so pasting a string cannot silently discard a rule
-set. An agent needs no page for the read direction: the MCP `rules.decode` tool answers with the
-rule a string carries, and appends it only when asked to with `add`.
+copied into `export\` on demand. Since **0.30.0** the profiles come along too, into
+`export\profiles\` rather than next to `rules.toml`, because a set of equal files is impossible to
+tell apart in a flat listing; a profiles directory that is still empty exports nothing and leaves no
+directory behind. Import is deliberately narrow — it appends the one rule a share string carries,
+rather than replacing anything, so pasting a string cannot silently discard a rule set. An agent
+needs no page for the read direction: the MCP `rules.decode` tool answers with the rule a string
+carries, and appends it only when asked to with `add`.
 
 ## Stopping the page's server
 

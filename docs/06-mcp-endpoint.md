@@ -22,7 +22,7 @@ client that asks for anything else is told so rather than silently ignored.
 | `rules.remove` | remove the rule at an index, write the file, rebuild the store (takes `index`) | yes |
 | `detected.list` | what learning mode collected | no |
 | `events.list` | recent connection events, each naming both endpoints, whether the traffic left the machine, and the deciding filter id and rule | no |
-| `export` | copy an area (`rules`, `config`, `detected`, `all`) into `export\` | yes |
+| `export` | copy an area (`rules`, `config`, `detected`, `profiles`, `all`) into `export\` | yes |
 | `profiles.list` | the active profile and the stored profile names | no |
 | `profile.use` | switch the live profile (takes `name`) | yes |
 | `settings.set` | change `learn_mode` or `default_policy` (takes either, both optional) | yes |

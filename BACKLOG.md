@@ -84,8 +84,9 @@ Kept as asked, with the two audits now folded in below.
 
 ### 3.3 Files, export and import
 
-- **No Profiles area in export.** `Area` is `rules | config | detected | all` (`src/export.rs:22-27`),
-  so `profiles\` is never exported.
+- ~~**No Profiles area in export.**~~ — closed in 0.30.0. `Area` took a `profiles` value and `all`
+  walks into `export\profiles\`, so a backup of everything is everything again. What is left of the
+  finding is the whole-file import in the next bullet, which export alone does not settle.
 - **Import appends one shared rule; it does not replace.** PLAN.md §2 describes import as "replace what
   you have" and defers it. What exists is `POST /api/rules/import` appending one Base64-decoded rule.
   There is no way to load a whole exported rules file back in.
@@ -643,3 +644,18 @@ Found while 0.29.0 ("an agent can edit the rule list") was built.
   the destination as the text the event reported, so `rules.allow` dismisses against the arguments it
   was given rather than against a normalised copy, and an agent that passes what `detected.list`
   reported clears exactly one entry.
+
+## 21. Profiles in export
+
+- Export grew a fifth area, `profiles`, and the default `all` area walks into `export\profiles\`
+  too. Profiles keep a subdirectory of their own because they are a set of equal files; flattened
+  next to `rules.toml` the default rules file is impossible to pick out of a backup afterwards.
+- An empty profiles directory exports nothing and leaves no directory behind, which is the normal
+  state until the first profile exists.
+- The names come from `rules::list_names`, the same sorted list the Profiles area reads, so a backup
+  can never hold a file the interface does not show.
+- The web UI posts an empty body to `POST /api/export`, which means `all`, so its Export button
+  picked profiles up with no change of its own. Only the MCP schema needed the new value.
+
+Three tests cover it: profiles copied by `all`, the `profiles` area leaving the single files out,
+and an empty profiles directory exporting nothing.

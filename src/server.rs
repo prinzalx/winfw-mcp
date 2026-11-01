@@ -22,7 +22,7 @@
 //! | POST | `/api/detected/dismiss` | drop a detected application without allowing it |
 //! | POST | `/api/clear` | remove our filters from the store |
 //! | POST | `/api/shutdown` | stop the server, which ends the process |
-//! | POST | `/api/export` | copy rules, config and the Detected list into `export\` |
+//! | POST | `/api/export` | copy rules, config, the Detected list and the profiles into `export\` |
 //! | POST | `/api/rules/share` | one rule as a Base64 string, for copy and paste |
 //! | POST | `/api/rules/import` | append the rule a Base64 string carries |
 //! | POST | `/api/profiles/create` | create a profile from the current rules and switch to it |
@@ -1114,7 +1114,7 @@ fn tool_list() -> Vec<serde_json::Value> {
                     "name": { "type": "string" },
                     "area": {
                         "type": "string",
-                        "enum": ["rules", "config", "detected", "all"],
+                        "enum": ["rules", "config", "detected", "profiles", "all"],
                     },
                     "protocol": {
                         "type": "string",

@@ -23,6 +23,7 @@ pub enum Area {
     Rules,
     Config,
     Detected,
+    Profiles,
     All,
 }
 
@@ -36,6 +37,9 @@ pub struct Report {
 }
 
 /// Copy the chosen files into `export\`, under the same names.
+///
+/// Profiles keep their own subdirectory, because they are a set of equal files rather than a single
+/// file, and flattening them would hide which of them is the default rules file.
 ///
 /// Repeated exports overwrite one another on purpose: the directory mirrors the current state
 /// rather than acting as a history, and the user copies it out whenever they want a snapshot.
@@ -55,6 +59,10 @@ pub fn run(paths: &DataPaths, area: Area) -> Result<Report> {
 
     if matches!(area, Area::Detected | Area::All) {
         one(&paths.learn, &paths.export.join("learn.json"), &mut files)?;
+    }
+
+    if matches!(area, Area::Profiles | Area::All) {
+        many(&paths.profiles, &paths.export.join("profiles"), &mut files)?;
     }
 
     Ok(Report {
@@ -94,6 +102,29 @@ fn one(from: &Path, to: &Path, files: &mut Vec<String>) -> Result<()> {
     // than none at all when the original is being edited at the same time.
     store::write_atomic(to, &bytes)?;
     files.push(to.display().to_string());
+
+    Ok(())
+}
+
+/// Copy every `*.toml` of a directory across. An empty directory exports nothing and is not an
+/// error, which is the normal case for profiles until the user creates one.
+fn many(from_dir: &Path, to_dir: &Path, files: &mut Vec<String>) -> Result<()> {
+    let names = crate::rules::list_names(from_dir);
+
+    if names.is_empty() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(to_dir)
+        .with_context(|| format!("create directory {}", to_dir.display()))?;
+
+    for name in names {
+        one(
+            &from_dir.join(format!("{name}.toml")),
+            &to_dir.join(format!("{name}.toml")),
+            files,
+        )?;
+    }
 
     Ok(())
 }
@@ -153,6 +184,55 @@ mod tests {
         assert!(paths.export.join("rules.toml").is_file());
         assert!(paths.export.join("config.toml").is_file());
         assert!(!paths.export.join("learn.json").is_file());
+    }
+
+    #[test]
+    fn an_export_copies_the_profiles_into_a_subdirectory() {
+        let paths = DataPaths::under(crate::testutil::scratch_dir("export-profiles"));
+        paths.ensure().expect("ensure");
+
+        std::fs::write(paths.profile_file("work"), b"[rules]\n").expect("work profile");
+        std::fs::write(paths.profile_file("home"), b"[rules]\n").expect("home profile");
+
+        let report = run(&paths, Area::All).expect("export");
+
+        assert_eq!(report.files.len(), 2, "only the profiles are on disk");
+        assert!(paths.export.join("profiles").join("home.toml").is_file());
+        assert!(paths.export.join("profiles").join("work.toml").is_file());
+    }
+
+    #[test]
+    fn an_export_of_the_profiles_area_ignores_the_single_files() {
+        let paths = DataPaths::under(crate::testutil::scratch_dir("export-profiles-one"));
+        paths.ensure().expect("ensure");
+
+        std::fs::write(&paths.rules, b"[rules]\n").expect("rules");
+        std::fs::write(paths.profile_file("work"), b"[rules]\n").expect("work profile");
+
+        let report = run(&paths, Area::Profiles).expect("export");
+
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(
+            report.files[0],
+            paths
+                .export
+                .join("profiles")
+                .join("work.toml")
+                .display()
+                .to_string()
+        );
+        assert!(!paths.export.join("rules.toml").is_file());
+    }
+
+    #[test]
+    fn exporting_profiles_that_do_not_exist_creates_no_directory() {
+        let paths = DataPaths::under(crate::testutil::scratch_dir("export-profiles-empty"));
+        paths.ensure().expect("ensure");
+
+        let report = run(&paths, Area::Profiles).expect("export");
+
+        assert!(report.files.is_empty());
+        assert!(!paths.export.join("profiles").exists());
     }
 
     #[test]

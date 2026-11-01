@@ -63,13 +63,17 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.29.0**, in which an agent can edit the rule list instead of only
-lengthening it: `rules.remove` takes the rule at an index out of the file and rebuilds the store,
-`rules.decode` reads a Base64 share string back and appends it only when told to with `add`, and
-`rules.allow` / `rules.deny` dismiss the Detected entry they decided — which the browser had always
-done and the endpoint had not ([the MCP endpoint](docs/06-mcp-endpoint.md)).
+The current release is **0.30.0**, in which an export covers the stored profiles: `export` takes a
+`profiles` area, and the default `all` area copies every profile file into `export\profiles\`,
+because a set of equal files flattened next to `rules.toml` is impossible to read afterwards
+([the web UI](docs/05-web-ui.md)).
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
+an agent can edit the rule list instead of only lengthening it since **0.29.0**, where
+`rules.remove` takes the rule at an index out of the file and rebuilds the store, `rules.decode`
+reads a Base64 share string back and appends it only when told to with `add`, and
+`rules.allow` / `rules.deny` dismiss the Detected entry they decided
+([the MCP endpoint](docs/06-mcp-endpoint.md));
 profiles became manageable from the browser in **0.28.0**, where `New` copies the rules on screen
 into the new file and `Delete` falls back to `rules.toml` when it removes the live one
 ([rules and profiles](docs/03-rules-and-profiles.md#profiles));
