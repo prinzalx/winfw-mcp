@@ -71,8 +71,9 @@ Kept as asked, with the two audits now folded in below.
 
 - **There is no write path for settings at all.** No `POST /api/settings` route, no settings control
   in the page, no MCP tool to change one. The only place `Settings::save` is called from the server is
-  the profile switch. So `port`, `log_level`, `learn_mode` and `theme` are file-only and read-only in
-  the UI, which contradicts PLAN.md §2's promise that every change in the web UI is written through.
+  the profile switch. So `port`, `log_level`, `learn_mode`, `theme` and `default_policy` are file-only
+  and read-only in the UI, which contradicts PLAN.md §2's promise that every change in the web UI is
+  written through.
 - **`theme` is decorative.** The field exists in config, is reported in the state, and appears nowhere
   in `web/index.html`; the styling is fixed.
 - **Logs do not rotate.** PLAN.md §2 calls `logs\` rotating. It is one append-only file with no size
@@ -144,28 +145,34 @@ Kept as asked, with the two audits now folded in below.
 The reference keeps its WFP semantics in `src/wfp.c`, a file the plan never mentions; nearly all of
 this section comes from there. [verified that the file exists]
 
-### 4.1 Default deny — the largest difference
+### 4.1 Default deny — the largest difference *(closed in 0.12.0)*
 
 The reference **is** default-deny, by base filters rather than by disabling anything: an unconditioned
 `FWP_ACTION_BLOCK` at `FWW_LOWEST` on the connect and the recv/accept layers (`wfp.c:1827-1838`).
-[verified] Our tool installs no such filter, so an application we say nothing about falls through to
+[verified] Since 0.12.0 our tool can install the same shape through `default_policy = "deny"` in
+`config.toml`; the default stays `allow`, where an application we say nothing about falls through to
 whatever the machine's other filters decide — in practice the Windows Firewall, which still runs.
 
-Everything else in this section is what the reference needs in order to be able to turn that block on
-safely, and what we therefore also lack:
+Installed with the policy, and therefore no longer missing:
 
 - **Loopback permits** at `FWW_IMPORTANT` (`wfp.c:1605-1643`), so localhost survives the block.
   [verified]
 - **IPv6 plumbing permits**: 6to4 plus ICMPv6 types 133 to 136 (`wfp.c:1656-1688`). Without these a
   default block breaks the IPv6 stack. [verified]
+
+Still open, in descending order of how much they are worth:
+
+- **A setting the web UI can change.** The policy is read from `config.toml` at startup only; see the
+  settings write path in §3.2.
 - **Stealth-mode filters** against port scanners (`wfp.c:1691-1741`).
 - **Boot-time filters** with `FWPM_FILTER_FLAG_BOOTTIME`, enforced before the BFE service starts
   (`wfp.c:1743-1787`). [verified]
 - **Optionally turning Windows Firewall off** through `INetFwPolicy2`, as a user choice, not as the
   mechanism.
-- **A seven-level weight ladder** (`FWW_IMPORTANT` down to `FWW_LOWEST`) against our two weights. Our
-  numeric values `0x0F` and `0x0E` collide with the reference's `FWW_IMPORTANT` and `FWW_HIGHEST`, so
-  on a machine where both tools have installed filters, the relative order is arbitrary.
+- **A seven-level weight ladder** (`FWW_IMPORTANT` down to `FWW_LOWEST`) against our four weights.
+  Our numeric values collide with the reference's, so on a machine where both tools have installed
+  filters the relative order is arbitrary. Measured alongside this: WFP rejects a `FWP_UINT8` weight
+  of `0` **and** of `0x10` with `FWP_E_INVALID_WEIGHT`, so the usable window ends at `0x0F`.
 
 ### 4.2 Rule dimensions we do not have
 
@@ -282,8 +289,9 @@ Both passes agree on the foundation, and it is worth writing down so it does not
 
 Roughly by how much they cost to change later:
 
-1. **Default deny and its base filters** (§4.1) — until this exists the tool is an add-on list, not a
-   firewall. It needs the loopback and IPv6 permits to be safe to enable.
+1. **Default deny and its base filters** (§4.1) — done in 0.12.0 for the WFP half: the block, the
+   loopback permits and the IPv6 permits are installed when `default_policy = "deny"`. What is left of
+   the item is making the policy changeable at runtime through the settings write path (item 4).
 2. **Remote destination, protocol, direction and address family** (§4.2) — a rule-shape change, and
    item 7 of the original list cannot be answered without it.
 3. **Which filter decided an event** (§4.3) — without provider attribution no honest "blocked by rule

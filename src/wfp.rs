@@ -8,9 +8,12 @@ use std::ffi::c_void;
 use anyhow::{Result, bail};
 use windows::Win32::Foundation::{FWP_E_ALREADY_EXISTS, HANDLE};
 use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE, FWP_CONDITION_VALUE0,
-    FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_UINT8, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
-    FWPM_CONDITION_ALE_APP_ID, FWPM_DISPLAY_DATA0, FWPM_FILTER_CONDITION0,
+    FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTION_TYPE, FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE,
+    FWP_CONDITION_FLAG_IS_APPCONTAINER_LOOPBACK, FWP_CONDITION_FLAG_IS_LOOPBACK,
+    FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ANY_SET,
+    FWP_UINT8, FWP_UINT16, FWP_UINT32, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
+    FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS, FWPM_CONDITION_IP_LOCAL_PORT,
+    FWPM_CONDITION_IP_PROTOCOL, FWPM_DISPLAY_DATA0, FWPM_FILTER_CONDITION0,
     FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_FILTER_FLAG_INDEXED, FWPM_FILTER_FLAG_PERSISTENT,
     FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
@@ -24,6 +27,7 @@ use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
 };
 use windows::core::{GUID, PCWSTR, PWSTR};
 
+use crate::config::Policy;
 use crate::rules::{Action, Rule, RuleFile, is_wildcard, wildcard_match};
 
 /// The name the store shows for us, in provider, sublayer and filter display data alike.
@@ -61,10 +65,26 @@ fn already_exists(status: u32) -> bool {
 /// A deny is installed one step above an allow so that it wins even when the allow rule appears
 /// earlier in `rules.toml`. Equal weights would be resolved by creation order, which would make
 /// the outcome depend on where a rule happens to sit in the file rather than on its action.
-const WEIGHT_DENY: u8 = 0x0F;
+const WEIGHT_DENY: u8 = 0x0E;
 
 /// Filter weight for an allow rule, one step below a deny.
-const WEIGHT_ALLOW: u8 = 0x0E;
+const WEIGHT_ALLOW: u8 = 0x0D;
+
+/// Filter weight for the permits of the default-deny base: loopback, 6to4 and the ICMPv6 types.
+///
+/// Above every rule, because these are the traffic the firewall must never block whatever the
+/// rules say. Mirrors the reference, which uses `FWW_IMPORTANT` for exactly these
+/// (`simplewall/src/wfp.c:1605-1688`).
+///
+/// The reference tops out at `0x0F`, and that ceiling is real: WFP answers
+/// `FWP_E_INVALID_WEIGHT` for a `FWP_UINT8` weight of `0x10`, just as it does for `0`.
+const WEIGHT_BASE_PERMIT: u8 = 0x0F;
+
+/// Filter weight for the unconditional block of the default-deny base: the bottom, so every
+/// permit and every rule is consulted before it (`simplewall/src/wfp.c:1827-1838`). Not
+/// literally zero: WFP answers `FWP_E_INVALID_WEIGHT` for a weight of `0`, which is why the
+/// reference's `FWW_LOWEST` is `0x08` rather than `0x00`.
+const WEIGHT_BASE_BLOCK: u8 = 0x01;
 
 /// `FWW_SUBLAYER`, the top of a `u16` sublayer weight.
 const WEIGHT_SUBLAYER: u16 = 0xFFFF;
@@ -247,7 +267,7 @@ impl Engine {
     /// WFP compares an application path exactly, so a rule whose pattern contains wildcards is
     /// expanded against those paths and installed once per match. An unexpanded wildcard pattern
     /// stays in the store as it stands, which keeps the rule visible even while it matches nothing.
-    pub fn apply(&self, rules: &RuleFile, known: &[String]) -> Result<Applied> {
+    pub fn apply(&self, rules: &RuleFile, known: &[String], policy: Policy) -> Result<Applied> {
         let mut report = Applied::default();
 
         self.transaction(|| {
@@ -260,6 +280,10 @@ impl Engine {
 
             for rule in rules.rule.iter().filter(|rule| rule.enabled) {
                 installed += self.add_rule(rule, known)?;
+            }
+
+            if policy == Policy::Deny {
+                installed += self.add_base_filters()?;
             }
 
             report.installed = installed;
@@ -548,6 +572,164 @@ impl Engine {
 
         Ok(installed)
     }
+
+    /// Install the base filters of the default-deny policy, mirroring the reference
+    /// (`simplewall/src/wfp.c:1605-1688` and `1827-1838`).
+    ///
+    /// An unconditional block sits at the very bottom of the four authorization layers, so
+    /// traffic no rule mentions is denied rather than falling through to whatever the rest of
+    /// the machine decides. Above it sit the permits without which the policy would break the
+    /// machine itself: loopback (the browser has to reach this tool's own web server), 6to4,
+    /// and the ICMPv6 neighbor and router messages the IPv6 stack needs.
+    fn add_base_filters(&self) -> Result<usize> {
+        // Not from the windows crate under the name we would wish for it: `IPPROTO_IPV6` there
+        // is the IPv6 *socket option* level, the same number 41 the reference uses as the
+        // protocol value of the 6to4 permit.
+        const IPPROTO_IPV6: u8 = 41;
+
+        // Router solicitation/advertisement and neighbor solicitation/advertisement.
+        const ICMPV6_TYPES: [u16; 4] = [133, 134, 135, 136];
+
+        let mut installed = 0;
+
+        let loopback = [FWPM_FILTER_CONDITION0 {
+            fieldKey: FWPM_CONDITION_FLAGS,
+            matchType: FWP_MATCH_FLAGS_ANY_SET,
+            conditionValue: FWP_CONDITION_VALUE0 {
+                r#type: FWP_UINT32,
+                Anonymous: FWP_CONDITION_VALUE0_0 {
+                    uint32: FWP_CONDITION_FLAG_IS_LOOPBACK
+                        | FWP_CONDITION_FLAG_IS_APPCONTAINER_LOOPBACK,
+                },
+            },
+        }];
+
+        for layer in LAYERS {
+            self.add_filter(
+                "base#loopback",
+                layer,
+                FWP_ACTION_PERMIT,
+                WEIGHT_BASE_PERMIT,
+                &loopback,
+            )?;
+
+            installed += 1;
+        }
+
+        let sixtofour = [FWPM_FILTER_CONDITION0 {
+            fieldKey: FWPM_CONDITION_IP_PROTOCOL,
+            matchType: FWP_MATCH_EQUAL,
+            conditionValue: FWP_CONDITION_VALUE0 {
+                r#type: FWP_UINT8,
+                Anonymous: FWP_CONDITION_VALUE0_0 {
+                    uint8: IPPROTO_IPV6,
+                },
+            },
+        }];
+
+        self.add_filter(
+            "base#6to4",
+            FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+            FWP_ACTION_PERMIT,
+            WEIGHT_BASE_PERMIT,
+            &sixtofour,
+        )?;
+
+        installed += 1;
+
+        for icmp_type in ICMPV6_TYPES {
+            let permit = [FWPM_FILTER_CONDITION0 {
+                // `FWPM_CONDITION_ICMP_TYPE` is not a GUID of its own: the SDK spells it as an
+                // alias for the local port (`fwpmu.h:1720`), which the windows crate exports.
+                fieldKey: FWPM_CONDITION_IP_LOCAL_PORT,
+                matchType: FWP_MATCH_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_UINT16,
+                    Anonymous: FWP_CONDITION_VALUE0_0 { uint16: icmp_type },
+                },
+            }];
+
+            self.add_filter(
+                &format!("base#icmpv6-{icmp_type}"),
+                FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+                FWP_ACTION_PERMIT,
+                WEIGHT_BASE_PERMIT,
+                &permit,
+            )?;
+
+            installed += 1;
+        }
+
+        for layer in LAYERS {
+            self.add_filter(
+                "base#block",
+                layer,
+                FWP_ACTION_BLOCK,
+                WEIGHT_BASE_BLOCK,
+                &[],
+            )?;
+
+            installed += 1;
+        }
+
+        Ok(installed)
+    }
+
+    /// Install one filter of the base, as opposed to one installed from a rule.
+    fn add_filter(
+        &self,
+        name: &str,
+        layer: GUID,
+        action: FWP_ACTION_TYPE,
+        weight: u8,
+        conditions: &[FWPM_FILTER_CONDITION0],
+    ) -> Result<()> {
+        let mut provider_key = PROVIDER_KEY;
+
+        let owner = wide(APP_NAME);
+        let label = wide(name);
+
+        let mut filter = FWPM_FILTER0::default();
+        filter.filterKey = filter_key(name, &layer);
+        filter.displayData = FWPM_DISPLAY_DATA0 {
+            name: PWSTR(owner.as_ptr() as *mut _),
+            description: PWSTR(label.as_ptr() as *mut _),
+        };
+        filter.flags = FWPM_FILTER_FLAG_PERSISTENT;
+        filter.providerKey = &mut provider_key;
+        filter.layerKey = layer;
+        filter.subLayerKey = SUBLAYER_KEY;
+        filter.weight = FWP_VALUE0 {
+            r#type: FWP_UINT8,
+            Anonymous: FWP_VALUE0_0 { uint8: weight },
+        };
+        filter.numFilterConditions = conditions.len() as u32;
+
+        if !conditions.is_empty() {
+            filter.filterCondition = conditions.as_ptr() as *mut FWPM_FILTER_CONDITION0;
+        }
+
+        filter.action = FWPM_ACTION0 {
+            r#type: action,
+            ..Default::default()
+        };
+
+        let mut filter_id = 0u64;
+
+        // SAFETY: every pointer in the filter points into memory owned by the caller of this
+        // function — the condition slice and the two wide buffers — and all of it outlives the
+        // call. WFP copies what it needs.
+        let status = unsafe { FwpmFilterAdd0(self.handle, &filter, None, Some(&mut filter_id)) };
+
+        if status != 0 {
+            bail!(
+                "FwpmFilterAdd0 failed with 0x{status:08X} for base filter '{name}' on layer {}",
+                layer_index(layer),
+            );
+        }
+
+        Ok(())
+    }
 }
 
 /// How many applications one wildcard rule may be expanded into.
@@ -802,13 +984,15 @@ mod tests {
             }
         }
 
-        let applied = engine.apply(&rules, &[]).expect("apply the rule");
+        let applied = engine
+            .apply(&rules, &[], Policy::Allow)
+            .expect("apply the rule");
 
         assert_eq!(applied.installed, expected, "one filter per rule and layer");
         assert_eq!(applied.removed, 0, "the store was cleared first");
 
         let rebuilt = engine
-            .apply(&rules, &[])
+            .apply(&rules, &[], Policy::Allow)
             .expect("apply the same rule again");
 
         assert_eq!(
@@ -822,6 +1006,41 @@ mod tests {
             cleared, expected,
             "clearing removes every filter we installed"
         );
+    }
+
+    /// The default-deny policy adds the base filters on top of the rules: a loopback permit on
+    /// each of the four authorization layers, one 6to4 permit, one permit per ICMPv6 type the
+    /// IPv6 stack needs, and one unconditional block per layer. All of them carry our provider
+    /// key, so `clear` takes them out again exactly like a rule filter.
+    #[test]
+    fn the_default_deny_policy_installs_the_base_filters() {
+        const BASE_FILTERS: usize = 4 + 1 + 4 + 4;
+
+        let engine = Engine::open().expect("open engine");
+
+        // Start from a clean store, so a count of zero means what it says.
+        match engine.clear() {
+            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
+            Err(error) => {
+                let reason = format!("{error:#}");
+                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
+                println!("write path skipped, access denied");
+                return;
+            }
+        }
+
+        let applied = engine
+            .apply(&RuleFile::default(), &[], Policy::Deny)
+            .expect("apply the base filters");
+
+        assert_eq!(
+            applied.installed, BASE_FILTERS,
+            "four loopback permits, one 6to4, four ICMPv6, four blocks"
+        );
+
+        let cleared = engine.clear().expect("clear the store");
+
+        assert_eq!(cleared, BASE_FILTERS, "clearing removes the base filters");
     }
 
     /// A filter key has to survive a restart, and a rule installed on several layers needs a

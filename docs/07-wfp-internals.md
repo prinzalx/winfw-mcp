@@ -35,6 +35,38 @@ Re-applying is the normal case, not an error. The provider and sublayer stay in 
 `--clear`, and both `Fwpm*Add0` calls answer `FWP_E_ALREADY_EXISTS` when they are added again, which
 the write path accepts.
 
+## The default-deny base
+
+`default_policy = "deny"` in `config.toml` installs thirteen base filters next to the rule filters:
+
+| Filters | Action | Weight | Purpose |
+|---|---|---|---|
+| 4, one per authorization layer | permit | `0x0F` | loopback, so the browser can still reach this tool's own web server |
+| 1 on `ALE_AUTH_RECV_ACCEPT_V4` | permit | `0x0F` | protocol 41 (6to4) |
+| 4 on `ALE_AUTH_RECV_ACCEPT_V6` | permit | `0x0F` | ICMPv6 types 133 to 136, the router and neighbour messages the IPv6 stack needs |
+| 4, one per authorization layer | block | `0x01` | the unconditional bottom, so anything no rule allows is denied |
+
+They live in our own sublayer at `FWW_SUBLAYER` and carry our provider key, so `--clear` takes them
+out exactly like a rule filter.
+
+### The weight ladder
+
+Filters inside a sublayer are ordered by weight, highest first:
+
+| Weight | Used for |
+|---|---|
+| `0x0F` | base permits of the default-deny policy |
+| `0x0E` | a deny rule |
+| `0x0D` | an allow rule |
+| `0x01` | the unconditional base block |
+
+Deny has to sit above allow, or the outcome would depend on where a rule happens to sit in
+`rules.toml`. This is what makes a deny override an allow without the two being compared as a pair.
+
+Two pitfalls were measured rather than read: WFP answers `FWP_E_INVALID_WEIGHT` (`0x80320025`) for a
+weight of `0`, and it answers the same for `0x10`. The usable window for a `FWP_UINT8` weight ends at
+`0x0F`, which is exactly where the reference's `FWW_IMPORTANT` stops.
+
 ## The event stream
 
 Live connections come from WFP's own event stream (`FwpmNetEventSubscribe4`) on a session of the
@@ -57,10 +89,10 @@ owns the engine handle; request threads hand their work to it over a channel and
 
 ## What the reference does that we do not
 
-The C original installs base filters at `FWW_LOWEST` (`simplewall/src/wfp.c`) that make the store
-default-deny, and then needs explicit permits for loopback and for ICMPv6 neighbour discovery so the
-machine stays reachable. Our rules decide the applications a rule mentions; traffic no rule mentions
-is not enforced the same way while no such base filter exists.
+The C original always runs default-deny: base filters at the bottom of the store, plus explicit
+permits for loopback and ICMPv6 neighbour discovery so the machine stays reachable. Ours installs
+the same shape, but only when `default_policy = "deny"` is asked for; the default remains the friendlier
+`allow`, where traffic no rule mentions is left to the rest of the machine.
 
 That gap, and the other differences found while comparing (remote destination, protocol, direction
 and address family in a rule; provider attribution on events), is collected in the

@@ -107,6 +107,9 @@ struct Sink {
     /// `learn_mode` from the settings. Read once at startup, like every other setting, so the
     /// callback does not have to reach for the config on every connection.
     learning: bool,
+    /// `default_policy` from the settings, read the same way. A rebuild the callback queues has
+    /// to carry it, because a rebuild writes the whole store including the base filters.
+    policy: crate::config::Policy,
     /// Hand a store rebuild to the WFP worker when an application turns up that no filter knows
     /// yet. The answer is not waited for: the next page load reads the store anyway.
     rebuild: Option<SyncSender<crate::server::WorkItem>>,
@@ -132,11 +135,14 @@ impl Monitor {
         detector: Arc<crate::learn::Detector>,
         rules: Arc<Mutex<crate::rules::RuleFile>>,
         learning: bool,
+        policy: crate::config::Policy,
         rebuild: Option<SyncSender<crate::server::WorkItem>>,
     ) -> Self {
         let (shutdown, receiver) = channel();
 
-        let join = thread::spawn(move || listen(log, detector, rules, learning, rebuild, receiver));
+        let join = thread::spawn(move || {
+            listen(log, detector, rules, learning, policy, rebuild, receiver)
+        });
 
         Self {
             shutdown: Some(shutdown),
@@ -162,6 +168,7 @@ fn listen(
     detector: Arc<crate::learn::Detector>,
     rules: Arc<Mutex<crate::rules::RuleFile>>,
     learning: bool,
+    policy: crate::config::Policy,
     rebuild: Option<SyncSender<crate::server::WorkItem>>,
     shutdown: Receiver<()>,
 ) {
@@ -267,6 +274,7 @@ fn listen(
         detector,
         rules,
         learning,
+        policy,
         rebuild,
     })) as *mut c_void;
 
@@ -396,6 +404,7 @@ fn listen(
         let work = crate::server::StoreWork::Apply {
             rules: ruleset,
             known: sink.detector.apps(),
+            policy: sink.policy,
         };
 
         // A full queue means a rebuild is already on its way, and that rebuild reads the rules
@@ -414,6 +423,7 @@ fn listen(
     _detector: Arc<crate::learn::Detector>,
     _rules: Arc<Mutex<crate::rules::RuleFile>>,
     _learning: bool,
+    _policy: crate::config::Policy,
     _rebuild: Option<SyncSender<crate::server::WorkItem>>,
     shutdown: Receiver<()>,
 ) {

@@ -16,9 +16,10 @@ action the earlier one still wins, because equal weights are resolved in creatio
 are installed in file order.
 
 An application that appears in neither list is not allowed by us: the rules decide the applications
-they mention. What that means for traffic no rule mentions, and how the reference closes the gap
-with base filters at the lowest weight, is in
-[WFP internals](07-wfp-internals.md#what-the-reference-does-that-we-do-not).
+they mention. With `default_policy = "deny"` that is enforced literally, down to a base block filter
+at the bottom of the store; with the default `allow` traffic no rule mentions is left to the rest of
+the machine. The base filters behind this are in
+[WFP internals](07-wfp-internals.md#the-default-deny-base).
 
 ## Wildcards
 

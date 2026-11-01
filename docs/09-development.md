@@ -68,6 +68,7 @@ their own.
 | 0.11.2 | `learn_mode` is honoured: with it off the Detected list stays empty while the connection log keeps filling, and the page says learning is off |
 | 0.11.3 | A busy port no longer ends the app: the server falls forward to the next free port and the tray opens the port it actually got |
 | 0.11.4 | Wildcard rules are rebuilt when a new application turns up, learned or not, and the store is rebuilt from the rules at startup |
+| 0.12.0 | `default_policy` in `config.toml`: `deny` installs the base block plus the loopback, 6to4 and ICMPv6 permits, so an application no rule mentions is denied |
 
 ---
 

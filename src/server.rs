@@ -219,8 +219,12 @@ impl Response {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum StoreWork {
     /// Rebuild the filters from these rules, expanding wildcards against the applications the
-    /// detector has seen.
-    Apply { rules: RuleFile, known: Vec<String> },
+    /// detector has seen, under the given default policy.
+    Apply {
+        rules: RuleFile,
+        known: Vec<String>,
+        policy: crate::config::Policy,
+    },
     /// Take our filters out of the store.
     Clear,
     /// Report what the store says without changing it.
@@ -375,9 +379,13 @@ fn handle_work(engine: Option<&crate::wfp::Engine>, work: StoreWork) -> Result<S
     };
 
     let (_removed, _installed, result) = match work {
-        StoreWork::Apply { rules, known } => {
+        StoreWork::Apply {
+            rules,
+            known,
+            policy,
+        } => {
             let result = engine
-                .apply(&rules, &known)
+                .apply(&rules, &known, policy)
                 .map(|applied| (applied.removed, applied.installed));
 
             (0, 0, result)
@@ -638,6 +646,7 @@ impl Server {
                 let outcome = worker.ask(StoreWork::Apply {
                     rules,
                     known: state.detector.apps(),
+                    policy: state.settings.default_policy,
                 })?;
                 let state_json = StateJson::new(state, &outcome);
 
@@ -683,6 +692,7 @@ impl Server {
                 let outcome = worker.ask(StoreWork::Apply {
                     rules: applied,
                     known: state.detector.apps(),
+                    policy: state.settings.default_policy,
                 })?;
 
                 // Only after the store accepted the rule: a refused write leaves the entry on the
@@ -756,6 +766,7 @@ impl Server {
                 let outcome = worker.ask(StoreWork::Apply {
                     rules: applied,
                     known: state.detector.apps(),
+                    policy: state.settings.default_policy,
                 })?;
 
                 Response::json(200, &StateJson::new(state, &outcome))
@@ -932,6 +943,7 @@ fn mcp_tool(
             Ok(mcp::tool_json(serde_json::json!({
                 "port": state.settings.port,
                 "learn_mode": state.settings.learn_mode,
+                "default_policy": state.settings.default_policy.name(),
                 "mcp_writes": state.settings.mcp_writes,
                 "profile": state.active_name(),
                 "rules": rules,
@@ -1016,6 +1028,7 @@ fn mcp_tool(
                 .ask(StoreWork::Apply {
                     rules: applied,
                     known: state.detector.apps(),
+                    policy: state.settings.default_policy,
                 })
                 .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
 
@@ -1099,6 +1112,8 @@ fn mcp_tool(
 struct StateJson {
     port: u16,
     learn_mode: bool,
+    /// `allow` or `deny`: what an application no rule mentions gets.
+    default_policy: &'static str,
     log_level: String,
     profile: String,
     rules: RuleFile,
@@ -1123,6 +1138,7 @@ impl StateJson {
         Self {
             port: state.settings.port,
             learn_mode: state.settings.learn_mode,
+            default_policy: state.settings.default_policy.name(),
             log_level: state.settings.log_level.clone(),
             profile: state.active_name(),
             rules,
@@ -1222,6 +1238,7 @@ fn switch_profile(state: &AppState, worker: &WfpWorker, name: &str) -> Result<St
     worker.ask(StoreWork::Apply {
         rules: incoming,
         known: state.detector.apps(),
+        policy: state.settings.default_policy,
     })
 }
 

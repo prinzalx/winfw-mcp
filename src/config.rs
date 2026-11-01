@@ -30,6 +30,35 @@ pub struct Settings {
     /// A profile is a rule file under `profiles\<name>.toml`; naming it here is what makes the
     /// choice survive a restart (PLAN.md section 10).
     pub active_profile: String,
+    /// What an application that no rule mentions should get: the Windows default (`allow`) or a
+    /// firewall (`deny`).
+    ///
+    /// `deny` is the simplewall reading: every connection is blocked at the lowest weight and the
+    /// rules, the loopback permits and the IPv6 plumbing permits are what lets traffic through
+    /// again (BACKLOG section 4.1). `allow` keeps the machine exactly as it was, which is the
+    /// safe default for a tool that has just been installed next to a running Windows Firewall.
+    pub default_policy: Policy,
+}
+
+/// What the store should do with traffic no rule of this tool mentions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Policy {
+    /// Install no base filter; whatever the rest of the machine decides, decides.
+    #[default]
+    Allow,
+    /// Block everything at the lowest weight, so only rules and permits let traffic through.
+    Deny,
+}
+
+impl Policy {
+    /// The name as `config.toml` spells it and as the page shows it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
 }
 
 /// What the MCP endpoint is allowed to modify.
@@ -54,6 +83,7 @@ impl Default for Settings {
             theme: "dark".to_owned(),
             mcp_writes: Writes::None,
             active_profile: String::new(),
+            default_policy: Policy::default(),
         }
     }
 }
@@ -94,6 +124,7 @@ mod tests {
             theme: "light".to_owned(),
             mcp_writes: Writes::Rules,
             active_profile: "work".to_owned(),
+            default_policy: Policy::Deny,
         };
 
         settings.save(&path).expect("save");

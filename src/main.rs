@@ -25,7 +25,7 @@ use anyhow::{Result, bail};
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use crate::config::Settings;
+use crate::config::{Policy, Settings};
 use crate::paths::DataPaths;
 use crate::rules::RuleFile;
 
@@ -117,7 +117,7 @@ fn main() -> Result<()> {
         _ => Vec::new(),
     };
 
-    sync_store(&rules, command, &known);
+    sync_store(&rules, command, &known, settings.default_policy);
 
     Ok(())
 }
@@ -153,6 +153,7 @@ fn serve(
         Arc::clone(&detector),
         Arc::clone(&rules),
         settings.learn_mode,
+        settings.default_policy,
         worker.handle(),
     );
 
@@ -163,6 +164,7 @@ fn serve(
     match worker.ask(server::StoreWork::Apply {
         rules: startup_rules,
         known: detector.apps(),
+        policy: settings.default_policy,
     }) {
         Ok(outcome) => {
             info!(store = %outcome.describe(), "store rebuilt from the rules at startup")
@@ -245,7 +247,7 @@ fn log(path: &std::path::Path, message: &str) {
 /// need elevation, so an ordinary double-click on the executable reports the store as unreadable
 /// and leaves the filters untouched; the web UI will show that state instead of an empty list.
 #[cfg(windows)]
-fn sync_store(rules: &RuleFile, command: Command, known: &[String]) {
+fn sync_store(rules: &RuleFile, command: Command, known: &[String], policy: Policy) {
     let engine = match wfp::Engine::open() {
         Ok(engine) => engine,
         Err(error) => {
@@ -260,7 +262,7 @@ fn sync_store(rules: &RuleFile, command: Command, known: &[String]) {
     report("filters", &inventory.filters);
 
     let outcome = match command {
-        Command::Apply => engine.apply(rules, known).map(|applied| {
+        Command::Apply => engine.apply(rules, known, policy).map(|applied| {
             info!(
                 removed = applied.removed,
                 installed = applied.installed,
@@ -296,7 +298,7 @@ fn report(category: &str, entries: &wfp::Entries) {
 
 /// The non-Windows variant exists only so the crate still builds for a doc tool.
 #[cfg(not(windows))]
-fn sync_store(_rules: &RuleFile, _command: Command, _known: &[String]) {}
+fn sync_store(_rules: &RuleFile, _command: Command, _known: &[String], _policy: Policy) {}
 
 /// Logging goes to stderr: stdout belongs to the MCP stdio transport.
 fn init_tracing(settings: &Settings) {
