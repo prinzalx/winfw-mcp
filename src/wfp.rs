@@ -4,6 +4,8 @@
 //! into live filters, always inside a transaction, always through the one engine handle.
 
 use std::ffi::c_void;
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use windows::Win32::Foundation::{FWP_E_ALREADY_EXISTS, HANDLE};
@@ -198,12 +200,42 @@ pub struct Engine {
     handle: HANDLE,
 }
 
+/// The waits between attempts to open the engine, for as long as the Base Filtering Engine is
+/// allowed to still be coming up. During boot the service can answer "not available" for a few
+/// seconds, and a run that gave up on the first answer would serve its whole session without a
+/// store (PLAN.md section 5). One attempt runs before the first wait and one after each of them,
+/// so the policy is five attempts over 3.7 seconds.
+const OPEN_WAITS: [Duration; 4] = [
+    Duration::from_millis(200),
+    Duration::from_millis(500),
+    Duration::from_millis(1_000),
+    Duration::from_millis(2_000),
+];
+
+/// Run an attempt until it succeeds or the waits run out, and hand back whatever the last one
+/// said. Generic and handed its sleep so the retry policy is testable without an engine and
+/// without spending the waits.
+fn retry_open<T>(
+    waits: &[Duration],
+    mut attempt: impl FnMut() -> Result<T>,
+    mut sleep: impl FnMut(Duration),
+) -> Result<T> {
+    let mut last = attempt();
+
+    for wait in waits {
+        if last.is_ok() {
+            return last;
+        }
+
+        sleep(*wait);
+        last = attempt();
+    }
+
+    last
+}
+
 impl Engine {
-    /// Open a connection to the engine.
-    ///
-    /// The C reference retries here, because the Base Filtering Engine can be briefly unavailable
-    /// during boot. Until there are writes to protect there is no reason to retry: a caller that
-    /// fails this early is not under time pressure.
+    /// Open a connection to the engine, once.
     pub fn open() -> Result<Self> {
         let mut handle = HANDLE::default();
 
@@ -220,6 +252,15 @@ impl Engine {
         }
 
         Ok(Self { handle })
+    }
+
+    /// Open the engine, waiting for the Base Filtering Engine if it is still coming up.
+    ///
+    /// Every long-running caller uses this rather than [`Engine::open`] directly: a worker
+    /// thread that opened the engine once at startup and missed kept the miss for the rest of
+    /// the session, with every request answered "store unavailable" after it.
+    pub fn open_retrying() -> Result<Self> {
+        retry_open(&OPEN_WAITS, Self::open, thread::sleep)
     }
 
     /// Read every class we care about in one call.
@@ -1432,5 +1473,77 @@ mod tests {
     #[test]
     fn a_deny_rule_outranks_an_allow_rule() {
         assert!(WEIGHT_DENY > WEIGHT_ALLOW);
+    }
+
+    /// The retry loop is the whole of the boot-time policy, so it is tested without an engine:
+    /// an attempt that fails twice and succeeds must be reached over exactly the two waits that
+    /// precede it, with no sleep before the first try and none after the successful one.
+    #[test]
+    fn opening_waits_between_attempts_but_not_around_them() {
+        let waits = [
+            Duration::from_millis(1),
+            Duration::from_millis(2),
+            Duration::from_millis(3),
+        ];
+        let mut slept = Vec::new();
+        let mut calls = 0;
+
+        let outcome = retry_open(
+            &waits,
+            || {
+                calls += 1;
+
+                if calls < 3 {
+                    bail!("not yet {calls}");
+                }
+
+                Ok(calls)
+            },
+            |wait| slept.push(wait),
+        );
+
+        assert_eq!(outcome.expect("the third attempt is reached"), 3);
+        assert_eq!(
+            slept,
+            vec![waits[0], waits[1]],
+            "waits only between attempts"
+        );
+    }
+
+    /// The other half: an attempt that never succeeds must stop after the last wait and hand
+    /// back its last error rather than spin forever — a machine whose firewall service is
+    /// disabled should be slow to start, not started slowly.
+    #[test]
+    fn opening_gives_up_after_the_last_wait() {
+        let waits = [Duration::from_millis(1), Duration::from_millis(2)];
+        let mut slept = Vec::new();
+        let mut calls = 0;
+
+        let outcome: Result<u32> = retry_open(
+            &waits,
+            || {
+                calls += 1;
+                bail!("never")
+            },
+            |wait| slept.push(wait),
+        );
+
+        assert_eq!(outcome.expect_err("all attempts fail").to_string(), "never");
+        assert_eq!(calls, 3, "one attempt before the waits and one per wait");
+        assert_eq!(slept, vec![waits[0], waits[1]]);
+    }
+
+    /// The waits are boot policy, not a mood: ascending, and short enough that a machine whose
+    /// engine never comes up still shows its page within seconds.
+    #[test]
+    fn the_open_waits_add_up_to_seconds_not_minutes() {
+        assert!(
+            OPEN_WAITS.windows(2).all(|pair| pair[0] <= pair[1]),
+            "later attempts get more room, not less",
+        );
+
+        let total: Duration = OPEN_WAITS.iter().copied().sum();
+
+        assert!(total < Duration::from_secs(10), "got {total:?}");
     }
 }

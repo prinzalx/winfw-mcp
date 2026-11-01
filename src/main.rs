@@ -283,7 +283,7 @@ fn serve(
 /// and leaves the filters untouched; the web UI will show that state instead of an empty list.
 #[cfg(windows)]
 fn sync_store(rules: &RuleFile, command: Command, known: &[String], policy: Policy) {
-    let engine = match wfp::Engine::open() {
+    let engine = match wfp::Engine::open_retrying() {
         Ok(engine) => engine,
         Err(error) => {
             warn!(reason = %format!("{error:#}"), "WFP unavailable");

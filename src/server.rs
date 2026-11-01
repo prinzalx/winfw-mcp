@@ -509,7 +509,7 @@ impl WfpWorker {
             let _ = &shared_owners;
 
             #[cfg(windows)]
-            let engine = match crate::wfp::Engine::open() {
+            let engine = match crate::wfp::Engine::open_retrying() {
                 Ok(engine) => Some(engine),
                 Err(error) => {
                     warn!(reason = %format!("{error:#}"), "could not open the WFP engine");

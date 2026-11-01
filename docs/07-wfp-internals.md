@@ -15,6 +15,20 @@ and the web UI shows a banner instead of an empty list.
 WFP grants read access **per class**, so providers, sublayers and filters each carry their own
 result. A refused provider store is not a reason to throw away the filters we did read.
 
+## Opening the engine waits for the service
+
+Since **0.35.0** every long-running caller opens the engine through a retry: five attempts over
+3.7 seconds, with the waits ascending between them. The Base Filtering Engine can be briefly
+unavailable during boot, and the worker thread of the server opens the engine once and keeps the
+handle for its whole life — a run that started before the service was ready and gave up on the
+first answer would have served its entire session with the banner "store unavailable", whatever
+the service did afterwards. The C reference retries at the same place for the same reason.
+
+The waits are the whole policy, so they are the thing under test: the retry loop is generic over
+the attempt and over its sleep, and the tests hand it a fake both ways — an attempt that fails
+twice and recovers, and one that never does. A machine whose firewall service is disabled should
+be slow to start, not started slowly.
+
 ## Identifying our filters
 
 Every filter we install belongs to a fixed provider GUID, so a later run can find its own objects

@@ -24,6 +24,10 @@ and stays quiet when nothing disagrees — an unchanged restart and a store the 
 nothing to report there, because a refusal has no counts to compare and is already named by the
 banner itself.
 
+A tool started by a boot rule can outrun the Base Filtering Engine, and since **0.35.0** it waits
+rather than misses: the engine open retries five times over 3.7 seconds before the store is
+reported unavailable ([WFP internals](07-wfp-internals.md#opening-the-engine-waits-for-the-service)).
+
 The logo in the notification area is our own, and it comes out of the executable rather than from a
 file beside it: `build.rs` puts `assets\winfw-mcp.ico` in the binary's resources and the tray loads
 it from there, which is what keeps a single `.exe` portable. If the resource is missing — a build

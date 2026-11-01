@@ -63,11 +63,10 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.34.0**, in which a request body the server cannot read answers as the
-client's mistake it is: an unreadable theme, a misspelled field or a JSON syntax error now returns
-`400 Bad Request` instead of `500 Internal Server Error`, while failures that are about the state —
-a refused store, an index past the end of the rule list — stay `500`
-([the web UI](docs/05-web-ui.md#routes)).
+The current release is **0.35.0**, in which a boot-time start no longer outruns the Base Filtering
+Engine: the engine open retries five times over 3.7 seconds, because the server's worker thread
+opens the engine once for the life of the process and a miss used to stand for the whole session
+([WFP internals](docs/07-wfp-internals.md#opening-the-engine-waits-for-the-service)).
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
 the `theme` setting reached the page in **0.32.0**, where the header cycles `light -> dark -> auto`

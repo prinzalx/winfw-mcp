@@ -129,9 +129,13 @@ Kept as asked, with the two audits now folded in below.
 
 ### 3.5 WFP
 
-- **No retry when the engine is opened.** PLAN.md §5 asks for a retry while the Base Filtering Engine
-  comes up. The open is attempted once (`src/wfp.rs:180-196`), and the comment justifying that cites
-  "no writes to protect", which stopped being true at milestone 3.
+- ~~**No retry when the engine is opened.**~~ — closed in 0.35.0. PLAN.md §5 asks for a retry while
+  the Base Filtering Engine comes up, and the worker thread of the server opens the engine once for
+  the life of the process, so a boot-time miss used to stand for the whole session. Five attempts
+  over 3.7 seconds now, in `Engine::open_retrying`, and the stale "no writes to protect" comment is
+  gone with the single-attempt it described. What the retry does **not** cover is an engine that
+  comes and goes while the server runs: the handle is still opened once, and a service restarted
+  mid-session is not re-discovered until the next start.
 - **No fallback net-event subscription.** Only `FwpmNetEventSubscribe4` is used; PLAN.md §5 expected
   the older revisions to be loaded for older builds.
 - **UWP package display names are absent.** PLAN.md §5 allowed dropping them in v1, so this is an
@@ -762,3 +766,21 @@ unmeasured state saying so instead of claiming a diff.
 - Verified live as well as in tests: `theme: "neon"`, a truncated `{` and a misspelled field each
   answered `400`, a good theme still answered `200`, and `rules/share` at an index past the end
   answered `500`.
+
+## 26. Engine-open retry round notes
+
+- PLAN.md §5 asked for this retry from the start, and the comment that explained it away — "no
+  writes to protect" — had stopped being true when the write path landed. A stale comment that
+  once was honest is worse than none, because it reads like a decision still in force.
+- The shape that mattered: the retry loop is generic over the attempt and over its sleep, so the
+  wait policy is a function under test rather than a number living in a `thread::sleep` nobody can
+  reach without a firewall service. The tests hand it a fake attempt that recovers on the third
+  try and one that never does, and check what was slept, not how long the wall clock moved.
+- Five attempts over 3.7 seconds is boot policy, not a mood: long enough to outlast a service
+  still starting, short enough that a machine whose firewall service is *disabled* is slow to
+  start rather than started slowly.
+- The worker thread opens the engine once for the life of the process. The retry covers the
+  service coming up; it does not cover a service restarted mid-session, which stays a miss until
+  the next start. That gap is the next bullet under §3.5, deliberately not folded in here.
+- The single-attempt `Engine::open` stays public for tests and for any caller that wants exactly
+  one try; the long-running callers are the ones that moved to `open_retrying`.
