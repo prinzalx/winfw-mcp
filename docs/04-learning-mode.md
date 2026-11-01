@@ -6,18 +6,26 @@ The Detected list is the learning mode. Every application that connects while no
 covers it is collected there, with its hit count and whether the firewall allowed or blocked it, and
 the newest decision waits at the top.
 
-## Applications, not connections
+## Applications, and the destinations they reach
 
 Learning mode collects applications, not connections. One executable that makes a hundred
-connections is one decision. An application an enabled rule already covers is not collected at all,
-because a rule that blocks it is a decision that was already made.
+connections to the same place is one decision. An application an enabled rule already covers is not
+collected at all, because a rule that blocks it is a decision that was already made.
+
+Since 0.20.0 a covered application is still noticed when it reaches a destination its own rules do
+not cover. An `allow` for `tool.exe` on `site1.com` no longer hides the first connection to
+`site2.com`: that appears as a second Detected entry, marked with `to <address>`, and its identity
+is the pair of application *and* destination. What counts as covered is decided per application, and
+an application with a rule that names no destination covers every address, so nothing new is ever
+reported for it.
 
 ## Deciding
 
 Each row can be allowed, denied or dismissed:
 
 - **allow / deny** turns the entry into an ordinary rule in `rules.toml` and rebuilds the store, so
-  nothing downstream has to know where a rule came from.
+  nothing downstream has to know where a rule came from. A destination entry becomes a rule that
+  names that destination, which is what stops the next destination from being allowed by accident.
 - **dismiss** drops the entry without deciding, which is what a row is for when the application is
   uninteresting or was started by accident.
 
@@ -44,7 +52,7 @@ claiming that nothing is waiting for a decision.
 
 ## What learning mode is not
 
-It is not a log of blocked traffic. The event panel is fed separately; see
+It is not a log of every connection. The event panel is fed separately; see
 [the web UI](05-web-ui.md) and [the WFP internals](07-wfp-internals.md#the-event-stream). Whether a
 blocked connection that no rule mentions should also be remembered as its own entry is an open
 question, tracked in the [backlog](../BACKLOG.md).

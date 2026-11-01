@@ -86,6 +86,27 @@ impl Cidr {
         [self.addr[0], self.addr[1], self.addr[2], self.addr[3]]
     }
 
+    /// Whether this network contains an address.
+    ///
+    /// The families never match across: an IPv4 network cannot contain an IPv6 address, which is
+    /// the same rule the layers follow.
+    pub fn contains(&self, addr: std::net::IpAddr) -> bool {
+        // Both sides go into a `u128` *left-aligned*, because a prefix counts from the top: the
+        // four bytes of a v4 address have to occupy the top of the number, not its bottom.
+        let (network, other) = match (self.family, addr) {
+            (Family::V4, std::net::IpAddr::V4(v4)) => (
+                u128::from(u32::from_be_bytes(self.v4_bytes())) << 96,
+                u128::from(u32::from(v4)) << 96,
+            ),
+            (Family::V6, std::net::IpAddr::V6(v6)) => {
+                (u128::from_be_bytes(self.addr), u128::from(v6))
+            }
+            _ => return false,
+        };
+
+        prefix_covers(network, other, self.prefix)
+    }
+
     /// The v4 mask WFP wants beside the address: the prefix widened to 32 bits, read big-endian
     /// like the address itself. `/0` masks everything away, which matches any address.
     pub fn v4_mask(&self) -> u32 {
@@ -348,6 +369,20 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
     pattern[p..].iter().all(|&c| c == WILDCARD_STAR)
 }
 
+/// Whether one prefix covers an address.
+///
+/// Both sides are read big-endian, which is the order the octets are written in, so one mask works
+/// for either family. `/0` covers everything.
+fn prefix_covers(network: u128, addr: u128, prefix: u8) -> bool {
+    if prefix == 0 {
+        return true;
+    }
+
+    let mask = u128::MAX << (128 - u128::from(prefix));
+
+    network & mask == addr & mask
+}
+
 /// Whether any enabled rule covers this path.
 ///
 /// This is the question learning mode asks before showing an application as detected: a
@@ -358,6 +393,22 @@ pub fn covered_by(rules: &RuleFile, path: &str) -> bool {
         .iter()
         .filter(|rule| rule.enabled)
         .any(|rule| wildcard_match(&rule.pattern, path))
+}
+
+/// Whether the destination of an application a rule covers is decided as well.
+///
+/// A rule that names no destination reaches every address, and a rule that names one has to
+/// contain it. A destination no enabled rule of this application contains is new even when the
+/// application itself is not, which is what learning mode asks next.
+pub fn reaches(rules: &RuleFile, path: &str, addr: std::net::IpAddr) -> bool {
+    rules
+        .rule
+        .iter()
+        .filter(|rule| rule.enabled && wildcard_match(&rule.pattern, path))
+        .any(|rule| match rule.remote {
+            Some(cidr) => cidr.contains(addr),
+            None => true,
+        })
 }
 
 /// The contents of `rules.toml`. Order is significant: the first matching rule wins, which is
@@ -483,6 +534,59 @@ mod tests {
         assert!(!wildcard_match("C:\\Windows\\*", "C:\\Windows"));
         assert!(wildcard_match("*", "anything"));
         assert!(!wildcard_match("*x", "anything"));
+    }
+
+    /// A prefix is the whole difference between `10.0.0.5` and `10.0.0.0/24`, and the families
+    /// never match across: a v4 network does not contain a v6 address.
+    #[test]
+    fn a_prefix_contains_the_addresses_inside_it() {
+        let network: Cidr = "10.0.0.0/24".parse().expect("parse a network");
+        let host: Cidr = "10.0.0.5".parse().expect("parse an address");
+        let six: Cidr = "2001:db8::/32".parse().expect("parse a v6 network");
+
+        assert!(network.contains("10.0.0.5".parse().expect("parse an address")));
+        assert!(network.contains("10.0.0.255".parse().expect("parse an address")));
+        assert!(!network.contains("10.0.1.5".parse().expect("parse an address")));
+        assert!(!network.contains("2001:db8::1".parse().expect("parse a v6 address")));
+
+        assert!(host.contains("10.0.0.5".parse().expect("parse an address")));
+        assert!(!host.contains("10.0.0.6".parse().expect("parse an address")));
+
+        assert!(six.contains("2001:db8:99::1".parse().expect("parse a v6 address")));
+        assert!(!six.contains("2001:db9::1".parse().expect("parse a v6 address")));
+        assert!(!six.contains("10.0.0.5".parse().expect("parse an address")));
+
+        let any: Cidr = "0.0.0.0/0".parse().expect("parse the widest network");
+
+        assert!(any.contains("8.8.8.8".parse().expect("parse an address")));
+    }
+
+    /// Learning mode asks whether a covered application is decided about a destination too. The
+    /// answer comes from the enabled rules of that application alone, and a rule that names no
+    /// destination is the reason a destination is not new.
+    #[test]
+    fn a_destination_is_only_new_for_the_rules_that_do_not_reach_it() {
+        let wide = RuleFile {
+            rule: vec![Rule::plain("browser", Action::Allow, "C:\\Windows\\*")],
+        };
+        let narrow = RuleFile {
+            rule: vec![Rule {
+                remote: Some("10.0.0.0/24".parse().expect("parse a network")),
+                ..Rule::plain("browser", Action::Allow, "C:\\Windows\\*")
+            }],
+        };
+
+        let inside = "10.0.0.5".parse().expect("parse an address");
+        let outside = "93.184.216.34".parse().expect("parse an address");
+
+        assert!(reaches(&wide, "C:\\Windows\\a.exe", inside));
+        assert!(reaches(&wide, "C:\\Windows\\a.exe", outside));
+
+        assert!(reaches(&narrow, "C:\\Windows\\a.exe", inside));
+        assert!(!reaches(&narrow, "C:\\Windows\\a.exe", outside));
+
+        // A rule about a different application decides nothing about this one.
+        assert!(!reaches(&narrow, "C:\\other\\a.exe", inside));
     }
 
     #[test]

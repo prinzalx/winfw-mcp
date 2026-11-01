@@ -516,7 +516,15 @@
           row.appendChild(element("td", "pattern")).appendChild(pattern);
 
           const when = new Date(entry.seen_ms).toLocaleTimeString();
-          const meta = entry.hits + " hits " + when + (entry.allowed ? " allowed" : " blocked");
+
+          // An entry with a destination is about that address rather than about the application,
+          // so the address is said first: it is the reason the row exists at all.
+          const meta =
+            (entry.remote ? "to " + entry.remote + " " : "") +
+            entry.hits +
+            " hits " +
+            when +
+            (entry.allowed ? " allowed" : " blocked");
 
           row.appendChild(element("td", "sub", meta));
 
@@ -543,9 +551,15 @@
       async function decide(entry, action) {
         try {
           if (action === null) {
-            await request("POST", "/api/detected/dismiss", { app: entry.app });
+            await request("POST", "/api/detected/dismiss", {
+              app: entry.app,
+              remote: entry.remote ?? null,
+            });
 
-            detected = detected.filter((other) => other.app !== entry.app);
+            detected = detected.filter(
+              (other) =>
+                other.app !== entry.app || (other.remote ?? null) !== (entry.remote ?? null),
+            );
             renderDetected();
             status("dismissed");
 
@@ -555,6 +569,7 @@
           apply(await request("POST", "/api/detected", {
             app: entry.app,
             pattern: entry.display,
+            remote: entry.remote ?? null,
             action,
           }));
           status(action + " written to the rules");

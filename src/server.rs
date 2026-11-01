@@ -783,9 +783,19 @@ impl Server {
                 let applied = {
                     let mut current = state.rules.lock().expect("rules lock poisoned");
 
-                    current
-                        .rule
-                        .push(Rule::plain(name, decision.action, pattern));
+                    let mut rule = Rule::plain(name, decision.action, pattern);
+
+                    // A destination entry is decided by a rule that reaches that address and no
+                    // other, which is the whole point of asking about it.
+                    if let Some(text) = decision.remote.as_deref() {
+                        rule.remote = Some(
+                            text.parse::<Cidr>()
+                                .map_err(anyhow::Error::msg)
+                                .with_context(|| format!("'{text}' is not an address"))?,
+                        );
+                    }
+
+                    current.rule.push(rule);
 
                     current
                         .save(&state.rules_path())
@@ -802,7 +812,9 @@ impl Server {
                 // Only after the store accepted the rule: a refused write leaves the entry on the
                 // list so the user can try again.
                 if outcome.ok {
-                    state.detector.dismiss(&decision.app)?;
+                    state
+                        .detector
+                        .dismiss(&decision.app, decision.remote.as_deref())?;
                 }
 
                 Response::json(200, &StateJson::new(state, &outcome))
@@ -811,7 +823,7 @@ impl Server {
                 let body: Dismissal = serde_json::from_slice(&request.body)
                     .context("body must be a dismissal object")?;
 
-                let removed = state.detector.dismiss(&body.app)?;
+                let removed = state.detector.dismiss(&body.app, body.remote.as_deref())?;
 
                 Response::json(200, &serde_json::json!({ "removed": removed }))
             }
@@ -1387,8 +1399,17 @@ impl StateJson {
 /// The body of `POST /api/detected`: what to do with one detected application.
 #[derive(Debug, Clone, Deserialize)]
 struct Decision {
-    /// The application in device form, which is the identity of the detected entry.
+    /// The application in device form, which together with `remote` is the identity of the
+    /// detected entry.
     app: String,
+    /// The destination the entry is about, when it is a destination entry rather than one about
+    /// the application alone.
+    ///
+    /// It is answered with a rule that reaches exactly this address, so the entry does not come
+    /// back the next time the application reaches a different one. `#[serde(default)]` keeps a
+    /// client that sends no destination deciding an application entry, which is what it was.
+    #[serde(default)]
+    remote: Option<String>,
     /// The pattern to write into the rule. The UI sends the editable drive form; when it is left
     /// out the drive form of `app` is used.
     #[serde(default)]
@@ -1403,6 +1424,9 @@ struct Decision {
 #[derive(Debug, Clone, Deserialize)]
 struct Dismissal {
     app: String,
+    /// The destination of the entry to drop, when it has one.
+    #[serde(default)]
+    remote: Option<String>,
 }
 
 /// The body of `POST /api/export`.
@@ -1794,6 +1818,63 @@ mod tests {
         assert!(
             written.contains("C:\\Windows\\System32\\thing.exe"),
             "the drive form is what the file holds: {written}"
+        );
+    }
+
+    /// A detected destination is answered with a rule that reaches exactly that address, which is
+    /// the only way the entry does not come back on the next connection somewhere else.
+    #[test]
+    fn a_detected_destination_becomes_a_rule_that_reaches_it() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let covered = RuleFile {
+            rule: vec![Rule {
+                remote: Some("10.0.0.0/24".parse().expect("parse a network")),
+                ..Rule::plain("thing", Action::Allow, "C:\\Windows\\System32\\thing.exe")
+            }],
+        };
+
+        *server_state.rules.lock().expect("rules lock") = covered.clone();
+
+        server_state.detector.observe(
+            &crate::monitor::NetEvent {
+                remote_addr: "93.184.216.34".to_owned(),
+                ..connection("\\device\\harddiskvolume3\\windows\\system32\\thing.exe")
+            },
+            &covered,
+        );
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/detected",
+                br#"{"app":"\\device\\harddiskvolume3\\windows\\system32\\thing.exe","pattern":"C:\\Windows\\System32\\thing.exe","remote":"93.184.216.34","action":"deny","name":"thing cdn"}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert_eq!(response.status, 200, "{body}");
+
+        let written = std::fs::read_to_string(&server_state.paths.rules).expect("rules.toml");
+
+        assert!(
+            written.contains("remote = \"93.184.216.34\""),
+            "the rule reaches the destination it was offered for: {written}",
+        );
+        assert_eq!(
+            server_state
+                .detector
+                .snapshot()
+                .iter()
+                .filter(|entry| entry.app.contains("thing.exe"))
+                .count(),
+            0,
+            "the decided destination left the list",
         );
     }
 

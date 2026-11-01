@@ -25,7 +25,9 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   or `1024-2048` and the remote box `10.0.0.5` or `192.168.1.0/24`, both left empty for anything
   goes. A value the server cannot read bounces back as an error and the row is redrawn from what
   the server has.
-- **Detected** table: the learning mode, with `allow`, `deny` and `dismiss` per row.
+- **Detected** table: the learning mode, with `allow`, `deny` and `dismiss` per row. An entry for a
+  destination a covered application reached is marked `to <address>` and decides that destination
+  alone.
 - **Recent connections**: fed over SSE, newest first. Each line names the destination it went to
   and the rule the firewall blamed for its verdict — `by browser` for one of ours, `by other` for a
   filter another firewall owns.
@@ -40,9 +42,9 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 | `GET /` | the page itself |
 | `GET /api/state` | settings, rules and what the store reported |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
-| `POST /api/detected` | turn one detected application into a rule and rebuild the store |
+| `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
 | `POST /api/settings` | change `learn_mode` or `default_policy` at runtime; `theme` and `log_level` are written for the next run |
-| `POST /api/detected/dismiss` | drop a detected application without deciding |
+| `POST /api/detected/dismiss` | drop a detected application or destination without deciding |
 | `POST /api/clear` | remove our filters from the store |
 | `POST /api/shutdown` | stop the server, which ends the process; the filters stay installed |
 | `POST /api/export` | copy the rules, the config and the Detected list into `export\` |

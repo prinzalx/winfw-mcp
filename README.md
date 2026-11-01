@@ -63,14 +63,15 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.19.0**, in which a connection event says where it went. The remote
-address is read out of the union arm the event's `ipVersion` selects and reported as `remote_addr`
-through the log, the API, the stream and `events.list`, so two connections from one application to
-two networks are no longer the same line. See
-[WFP internals](docs/07-wfp-internals.md#reading-the-destination-an-event-went-to).
+The current release is **0.20.0**, in which learning mode notices a destination too. An application
+an enabled rule covers is collected again when it reaches an address none of its own rules reaches:
+the Detected entry carries that `remote`, allow and deny turn it into a rule naming exactly that
+destination, and the entry identity is application plus destination. So an `allow` for `tool.exe` on
+`site1.com` no longer hides its first connection to `site2.com`. See
+[learning mode](docs/04-learning-mode.md#applications-and-the-destinations-they-reach).
 
-The release before, **0.18.0**, made an event name the rule the firewall blamed for its verdict:
-the deciding filter's id is read back through the table of the rebuild currently in the store, so
-our filters report their rule name and an id we do not know reports "other" rather than guessing.
+The release before, **0.19.0**, made a connection event say where it went: the remote address is
+read out of the union arm the event's `ipVersion` selects and reported as `remote_addr` through the
+log, the API, the stream and `events.list`.
 What is known to be missing or fragile is listed in the
 [backlog](BACKLOG.md), ranked in its last section.

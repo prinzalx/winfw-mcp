@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::monitor::NetEvent;
-use crate::rules::{RuleFile, covered_by};
+use crate::rules::{RuleFile, covered_by, reaches};
 
 /// How many applications the Detected list holds. The newest is kept, the oldest falls out.
 const DETECTED_CAP: usize = 100;
@@ -31,6 +31,15 @@ pub struct Detected {
     pub app: String,
     /// The same path in drive form, because that is what a human reads and types.
     pub display: String,
+    /// The destination this entry waits for a decision about, in the text form the firewall
+    /// reported it in, and `None` when the entry is about the application alone.
+    ///
+    /// An entry has a destination when a rule already speaks about the application but no rule of
+    /// that application reaches this address. It is part of the entry's identity: one application
+    /// reaching two undecided networks is two entries. `#[serde(default)]` keeps a `learn.json`
+    /// written before 0.20.0 readable.
+    #[serde(default)]
+    pub remote: Option<String>,
     /// Milliseconds since the epoch of the connection we last saw.
     pub seen_ms: u64,
     /// How often we saw it, so a chatty application is recognisable as one.
@@ -82,23 +91,41 @@ impl Detector {
     /// Take one connection into account.
     ///
     /// An application an enabled rule already covers is not detected, whatever the store decided
-    /// to do with it: a rule that blocks it is a decision the user already made. Returns whether
-    /// the *file* changed, which is only the case when a new application appeared — refreshing a
-    /// timestamp is not worth a write.
+    /// to do with it: a rule that blocks it is a decision the user already made. For an
+    /// application that *is* covered, the destination is asked next, because a rule that allows
+    /// one network does not decide the next one. Returns whether the *file* changed, which is
+    /// only the case when a new entry appeared — refreshing a timestamp is not worth a write.
     pub fn observe(&self, event: &NetEvent, rules: &RuleFile) -> bool {
         if event.app.is_empty() {
             return false;
         }
 
         let display = crate::device::to_dos_path(&event.app);
+        let covered = covered_by(rules, &display) || covered_by(rules, &event.app);
 
-        if covered_by(rules, &display) || covered_by(rules, &event.app) {
-            return false;
-        }
+        // An application nobody has decided about yet is the decision, whatever it talks to, so
+        // the entry carries no destination. For a covered one the address has to be undecided on
+        // its own, and an event that names no address cannot offer a new one.
+        let remote = if covered {
+            match event.remote_addr.parse::<std::net::IpAddr>() {
+                Ok(addr)
+                    if !reaches(rules, &display, addr) && !reaches(rules, &event.app, addr) =>
+                {
+                    Some(event.remote_addr.clone())
+                }
+                _ => return false,
+            }
+        } else {
+            None
+        };
 
         let mut list = self.inner.lock().expect("learn lock poisoned");
 
-        if let Some(existing) = list.entry.iter_mut().find(|entry| entry.app == event.app) {
+        if let Some(existing) = list
+            .entry
+            .iter_mut()
+            .find(|entry| entry.app == event.app && entry.remote == remote)
+        {
             existing.seen_ms = event.time_ms;
             existing.hits += 1;
             existing.allowed = event.allowed;
@@ -111,6 +138,7 @@ impl Detector {
             Detected {
                 app: event.app.clone(),
                 display,
+                remote,
                 seen_ms: event.time_ms,
                 hits: 1,
                 allowed: event.allowed,
@@ -162,12 +190,16 @@ impl Detector {
             .clone()
     }
 
-    /// Take an application out of the list, as `dismiss` and a decided entry both do.
-    pub fn dismiss(&self, app: &str) -> Result<bool> {
+    /// Take one entry out of the list, as `dismiss` and a decided entry both do.
+    ///
+    /// `remote` has to be the entry's destination, or `None` for an entry about the application
+    /// alone; the two are different entries of the same application.
+    pub fn dismiss(&self, app: &str, remote: Option<&str>) -> Result<bool> {
         let mut list = self.inner.lock().expect("learn lock poisoned");
         let before = list.entry.len();
 
-        list.entry.retain(|entry| entry.app != app);
+        list.entry
+            .retain(|entry| entry.app != app || entry.remote.as_deref() != remote);
 
         let removed = list.entry.len() != before;
 
@@ -226,6 +258,16 @@ mod tests {
         }
     }
 
+    /// The same application, but the rule only reaches one network.
+    fn rules_reaching(pattern: &str, remote: &str) -> RuleFile {
+        RuleFile {
+            rule: vec![crate::rules::Rule {
+                remote: Some(remote.parse().expect("parse a network")),
+                ..crate::rules::Rule::plain("one", crate::rules::Action::Allow, pattern)
+            }],
+        }
+    }
+
     #[test]
     fn an_uncovered_application_is_detected_once() {
         let detector = detector("detect-once");
@@ -259,6 +301,76 @@ mod tests {
         assert!(detector.snapshot().is_empty());
     }
 
+    /// An application a rule allows to one network is not decided about the next one, so the new
+    /// destination is what the user is asked about, and the entry names it.
+    #[test]
+    fn an_allowed_application_reaching_a_new_network_is_detected_with_it() {
+        let detector = detector("detect-destination");
+        let covered = rules_reaching("\\device\\harddiskvolume3\\windows\\*", "10.0.0.0/24");
+
+        let inside = NetEvent {
+            remote_addr: "10.0.0.5".to_owned(),
+            ..event("\\device\\harddiskvolume3\\windows\\a.exe", 10)
+        };
+        let outside = NetEvent {
+            remote_addr: "93.184.216.34".to_owned(),
+            ..event("\\device\\harddiskvolume3\\windows\\a.exe", 20)
+        };
+
+        assert!(!detector.observe(&inside, &covered));
+        assert!(detector.snapshot().is_empty(), "the rule reaches this one");
+
+        assert!(detector.observe(&outside, &covered));
+
+        let snapshot = detector.snapshot();
+
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(
+            snapshot[0].remote.as_deref(),
+            Some("93.184.216.34"),
+            "the destination is what the entry is about",
+        );
+
+        // The same destination again only refreshes the entry.
+        assert!(!detector.observe(&outside, &covered));
+        assert_eq!(detector.snapshot()[0].hits, 2);
+    }
+
+    /// An application nobody decided about is itself the decision, whatever it talks to, so its
+    /// entry carries no destination. That entry and a destination entry of the same application are
+    /// two entries, and dismissing one leaves the other alone.
+    #[test]
+    fn an_application_entry_and_a_destination_entry_are_separate() {
+        let detector = detector("detect-two-entries");
+        let app = "\\device\\harddiskvolume3\\b.exe";
+
+        assert!(detector.observe(&event(app, 10), &RuleFile::default()));
+
+        let covered = rules_reaching("\\device\\harddiskvolume3\\*", "10.0.0.0/24");
+
+        assert!(detector.observe(
+            &NetEvent {
+                remote_addr: "93.184.216.34".to_owned(),
+                ..event(app, 20)
+            },
+            &covered,
+        ));
+
+        let snapshot = detector.snapshot();
+
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].remote.as_deref(), Some("93.184.216.34"));
+        assert_eq!(snapshot[1].remote, None);
+
+        assert!(
+            detector
+                .dismiss(app, None)
+                .expect("dismiss the application entry")
+        );
+
+        assert_eq!(detector.snapshot().len(), 1, "the other entry stays");
+    }
+
     #[test]
     fn an_event_without_an_application_is_not_detected() {
         let detector = detector("detect-empty");
@@ -277,12 +389,12 @@ mod tests {
 
         assert!(
             detector
-                .dismiss("\\device\\harddiskvolume3\\a.exe")
+                .dismiss("\\device\\harddiskvolume3\\a.exe", None)
                 .expect("dismiss")
         );
         assert!(
             !detector
-                .dismiss("\\device\\harddiskvolume3\\a.exe")
+                .dismiss("\\device\\harddiskvolume3\\a.exe", None)
                 .expect("dismiss again")
         );
     }
@@ -342,7 +454,7 @@ mod tests {
         );
         detector.note_app("\\device\\harddiskvolume3\\a.exe");
         detector
-            .dismiss("\\device\\harddiskvolume3\\a.exe")
+            .dismiss("\\device\\harddiskvolume3\\a.exe", None)
             .expect("dismiss");
 
         // Dismissing empties the Detected list, but the application was still seen, and a
