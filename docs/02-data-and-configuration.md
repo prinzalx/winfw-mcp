@@ -21,6 +21,19 @@ On the first run the binary creates its data directory and the files inside it:
     export\              destination for on-demand exports
 ```
 
+## The log file
+
+Everything `tracing` reports goes to `logs\winfw-mcp.log` and to the console. A release build runs
+without a window, so the file is the only place its lines survive, which is why it is bounded:
+past one megabyte the live file moves to `winfw-mcp.log.1` -- replacing whatever generation was
+there before it -- and writing starts over. The newest lines are always the ones that are kept, and
+the result is never more than two files.
+
+| File                     | Contents                                              |
+| ----------------------- | ----------------------------------------------------- |
+| `logs\winfw-mcp.log`    | the current generation, newest lines at the bottom    |
+| `logs\winfw-mcp.log.1`  | the generation before it, until the next roll         |
+
 ## Settings
 
 | Key | Meaning |

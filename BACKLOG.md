@@ -75,8 +75,10 @@ Kept as asked, with the two audits now folded in below.
   already bound, and the log level is the filter `tracing` installed at startup.
 - **`theme` is decorative.** The field exists in config, is reported in the state, and appears nowhere
   in `web/index.html`; the styling is fixed.
-- **Logs do not rotate.** PLAN.md §2 calls `logs\` rotating. It is one append-only file with no size
-  bound, and tracing goes to stderr only, so in a release build the log file holds almost nothing.
+- ~~**Logs do not rotate.**~~ — closed in 0.26.0. PLAN.md §2 calls `logs\` rotating, and it now does:
+  tracing writes to the file and the console, the file rolls at a megabyte to `<name>.1`, and the
+  startup lines the ad-hoc helper appended are `info!` lines like every other. What is left is the
+  log level of a **running** process (above), which a rolling file cannot answer.
 
 ### 3.3 Files, export and import
 
@@ -342,7 +344,8 @@ Roughly by how much they cost to change later:
    file format still not copied.
 7. **Runtime finishing touches**: the single instance landed in 0.16.0, the icons in 0.17.0 and
    the tray menu (`Open`, `Pause learning`, `Quit`) in 0.21.0 and volatile filter mode
-   (`volatile_filters`, taken out on a clean stop) in 0.22.0. Nothing of the item is left.
+   (`volatile_filters`, taken out on a clean stop) in 0.22.0. Log rotation, which was the last
+   open part of it, landed in 0.26.0. Nothing of the item is left.
 
 ## 7. Extension round notes (2026-11-01)
 
@@ -531,3 +534,26 @@ Found while 0.25.0 ("finish the connection table") was built.
   question visible: an event whose local address is an unreached network and whose remote end is
   empty must offer nothing, which is what `a_detected_destination_is_the_remote_end_and_never_the_local_one`
   now pins down.
+
+## 17. Log rotation round notes (2026-11-01)
+
+Found while 0.26.0 ("the log rotates") was built.
+
+- **The rename has to close the handle first.** Windows refuses to move a file a handle has open,
+  so a rotation that renames before closing is a rotation that silently does nothing. The handle is
+  taken out of the slot, the rename and the reopen happen, and only then is the count reset; a
+  rename that failed leaves the count alone so the next writer asks again rather than appending to a
+  half-rotated file.
+- **A bound checked before the write overshoots, by design.** The writer asks how many bytes it has
+  already counted, so the generation that rolls is the limit *plus at most one line*. A test that
+  demanded exactly a megabyte failed on the arithmetic rather than on the module, and the range is
+  the honest assertion.
+- **A log file is not worth failing a startup over.** The old helper appended to the file and
+  dropped an error it had nowhere to report. Now a file that will not open is printed on the console
+  and the run continues with the console alone, which is the right way round for a firewall.
+- **The tee belongs to the module, not to `main`.** Because `MakeWriter` is implemented on the log
+  itself, the subscriber gets one writer that is both halves, and a debug build still shows every
+  line while the release build's lines survive in the data dir. ANSI is off for it: the same bytes
+  go to both halves, and escape codes in a file are read in an editor later.
+- **`cargo build --release` does not compile `#[cfg(test)]`.** A type error in a test was caught by
+  the test run and not by the build, so the two are never the same check.

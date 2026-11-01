@@ -63,13 +63,16 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.25.0**, in which the connection table is complete: a line now names the
-local endpoint as well as the destination, marks a connection that never left the machine, and an
-endpoint the event did not name is left blank rather than shown as the `0.0.0.0` an unread union
-holds.
+The current release is **0.26.0**, in which the log becomes something a portable run can leave
+alone: every line goes to `logs\winfw-mcp.log` as well as to the console, and past a megabyte the
+file is rolled to `winfw-mcp.log.1` and writing starts over, so the data directory never holds
+more than two generations of it
+([data and configuration](docs/02-data-and-configuration.md#the-log-file)).
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
-storage hardening (a versioned rule file, a `.bak` of every write, pattern validation) came in
+the connection table was completed in **0.25.0**, so a line names the local endpoint as well as the
+destination and marks a connection that never left the machine; storage hardening (a versioned rule
+file, a `.bak` of every write, pattern validation) came in
 **0.24.0**; `--help` and `--version` in **0.23.0**; **0.22.0** added `volatile_filters`, which takes our filters out of the store on a clean stop
 ([lifecycle and tray](docs/08-lifecycle.md#stopping)); a
 tray menu (`Open`, `Pause learning`, `Quit`) came in **0.21.0**; **0.20.0** made learning mode

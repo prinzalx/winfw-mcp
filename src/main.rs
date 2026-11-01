@@ -7,6 +7,7 @@ mod device;
 mod export;
 mod instance;
 mod learn;
+mod log;
 mod mcp;
 mod monitor;
 mod paths;
@@ -83,6 +84,10 @@ fn main() -> Result<()> {
     let paths = DataPaths::resolve()?;
     paths.ensure()?;
 
+    // Resolved before the subscriber, because the subscriber is what writes the file, and a
+    // release build has no console: this file is the only place its lines survive.
+    let logfile = paths.logs.join("winfw-mcp.log");
+
     // All state is read here, once. Later milestones keep the in-memory copy authoritative and
     // write every change straight back (PLAN.md section 2).
     let settings = Settings::load_or_create(&paths.config)?;
@@ -95,7 +100,7 @@ fn main() -> Result<()> {
     };
     let rules = RuleFile::load_or_create(&active_rules)?;
 
-    init_tracing(&settings);
+    init_tracing(&settings, &logfile);
 
     info!(root = %paths.root.display(), "data directory ready");
     info!(
@@ -206,9 +211,6 @@ fn serve(
         }
     }
 
-    // Taken before `paths` moves into the state.
-    let logfile = paths.logs.join("winfw-mcp.log");
-
     let state = server::AppState::new(
         paths,
         settings,
@@ -227,7 +229,7 @@ fn serve(
 
     let url = format!("http://{}", server.addr());
 
-    info!(url = %url, "web UI ready");
+    info!(url = %url, version = %env!("CARGO_PKG_VERSION"), "web UI ready");
 
     // Recorded only now, because a busy port makes the server fall forward and the port is not
     // known until the listener exists. A second process reads it to open the right URL.
@@ -237,25 +239,11 @@ fn serve(
     // notification area again when the process is asked to stop.
     let _tray = tray::Tray::start(url.clone(), running, Arc::clone(&live));
 
-    let tray_status = if _tray.added() {
-        "tray icon added"
+    if _tray.added() {
+        info!("tray icon added");
     } else {
         warn!("tray icon skipped");
-
-        "tray icon skipped"
-    };
-
-    // The release binary has no console, so the startup lines and the outcome of adding the icon
-    // are appended to the log in the data dir as well.
-    log(
-        &logfile,
-        &format!(
-            "{} {} serving {url}",
-            env!("CARGO_PKG_NAME"),
-            env!("CARGO_PKG_VERSION")
-        ),
-    );
-    log(&logfile, &tray_status);
+    }
 
     let outcome = server.serve();
 
@@ -275,21 +263,6 @@ fn serve(
     }
 
     outcome
-}
-
-/// Appends a line to the log file. Failure to write it cannot be reported anywhere, so it is
-/// ignored.
-fn log(path: &std::path::Path, message: &str) {
-    use std::io::Write;
-
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    else {
-        return;
-    };
-    let _ = writeln!(&mut file, "{message}");
 }
 
 /// Report what the live store holds, then carry out the command on it.
@@ -354,13 +327,30 @@ fn report(category: &str, entries: &wfp::Entries) {
 #[cfg(not(windows))]
 fn sync_store(_rules: &RuleFile, _command: Command, _known: &[String], _policy: Policy) {}
 
-/// Logging goes to stderr: stdout belongs to the MCP stdio transport.
-fn init_tracing(settings: &Settings) {
+/// Logging goes to the log file in the data dir and to stderr: stdout belongs to the MCP stdio
+/// transport.
+///
+/// A log file that will not open is reported on the console and the run continues with the console
+/// alone. Refusing to start a firewall over a log would be the wrong way round.
+fn init_tracing(settings: &Settings, logfile: &std::path::Path) {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&settings.log_level));
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .init();
+    match log::LogFile::open(logfile) {
+        Ok(log) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(log)
+            // The same lines go to both halves of the tee, and escape codes in the file would be
+            // read by whoever opens it in an editor later.
+            .with_ansi(false)
+            .init(),
+        Err(error) => {
+            eprintln!("could not open {} for writing: {error}", logfile.display());
+
+            tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_writer(std::io::stderr)
+                .init();
+        }
+    }
 }

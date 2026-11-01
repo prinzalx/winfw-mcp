@@ -12,6 +12,7 @@ src/rules.rs      rules.toml and the profile files
 src/store.rs      atomic file writes
 src/device.rs     device path <-> drive path
 src/learn.rs      the Detected list
+src/log.rs        the bounded log file, rolled at a megabyte
 src/monitor.rs    the net-event subscription and the event log
 src/server.rs     HTTP transport, routes, the accept loop, the WFP worker
 src/mcp.rs        the JSON-RPC grammar of the MCP endpoint
@@ -67,6 +68,7 @@ their own.
 
 | Version | Milestone |
 |---|---|
+| 0.26.0 | The log rotates (§3.2). Lines go to `logs\winfw-mcp.log` and to the console; past a megabyte the live file moves to `winfw-mcp.log.1` and writing starts over, so a run that nobody watches leaves at most two files behind. A log that will not open is reported on the console rather than refused as a startup failure, which is what the startup lines the old ad-hoc helper wrote are now part of |
 | 0.25.0 | The connection table is complete. An event now also carries the local endpoint and a `loopback` marker: each endpoint is read only when the header says it filled it, so an end the event did not name is empty rather than the `0.0.0.0` a zeroed union would otherwise report, and the loopback marker comes from the classify arm that names the deciding filter. The page shows `local -> remote`, marks a connection that never left the machine, and drops an endpoint it has nothing about |
 | 0.24.0 | Storage hardened (§4.4). A rule file names the version that wrote it (`version = 1`; an older file without the line still reads, a newer one is refused with both versions named), every rule-file write keeps the generation before it as `<name>.bak`, and a rule file that cannot be parsed at startup falls back to that backup with a warning rather than failing to start. A pattern is checked on the way in — an absolute path, no control character and none of `" < > |` — on the page, on the HTTP API, over MCP and on import, so a typo is a refusal rather than a rule that matches nothing |
 | 0.1.0 | Data directory, config and rules load, atomic writes |
