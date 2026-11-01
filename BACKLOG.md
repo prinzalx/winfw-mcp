@@ -330,9 +330,8 @@ Roughly by how much they cost to change later:
 6. **Storage hardening**: rule-string validation, previous-generation backup, a version field
    (§4.4).
 7. **Runtime finishing touches**: the single instance landed in 0.16.0, the icons in 0.17.0 and
-   the tray menu (`Open`, `Pause learning`, `Quit`) in 0.21.0. What is left is volatile filter
-   mode — running without `FWPM_FILTER_FLAG_PERSISTENT` for someone who wants the rules gone with
-   the process.
+   the tray menu (`Open`, `Pause learning`, `Quit`) in 0.21.0 and volatile filter mode
+   (`volatile_filters`, taken out on a clean stop) in 0.22.0. Nothing of the item is left.
 
 ## 7. Extension round notes (2026-11-01)
 
@@ -457,3 +456,25 @@ Found while 0.21.0 ("the tray menu") was built.
   but it reads like it should work.
 - **The menu is read-only state.** It reads the flag on open and writes nothing but the flag, which
   keeps the window procedure free of store, file and lock ordering questions.
+
+## 14. Volatile filters round notes (2026-11-01)
+
+Found while 0.22.0 ("volatile filters") was built. The dynamic-session design was implemented
+first and rejected on evidence, not taste.
+
+- **A handle with no session does not own its volatile filters.** Filters installed without
+  `FWPM_FILTER_FLAG_PERSISTENT` from a sessionless handle belong to no session and survived closing
+  the handle in a live test; only a real `FWPM_SESSION_FLAG_DYNAMIC` session takes them out with
+  the last handle.
+- **A dynamic session refuses the persistent objects our layout is built on.** With a session
+  handle, deleting leftover persistent filters fails with `FWP_E_DYNAMIC_SESSION_IN_PROGRESS`
+  (0x8032000B), and the provider and sublayer — created persistent for every run to find again —
+  are in the same category. Making volatile mode work through a session would mean session-scoped
+  providers or a second handle for every cleanup; the clear-on-shutdown is one message to the
+  worker and cannot fail this way.
+- **The kill case is the honest caveat.** A killed volatile run leaves its filters until the next
+  start, whose startup cleanup removes every filter under our provider key before rebuilding. The
+  next process can be any invocation (`--apply`, `--serve`), which is what bounds the gap.
+- **`rule = []` followed by `[[rule]]` does not parse.** Hand-editing `rules.toml` to probe the
+  live store hit this: the empty-array assignment and the array-of-tables header are duplicate
+  keys in this parser's reading. Worth a line in the data chapter if users hand-edit rules.

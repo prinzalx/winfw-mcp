@@ -63,20 +63,14 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.21.0**, in which the tray menu grew. The right button now offers `Open`,
-`Pause learning` and `Quit`; the pause flips the running `learn_mode` flag and writes no file, so it
-lasts for this run, and the label is read from the flag every time the menu opens. See
-[lifecycle and tray](docs/08-lifecycle.md#clicking).
+The current release is **0.22.0**, in which `volatile_filters` arrived: a server run with the
+setting on takes our filters out of the store when it stops, so the tool is a firewall only while
+it runs. The persistent default — quitting keeps the rules — is untouched. See
+[lifecycle and tray](docs/08-lifecycle.md#stopping).
 
-The release before, **0.20.0**, made learning mode notice a destination too. An application
-an enabled rule covers is collected again when it reaches an address none of its own rules reaches:
-the Detected entry carries that `remote`, allow and deny turn it into a rule naming exactly that
-destination, and the entry identity is application plus destination. So an `allow` for `tool.exe` on
-`site1.com` no longer hides its first connection to `site2.com`. See
-[learning mode](docs/04-learning-mode.md#applications-and-the-destinations-they-reach).
-
-The release before, **0.19.0**, made a connection event say where it went: the remote address is
-read out of the union arm the event's `ipVersion` selects and reported as `remote_addr` through the
-log, the API, the stream and `events.list`.
+Earlier releases are logged in the [version history](docs/09-development.md#version-history):
+**0.21.0** grew the tray menu (`Open`, `Pause learning`, `Quit`); **0.20.0** made learning mode
+notice a destination an allowed application reached; **0.19.0** made a connection event say where it
+went.
 What is known to be missing or fragile is listed in the
 [backlog](BACKLOG.md), ranked in its last section.

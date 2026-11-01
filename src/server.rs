@@ -1369,6 +1369,9 @@ struct StateJson {
     learn_mode: bool,
     /// `allow` or `deny`: what an application no rule mentions gets.
     default_policy: &'static str,
+    /// Whether the installed filters go out with the process. Read at startup; changing it takes
+    /// a restart.
+    volatile_filters: bool,
     log_level: String,
     profile: String,
     rules: RuleFile,
@@ -1394,6 +1397,7 @@ impl StateJson {
             port: state.settings.port,
             learn_mode: state.learn_mode(),
             default_policy: state.policy().name(),
+            volatile_filters: state.settings.volatile_filters,
             log_level: state.settings.log_level.clone(),
             profile: state.active_name(),
             rules,

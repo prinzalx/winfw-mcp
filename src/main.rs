@@ -159,6 +159,10 @@ fn serve(
     // application turns up that no filter knows about yet.
     let worker = Arc::new(server::WfpWorker::start());
 
+    // Captured before `settings` moves into the state: a volatile run takes its filters out
+    // again when the server stops.
+    let volatile = settings.volatile_filters;
+
     // The monitor is started before the listener so the first page load already has a feed, even
     // if it is empty. It is held by this scope, which is what keeps the subscription open.
     // The two settings that may change while the server runs live here, so the monitor's callbacks
@@ -246,7 +250,24 @@ fn serve(
     );
     log(&logfile, &tray_status);
 
-    server.serve()
+    let outcome = server.serve();
+
+    // A volatile run is a firewall only while the process runs: the filters go out with it, which
+    // is the one difference from the persistent default. A killed process never gets here, and the
+    // startup cleanup of the next run is what finds the leftovers then.
+    if volatile {
+        match worker.ask(server::StoreWork::Clear) {
+            Ok(answer) => info!(
+                store = answer.describe(),
+                "volatile run: the filters went with the server"
+            ),
+            Err(error) => {
+                warn!(reason = %format!("{error:#}"), "volatile run could not clear the store")
+            }
+        }
+    }
+
+    outcome
 }
 
 /// Appends a line to the log file. Failure to write it cannot be reported anywhere, so it is

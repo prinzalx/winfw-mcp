@@ -30,6 +30,12 @@ pub struct Settings {
     /// A profile is a rule file under `profiles\<name>.toml`; naming it here is what makes the
     /// choice survive a restart (PLAN.md section 10).
     pub active_profile: String,
+    /// Install the filters so they go out with the process instead of surviving it.
+    ///
+    /// Persistent filters (the default) are what makes a quit keep the rules; a volatile install
+    /// has the BFE take the filters out again when the last engine handle closes, which is what a
+    /// user who wants the tool to be the firewall only while it runs asks for.
+    pub volatile_filters: bool,
     /// What an application that no rule mentions should get: the Windows default (`allow`) or a
     /// firewall (`deny`).
     ///
@@ -93,6 +99,7 @@ impl Default for Settings {
             theme: "dark".to_owned(),
             mcp_writes: Writes::None,
             active_profile: String::new(),
+            volatile_filters: false,
             default_policy: Policy::default(),
         }
     }
@@ -134,6 +141,7 @@ mod tests {
             theme: "light".to_owned(),
             mcp_writes: Writes::Rules,
             active_profile: "work".to_owned(),
+            volatile_filters: true,
             default_policy: Policy::Deny,
         };
 

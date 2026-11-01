@@ -28,6 +28,7 @@ On the first run the binary creates its data directory and the files inside it:
 | `log_level` | default tracing level; `RUST_LOG` overrides it for a single run |
 | `learn_mode` | whether learning mode collects applications; off means the Detected list stays empty while the connection log keeps filling |
 | `default_policy` | `allow` (default) or `deny`. `deny` puts an unconditional block at the bottom of the four authorization layers, so an application no rule mentions is denied rather than allowed; see [WFP internals](07-wfp-internals.md#the-default-deny-base) |
+| `volatile_filters` | `false` by default. `true` makes the server take our filters out of the store when it stops, so the tool is a firewall only while it runs; `false` keeps them installed after a quit (see [lifecycle](08-lifecycle.md#stopping)). Read at startup, so changing it takes a restart |
 | `theme` | presentation preference carried by the page |
 | `mcp_writes` | how much the MCP endpoint may write: `none`, `rules` or `all` |
 | `active_profile` | the live profile name; empty selects `rules.toml` itself |

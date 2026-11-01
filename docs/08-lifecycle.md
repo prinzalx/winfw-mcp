@@ -74,6 +74,11 @@ ends. The MCP endpoint offers the same action as the `shutdown` tool, gated by `
 firewall still enforces what `rules.toml` says after the tool is gone. `--clear` is what takes our
 filters out of the live store again.
 
+The exception is `volatile_filters = true`: the server then sends itself one last clear on the way
+out, and the rules go with the process. A *killed* process never reaches that last step; the
+leftovers are found by the next run's startup cleanup, which removes every filter carrying our
+provider key before installing the new ones.
+
 ## Not implemented on purpose
 
 There is no service and no autostart. Adding either is tracked in the [backlog](../BACKLOG.md), and
