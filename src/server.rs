@@ -218,6 +218,14 @@ impl Live {
         self.learning.store(learning, Ordering::SeqCst);
         self.deny.store(policy == Policy::Deny, Ordering::SeqCst);
     }
+
+    /// Flip learning mode alone, which is what the tray's pause does, and report what it became.
+    ///
+    /// Unlike a settings change through the web this writes no file: a pause is meant to last for
+    /// this run only, which is how the reference's pause button behaves too.
+    pub fn toggle_learning(&self) -> bool {
+        !self.learning.fetch_not(Ordering::SeqCst)
+    }
 }
 
 /// A parsed request. Only the parts a local, single-user server needs.
@@ -1729,6 +1737,16 @@ mod tests {
 
     fn state() -> AppState {
         state_with(Arc::new(EventLog::new()), Live::default())
+    }
+
+    /// The tray's pause flips the flag and reports the new value, leaving the policy alone.
+    #[test]
+    fn toggling_learning_reports_what_it_became_and_keeps_the_policy() {
+        let live = Live::new(true, Policy::Deny);
+
+        assert!(!live.toggle_learning());
+        assert_eq!(live.policy(), Policy::Deny);
+        assert!(live.toggle_learning());
     }
 
     fn state_with(events: Arc<EventLog>, live: Live) -> AppState {

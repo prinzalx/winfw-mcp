@@ -53,7 +53,11 @@ on one machine may each run the tool, and each owns the rules in its own `%APPDA
 
 - **Left click** opens the browser on the UI. The URL is handed to the shell, which means the
   browser is the user's, not ours.
-- **Right click** offers `Quit`.
+- **Right click** opens a menu with `Open`, `Pause learning` and `Quit`. `Open` does what a left
+  click does. `Pause` and `Resume` flip the running `learn_mode` flag and write no file, so a pause
+  lasts for this run only: a restart reads `config.toml` again. The menu is built when it opens, so
+  the label always reflects the flag the monitor reads; a settings change made in the web in between
+  is picked up the next time the menu opens. `Quit` is the same stop as below.
 
 ## Stopping
 

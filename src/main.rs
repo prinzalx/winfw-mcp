@@ -204,7 +204,7 @@ fn serve(
         rules,
         detector,
         events,
-        live,
+        Arc::clone(&live),
         active_rules,
         active_name,
     );
@@ -224,7 +224,7 @@ fn serve(
 
     // Held by this scope for as long as the server runs, which is what takes the icon out of the
     // notification area again when the process is asked to stop.
-    let _tray = tray::Tray::start(url.clone(), running);
+    let _tray = tray::Tray::start(url.clone(), running, Arc::clone(&live));
 
     let tray_status = if _tray.added() {
         "tray icon added"

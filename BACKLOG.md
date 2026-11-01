@@ -329,8 +329,10 @@ Roughly by how much they cost to change later:
 5. **The four bugs in §1**, all small.
 6. **Storage hardening**: rule-string validation, previous-generation backup, a version field
    (§4.4).
-7. **Runtime finishing touches**: volatile filter mode, tray menu. (The single instance landed in
-   0.16.0 and the icons in 0.17.0.)
+7. **Runtime finishing touches**: the single instance landed in 0.16.0, the icons in 0.17.0 and
+   the tray menu (`Open`, `Pause learning`, `Quit`) in 0.21.0. What is left is volatile filter
+   mode — running without `FWPM_FILTER_FLAG_PERSISTENT` for someone who wants the rules gone with
+   the process.
 
 ## 7. Extension round notes (2026-11-01)
 
@@ -440,3 +442,18 @@ Found while 0.20.0 ("learning mode notices a destination") was built.
   they will write after editing is `*.example.com`. The event does not carry the name, and reverse
   lookup was deliberately not attempted here; a name-aware view of the Detected list stays on the
   table.
+
+## 13. Tray menu round notes (2026-11-01)
+
+Found while 0.21.0 ("the tray menu") was built.
+
+- **A pause that writes no file is a different thing from a setting.** The web settings path writes
+  `config.toml` and flips the flag together; the tray pause only flips the flag, deliberately, so
+  the reference's pause semantics survive a restart of the *menu* rather than of the process. If a
+  user expects the pause to be remembered, that expectation belongs to the file and should be
+  settled through the page.
+- **`Option<&Arc<T>>::is_some_and` takes `&Arc<T>`.** A method item like `Live::learning` does not
+  get its receiver deref-coerced through it, so the closure is not optional; the compiler caught it,
+  but it reads like it should work.
+- **The menu is read-only state.** It reads the flag on open and writes nothing but the flag, which
+  keeps the window procedure free of store, file and lock ordering questions.

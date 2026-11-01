@@ -9,6 +9,11 @@
 //! clicks as messages to that window's procedure. So this module owns a message-only window and the
 //! thread that pumps its messages, which is also why the tray cannot live on one of the server's
 //! request threads.
+//!
+//! The right button opens a menu with `Open`, `Pause learning` and `Quit`. The pause flips the
+//! running [`live`](crate::server::Live) flag only and writes no file: it lasts for this run,
+//! which is what a pause means, and a settings change through the web remains the way to decide it
+//! permanently.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
@@ -30,6 +35,10 @@ static UI_URL: Mutex<String> = Mutex::new(String::new());
 #[cfg(windows)]
 static SERVER_RUNNING: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 
+/// The two settings that may change while the process runs, shared so the menu can pause learning.
+#[cfg(windows)]
+static LIVE: Mutex<Option<Arc<crate::server::Live>>> = Mutex::new(None);
+
 /// Our icon's identifier among this window's icons.
 #[cfg(windows)]
 const ICON_ID: u32 = 1;
@@ -41,9 +50,15 @@ const ICON_ID: u32 = 1;
 #[cfg(windows)]
 const APP_ICON: u16 = 1;
 
-/// The identifier of the `Quit` menu item.
+/// The identifiers of the menu items.
 #[cfg(windows)]
 const MENU_QUIT: usize = 0x100;
+
+#[cfg(windows)]
+const MENU_OPEN: usize = 0x101;
+
+#[cfg(windows)]
+const MENU_PAUSE: usize = 0x102;
 
 /// The icon in the notification area, plus the thread that answers its clicks.
 pub struct Tray {
@@ -62,8 +77,8 @@ impl Tray {
     /// anyway and the user types the address, so a refused icon is only logged.
     ///
     /// `running` is the server's flag: choosing `Quit` clears it, which is what ends the process
-    /// rather than only the tray thread.
-    pub fn start(url: String, running: Arc<AtomicBool>) -> Self {
+    /// rather than only the tray thread. `live` is what `Pause learning` flips.
+    pub fn start(url: String, running: Arc<AtomicBool>, live: Arc<crate::server::Live>) -> Self {
         let thread = Arc::new(Mutex::new(None));
         let (ready, ready_receiver) = channel::<bool>();
 
@@ -74,12 +89,14 @@ impl Tray {
         {
             *UI_URL.lock().expect("url lock poisoned") = url;
             *SERVER_RUNNING.lock().expect("running lock poisoned") = Some(running);
+            *LIVE.lock().expect("live lock poisoned") = Some(live);
         }
 
         #[cfg(not(windows))]
         {
             let _ = url;
             let _ = running;
+            let _ = live;
         }
 
         let join = {
@@ -333,17 +350,43 @@ fn open_browser() {
 /// Show the right-button menu and act on what was chosen.
 #[cfg(windows)]
 fn show_menu(handle: windows::Win32::Foundation::HWND) {
+    use tracing::{info, warn};
     use windows::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MF_STRING, PostQuitMessage,
-        SetForegroundWindow, TPM_BOTTOMALIGN, TPM_RETURNCMD, TrackPopupMenu,
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MF_SEPARATOR, MF_STRING,
+        PostQuitMessage, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_RETURNCMD, TrackPopupMenu,
     };
-    use windows::core::w;
+    use windows::core::{PCWSTR, w};
 
     let Ok(menu) = (unsafe { CreatePopupMenu() }) else {
         return;
     };
 
+    // The menu says what pausing would do, which is only honest while it reflects the flag the
+    // server reads. A settings change made in the web between two openings is picked up the same
+    // way, because the label is read from the flag every time the menu is built.
+    let learning = LIVE
+        .lock()
+        .expect("live lock poisoned")
+        .as_ref()
+        .is_some_and(|live| live.learning());
+
     unsafe {
+        AppendMenuW(menu, MF_STRING, MENU_OPEN, w!("Open")).ok();
+        AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()).ok();
+
+        AppendMenuW(
+            menu,
+            MF_STRING,
+            MENU_PAUSE,
+            if learning {
+                w!("Pause learning")
+            } else {
+                w!("Resume learning")
+            },
+        )
+        .ok();
+
+        AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()).ok();
         AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Quit")).ok();
 
         let mut point = windows::Win32::Foundation::POINT::default();
@@ -365,6 +408,27 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
         );
 
         DestroyMenu(menu).ok();
+
+        if choice.0 == MENU_OPEN as i32 {
+            open_browser();
+
+            return;
+        }
+
+        if choice.0 == MENU_PAUSE as i32 {
+            let guard = LIVE.lock().expect("live lock poisoned");
+
+            if let Some(live) = guard.as_ref() {
+                info!(
+                    learning = live.toggle_learning(),
+                    "tray flipped learning mode"
+                );
+            } else {
+                warn!("tray pause found no live settings");
+            }
+
+            return;
+        }
 
         if choice.0 == MENU_QUIT as i32 {
             // Clearing the flag is what stops the accept loop and with it the process. On its own

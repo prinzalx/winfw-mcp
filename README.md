@@ -63,7 +63,12 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.20.0**, in which learning mode notices a destination too. An application
+The current release is **0.21.0**, in which the tray menu grew. The right button now offers `Open`,
+`Pause learning` and `Quit`; the pause flips the running `learn_mode` flag and writes no file, so it
+lasts for this run, and the label is read from the flag every time the menu opens. See
+[lifecycle and tray](docs/08-lifecycle.md#clicking).
+
+The release before, **0.20.0**, made learning mode notice a destination too. An application
 an enabled rule covers is collected again when it reaches an address none of its own rules reaches:
 the Detected entry carries that `remote`, allow and deny turn it into a rule naming exactly that
 destination, and the entry identity is application plus destination. So an `allow` for `tool.exe` on
