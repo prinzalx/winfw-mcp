@@ -5,6 +5,7 @@
 mod config;
 mod device;
 mod export;
+mod instance;
 mod learn;
 mod mcp;
 mod monitor;
@@ -136,6 +137,19 @@ fn serve(
     let port = settings.port;
     let active_name = settings.active_profile.clone();
 
+    // A second double-click must not mean a second server: two listeners, two tray icons and two
+    // processes rebuilding the one live store. Whoever loses the name opens the browser on the
+    // winner and is done, which is why this happens before a port is bound or the store is touched.
+    let Some(guard) = instance::claim(&paths)? else {
+        let url = instance::running_url(&paths.root.join(instance::PORT_FILE), port);
+
+        info!(url = %url, "another instance is serving");
+
+        tray::open_url(&url);
+
+        return Ok(());
+    };
+
     // The rules and the detected applications are shared between the request threads and the
     // monitor's callbacks, which is what the locks are for.
     let rules = Arc::new(std::sync::Mutex::new(rules));
@@ -202,6 +216,10 @@ fn serve(
     let url = format!("http://{}", server.addr());
 
     info!(url = %url, "web UI ready");
+
+    // Recorded only now, because a busy port makes the server fall forward and the port is not
+    // known until the listener exists. A second process reads it to open the right URL.
+    guard.set_port(server.addr().port());
 
     // Held by this scope for as long as the server runs, which is what takes the icon out of the
     // notification area again when the process is asked to stop.

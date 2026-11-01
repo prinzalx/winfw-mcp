@@ -18,6 +18,31 @@ A tray icon is not a widget: `Shell_NotifyIconW` binds an icon to a *window* and
 as messages to that window's procedure. So the tray owns a message-only window and the thread that
 pumps its messages, which is also why the tray cannot live on one of the server's request threads.
 
+## Only one at a time
+
+A second `--serve` does not start a second server. The name `Local\winfw-mcp.serve` is claimed with
+a mutex before anything is bound or rebuilt, and whoever loses it opens the browser on the instance
+that is already running and exits successfully:
+
+```
+INFO winfw_mcp: another instance is serving url=http://127.0.0.1:8788/
+```
+
+That is the answer to a double double-click, and exit code `0` says so: the tool is running, which is
+what the second start was asking for.
+
+Two details make this work rather than look like it works:
+
+- **The URL opened is the running instance's.** A busy port makes a server fall forward to the next
+  free port, so the configured port is not necessarily the served one. The running instance records
+  the port it got in `server.port` in the data directory, and the second process reads that file.
+  An instance that stops takes the file with it.
+- **Only `--serve` is guarded.** A one-shot apply or clear is over in a moment, and the live store
+  serialises two overlapping transactions on its own, so there is nothing to protect there.
+
+`Local\` scopes the name to the terminal-services session, which fits a per-user tool: two accounts
+on one machine may each run the tool, and each owns the rules in its own `%APPDATA%`.
+
 ## Clicking
 
 - **Left click** opens the browser on the UI. The URL is handed to the shell, which means the
@@ -41,9 +66,9 @@ filters out of the live store again.
 
 ## Not implemented on purpose
 
-There is no service, no autostart and no single-instance check yet. The last of those means starting
-the tool twice currently gives you two processes; it is tracked in the
-[backlog](../BACKLOG.md).
+There is no service and no autostart. Adding either is tracked in the [backlog](../BACKLOG.md), and
+each has to live with the fact that a portable tool is run by the user, not by a manager that could
+start it again.
 
 ---
 

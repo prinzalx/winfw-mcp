@@ -281,16 +281,18 @@ unsafe extern "system" fn wndproc(
     unsafe { DefWindowProcW(handle, message, wparam, lparam) }
 }
 
-/// Hand the URL to the shell, which is what opens the default browser.
+/// Hand a URL to the shell, which is what opens the default browser.
+///
+/// The tray's own click ends up here, and so does a second process that found the instance name
+/// already taken and has nothing else to offer the user.
 #[cfg(windows)]
-fn open_browser() {
+pub fn open_url(url: &str) {
     use tracing::info;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     use windows::core::{PCWSTR, w};
 
-    let url = UI_URL.lock().expect("url lock poisoned").clone();
-    let path = wide(&url);
+    let path = wide(url);
 
     // `ShellExecuteW` reports a value rather than an error for anything that went wrong, and there
     // is nothing a tray icon can do about it beyond logging: the browser is the user's, not ours.
@@ -306,6 +308,14 @@ fn open_browser() {
     };
 
     info!(%url, status = status.0 as usize, "asked the shell for the browser");
+}
+
+/// The URL the tray was started with, handed to the shell.
+#[cfg(windows)]
+fn open_browser() {
+    let url = UI_URL.lock().expect("url lock poisoned").clone();
+
+    open_url(&url);
 }
 
 /// Show the right-button menu and act on what was chosen.
@@ -382,6 +392,12 @@ fn copy_wide(buffer: &mut [u16], value: &str) {
 #[cfg(windows)]
 fn current_thread_id() -> u32 {
     unsafe { windows::Win32::System::Threading::GetCurrentThreadId() }
+}
+
+/// Hand a URL to the shell. Without a shell there is nothing to hand it to.
+#[cfg(not(windows))]
+pub fn open_url(url: &str) {
+    let _ = url;
 }
 
 /// The non-Windows tray exists so the crate still builds for a doc tool.

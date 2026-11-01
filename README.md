@@ -63,6 +63,6 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.15.0**, in which a rule can also be narrowed to a remote address or
-network such as `192.168.1.0/24`, in either address family. What is known to be missing or fragile
-is listed in the [backlog](BACKLOG.md), ranked in its last section.
+The current release is **0.16.0**, in which a second instance no longer starts: it notices the
+first one, asks the shell for a browser, and exits. What is known to be missing or fragile is
+listed in the [backlog](BACKLOG.md), ranked in its last section.

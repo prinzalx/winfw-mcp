@@ -41,7 +41,7 @@ Kept as asked, with the two audits now folded in below.
 
 | # | Item | Status |
 |---|---|---|
-| 1 | Single-instance check at startup | open — see §5.5 |
+| 1 | Single-instance check at startup | **closed in 0.16.0** — the first `--serve` claims a named mutex, a second start opens the browser on it and exits. See [the lifecycle chapter](docs/08-lifecycle.md#only-one-at-a-time). |
 | 2 | Re-audit every stage of PLAN.md | **done**, findings in §3 |
 | 3 | Compare every feature against simplewall | **done**, findings in §4 |
 | 4 | Rules and their storage are fragile around escaping | partly answered — see §4.4 |
@@ -258,9 +258,10 @@ Item 4 of the original list, and the news is mostly good:
 ### 4.5 Runtime
 
 - **Single instance is solved in the reference** by a named mutant, and it brings the running window to
-  the front instead of starting twice (`routine/src/rapp.c:403`). We have no guard at all: two
-  `--serve` processes are separated only by whichever fails to bind the port, and two one-shot apply
-  runs can race on the store.
+  the front instead of starting twice (`routine/src/rapp.c:403`). We closed this in 0.16.0 the same
+  way, with a named mutex rather than the port binding, and the second start opens the browser.
+  What is still open is the reference's *window restore*: a second start only shows a browser, it
+  cannot tell an already open tab to come forward.
 - **Volatile filters.** The reference defaults to persistent filters but offers a temporary mode where
   the persistent flag is simply not set, giving filters that die with the reboot. We always set the
   persistent flag, with no way out.
@@ -319,7 +320,7 @@ Roughly by how much they cost to change later:
 5. **The four bugs in §1**, all small.
 6. **Storage hardening**: rule-string validation, previous-generation backup, a version field
    (§4.4).
-7. **Runtime finishing touches**: single instance, volatile filter mode, tray menu, icons (item 5).
+7. **Runtime finishing touches**: volatile filter mode, tray menu, icons (item 5).
 
 ## 7. Extension round notes (2026-11-01)
 

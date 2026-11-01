@@ -13,6 +13,7 @@ On the first run the binary creates its data directory and the files inside it:
 %APPDATA%\winfw-mcp\
     config.toml          settings, written with defaults on first run
     rules.toml           user rules, order significant: the first match wins
+    server.port          written while a serving instance runs, removed when it stops
     profiles\            named profiles, one file each
     learn.json           collected Detected entries (learning mode)
     logs\                rotating log files

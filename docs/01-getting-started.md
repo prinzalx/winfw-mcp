@@ -48,7 +48,8 @@ winfw-mcp --clear    remove our filters from the live store
 ```
 
 An unknown flag is an error rather than a shrug, so a mistyped option cannot silently install
-filters nobody asked for.
+filters nobody asked for. Only one `--serve` may run at a time: a second start finds the first,
+opens the browser on it, and exits. See [the lifecycle chapter](08-lifecycle.md#only-one-at-a-time).
 
 ## Elevation
 
