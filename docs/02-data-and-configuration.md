@@ -34,11 +34,16 @@ On the first run the binary creates its data directory and the files inside it:
 `RUST_LOG` overrides `log_level` from `config.toml` for a single run. Logging goes to stderr,
 because stdout belongs to the MCP stdio transport.
 
-## Three rules worth knowing
+## Rules worth knowing
 
-- **Unknown config keys are an error,** not a warning. A typo in `config.toml` fails loudly instead
-  of quietly keeping the default. An exception is made for keys added by a later version, so
-  upgrading does not fail on a config a newer binary wrote.
+- **Unknown keys are an error,** not a warning, in both files. A typo in `config.toml` fails loudly
+  instead of quietly keeping the default. An exception is made for config keys added by a later
+  version, so upgrading does not fail on a config a newer binary wrote. The same holds for a rule:
+  an unknown field, or a `protocol`/`direction`/`port` value the server cannot read, is refused.
+- **A rule field that is absent is absent, not empty.** `protocol`, `direction` and `port` are
+  optional on a rule, and a rule written without them is about every protocol, both directions and
+  every port. They are left out of the file when they are not used, so a rule from an earlier
+  version reads and writes exactly as it did. [Rules and profiles](03-rules-and-profiles.md#narrowing-a-rule)
 - **Atomic writes.** Files are written to `*.tmp` and renamed, so a crash never leaves a half
   written config behind. This matters because the WFP filters this tool installs are persistent and
   outlive the process.

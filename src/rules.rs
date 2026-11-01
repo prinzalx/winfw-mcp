@@ -13,10 +13,113 @@ pub enum Action {
     Deny,
 }
 
+/// The transport a rule is about.
+///
+/// Absent on a rule means both, which is what a rule was before this dimension existed. A bare
+/// protocol number is not offered yet; TCP and UDP are what the reference offers too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocol {
+    Tcp,
+    Udp,
+}
+
+impl Protocol {
+    /// The IP protocol number WFP wants in a `FWPM_CONDITION_IP_PROTOCOL` condition.
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::Tcp => 6,
+            Self::Udp => 17,
+        }
+    }
+}
+
+/// Which way the connection goes for a rule to apply.
+///
+/// This decides the layers a rule is installed on: outbound is the ALE connect layer, inbound the
+/// ALE recv-accept layer. Absent means both, as it did before the dimension existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    In,
+    Out,
+}
+
+/// A port, or an inclusive range of them, written `443` or `1024-2048`.
+///
+/// It is a string in the file and in JSON rather than a number, because a range has no number form
+/// and because a port is read as text far more often than it is computed with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortRange {
+    pub lo: u16,
+    pub hi: u16,
+}
+
+impl PortRange {
+    /// Whether the range names one port, which is how WFP is told about it.
+    pub const fn is_single(&self) -> bool {
+        self.lo == self.hi
+    }
+}
+
+impl std::fmt::Display for PortRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_single() {
+            write!(f, "{}", self.lo)
+        } else {
+            write!(f, "{}-{}", self.lo, self.hi)
+        }
+    }
+}
+
+/// The error text a bad port answers with, which becomes a serde message and a web error.
+type ParseError = String;
+
+impl std::str::FromStr for PortRange {
+    type Err = ParseError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let parse = |part: &str| {
+            part.trim()
+                .parse::<u16>()
+                .map_err(|_| format!("'{part}' is not a port"))
+        };
+
+        let (lo, hi) = match text.split_once('-') {
+            Some((lo, hi)) => (parse(lo)?, parse(hi)?),
+            None => (parse(text)?, parse(text)?),
+        };
+
+        if lo > hi {
+            return Err(format!("port range '{text}' runs backwards"));
+        }
+
+        Ok(Self { lo, hi })
+    }
+}
+
+impl Serialize for PortRange {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for PortRange {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 /// A single user rule.
 ///
 /// `pattern` may contain the wildcards `*` and `?` (PLAN.md section 4). Matching is our job,
 /// not the kernel's, so the string is stored exactly as the user typed it.
+///
+/// `protocol`, `direction` and `port` narrow the rule and are absent when it is about all of
+/// them. They are skipped when written out, so a rule that does not use them is stored exactly as
+/// it was before they existed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
@@ -25,10 +128,32 @@ pub struct Rule {
     pub pattern: String,
     #[serde(default = "always_enabled")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<Protocol>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Direction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<PortRange>,
 }
 
 const fn always_enabled() -> bool {
     true
+}
+
+impl Rule {
+    /// A rule that narrows nothing: an enabled rule about an application, with no protocol,
+    /// direction or port. This is what a detected application and an MCP agent turn into.
+    pub fn plain(name: impl Into<String>, action: Action, pattern: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            action,
+            pattern: pattern.into(),
+            enabled: true,
+            protocol: None,
+            direction: None,
+            port: None,
+        }
+    }
 }
 
 /// The characters that make a pattern a wildcard pattern.
@@ -161,17 +286,14 @@ mod tests {
     fn sample() -> RuleFile {
         RuleFile {
             rule: vec![
+                Rule::plain(
+                    "browser",
+                    Action::Allow,
+                    "C:\\Program Files\\*\\browser.exe",
+                ),
                 Rule {
-                    name: "browser".to_owned(),
-                    action: Action::Allow,
-                    pattern: "C:\\Program Files\\*\\browser.exe".to_owned(),
-                    enabled: true,
-                },
-                Rule {
-                    name: "telemetry".to_owned(),
-                    action: Action::Deny,
-                    pattern: "C:\\Tools\\agent?.exe".to_owned(),
                     enabled: false,
+                    ..Rule::plain("telemetry", Action::Deny, "C:\\Tools\\agent?.exe")
                 },
             ],
         }
@@ -220,10 +342,8 @@ mod tests {
     fn only_enabled_rules_can_cover_a_path() {
         let rules = RuleFile {
             rule: vec![Rule {
-                name: "windows".to_owned(),
-                action: Action::Deny,
-                pattern: "C:\\Windows\\*".to_owned(),
                 enabled: false,
+                ..Rule::plain("windows", Action::Deny, "C:\\Windows\\*")
             }],
         };
 
@@ -267,5 +387,92 @@ mod tests {
 
         assert!(text.contains("action = \"allow\""), "{text}");
         assert!(text.contains("action = \"deny\""), "{text}");
+    }
+
+    #[test]
+    fn a_port_range_reads_both_of_its_forms() {
+        let single: PortRange = "443".parse().expect("parse a single port");
+
+        assert_eq!((single.lo, single.hi, single.is_single()), (443, 443, true));
+
+        let range: PortRange = "1024-2048".parse().expect("parse a range");
+
+        assert_eq!((range.lo, range.hi, range.is_single()), (1024, 2048, false));
+    }
+
+    #[test]
+    fn a_port_range_refuses_what_is_not_one() {
+        assert!("".parse::<PortRange>().is_err());
+        assert!("http".parse::<PortRange>().is_err());
+        assert!(
+            "2048-1024".parse::<PortRange>().is_err(),
+            "it runs backwards"
+        );
+        assert!("70000".parse::<PortRange>().is_err(), "past a u16");
+        assert!("1024-".parse::<PortRange>().is_err(), "no upper end");
+    }
+
+    #[test]
+    fn a_port_range_is_written_as_it_is_read() {
+        assert_eq!(
+            "443".parse::<PortRange>().expect("parse").to_string(),
+            "443"
+        );
+        assert_eq!(
+            "1024-2048".parse::<PortRange>().expect("parse").to_string(),
+            "1024-2048",
+        );
+    }
+
+    #[test]
+    fn a_rule_without_narrowing_is_written_as_it_used_to_be() {
+        let text = toml::to_string_pretty(&sample()).expect("serialize");
+
+        for key in ["protocol", "direction", "port"] {
+            assert!(
+                !text.contains(key),
+                "{key} appeared for a rule that has none: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_narrowing_of_a_rule_survives_a_round_trip() {
+        let path = crate::testutil::scratch_dir("rules-narrowing").join("rules.toml");
+        let rules = RuleFile {
+            rule: vec![Rule {
+                protocol: Some(Protocol::Tcp),
+                direction: Some(Direction::Out),
+                port: Some("1024-2048".parse().expect("parse a port")),
+                ..Rule::plain("ssh", Action::Allow, "C:\\Tools\\ssh.exe")
+            }],
+        };
+
+        rules.save(&path).expect("save");
+
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("protocol = \"tcp\""), "{text}");
+        assert!(text.contains("direction = \"out\""), "{text}");
+        assert!(text.contains("port = \"1024-2048\""), "{text}");
+
+        assert_eq!(RuleFile::load_or_create(&path).expect("load"), rules);
+    }
+
+    #[test]
+    fn a_rule_file_refuses_a_port_it_cannot_read() {
+        let parsed: Result<RuleFile, toml::de::Error> = toml::from_str(
+            "[[rule]]\nname = \"x\"\naction = \"allow\"\npattern = \"a\"\nport = \"http\"\n",
+        );
+
+        assert!(parsed.is_err(), "a port must be a port");
+    }
+
+    #[test]
+    fn a_rule_file_refuses_a_protocol_it_does_not_know() {
+        let parsed: Result<RuleFile, toml::de::Error> = toml::from_str(
+            "[[rule]]\nname = \"x\"\naction = \"allow\"\npattern = \"a\"\nprotocol = \"sctp\"\n",
+        );
+
+        assert!(parsed.is_err(), "only tcp and udp are protocols");
     }
 }

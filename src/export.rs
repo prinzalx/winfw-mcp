@@ -105,12 +105,7 @@ mod tests {
     use crate::rules::Action;
 
     fn rule() -> Rule {
-        Rule {
-            name: "Block telemetry".to_owned(),
-            action: Action::Deny,
-            pattern: "C:\\Windows\\*".to_owned(),
-            enabled: true,
-        }
+        Rule::plain("Block telemetry", Action::Deny, "C:\\Windows\\*")
     }
 
     #[test]

@@ -177,17 +177,23 @@ Still open, in descending order of how much they are worth:
 
 A reference rule (`ITEM_RULE`, `main.h:350-390`) carries applications as a **set**, plus protocol,
 direction, address family, a remote address list, a local address list, a comment, a rule class, and
-an OS-version gate. Ours is `name`, `action`, `pattern`, `enabled`, and the only WFP condition we set
-is `FWPM_CONDITION_ALE_APP_ID`. Missing entirely:
+an OS-version gate. Ours was `name`, `action`, `pattern`, `enabled`, and the only WFP condition we
+set is `FWPM_CONDITION_ALE_APP_ID`.
 
-- **Protocol** (TCP / UDP / by number). Every one of our rules is protocol-agnostic.
-- **Direction** in / out / any. We always install on all four ALE layers.
+**Closed in 0.14.0:** protocol (TCP/UDP), direction (in/out, which picks the layers) and port
+(single or range). Still missing:
+
+- **Protocol by number.** Only TCP and UDP are offered; the reference also takes a number, which is
+  how a rule about ESP or GRE would be written.
 - **Address family.** We always install for both IPv4 and IPv6.
-- **Remote address**, with CIDR prefix and ranges — this is the per-destination dimension the original
-  list asks about in item 7.
+- **Remote address**, with CIDR prefix and ranges — this is the per-destination dimension the
+  original list asks about in item 7, and it is the largest dimension left. It needs
+  `FWP_V4_ADDR_AND_MASK`/`FWP_V6_ADDR_AND_MASK`, which the crate exports.
 - **Local address** as a separate dimension.
-- **Ports and port ranges** (`80`, `1024-2048`).
-- **Multi-valued** remote and local lists inside one rule.
+- ~~**Ports and port ranges** (`80`, `1024-2048`)~~ — done in 0.14.0.
+- **Multi-valued** remote and local lists inside one rule. Our three new fields are single-valued:
+  one protocol, one direction, one port range. A rule that wants TCP *and* UDP simply leaves the
+  field out, and two ports that are not contiguous need two rules.
 - **Comment** on a rule and on an application.
 - **Rule class / group** (blocklist, system, user), which also decides the weight, and a separate
   overlay table so a stock rule can be toggled without editing it.
@@ -292,8 +298,9 @@ Roughly by how much they cost to change later:
    loopback permits and the IPv6 permits are installed when `default_policy = "deny"`. What is left of
    the item was making the policy changeable at runtime, which 0.13.0 closed with the settings write
    path.
-2. **Remote destination, protocol, direction and address family** (§4.2) — a rule-shape change, and
-   item 7 of the original list cannot be answered without it.
+2. **Remote destination and address family** (§4.2) — protocol, direction and port are done in
+   0.14.0; the destination address is what is left of the rule shape, and item 7 of the original
+   list cannot be answered without it.
 3. **Which filter decided an event** (§4.3) — without provider attribution no honest "blocked by rule
    X" view is possible.
 4. ~~**A settings write path** (§3.2)~~ — done in 0.13.0 for the two settings that matter at runtime.
@@ -321,3 +328,20 @@ on the spot.
   the file is changed and the route still reports an error. That matches what `POST /api/rules`
   already does, but it means "settings changed" and "the store agrees" are not the same claim; the
   banner is the only thing that tells them apart.
+
+## 8. Rule-dimension round notes (2026-11-01)
+
+Found while protocol, direction and port were built. The first is a live bug class worth keeping in
+mind for the address dimension, which needs two more pointer conditions.
+
+- **A pointer condition has to point at the value, not at an `Option` of it.** WFP keeps a pointer
+  for `FWP_RANGE_TYPE` rather than a copy. Handing it `&raw const` of an `Option<FWP_RANGE0>` — the
+  natural thing when the rule field is an `Option` — installs a filter whose range is read out of
+  the wrong bytes, and the store answers `FWP_E_INVALID_ENUMERATOR` (`0x8032001D`) rather than
+  anything about pointers. Build the `FWP_RANGE0` unconditionally and take its address.
+- **A port means the remote port going out and the local port coming in.** Choosing one condition
+  for every layer would make a port rule apply in one direction only. The reference picks per layer
+  the same way (`wfp.c:1065`), so this is not an invention.
+- **Running several `cargo test` processes at once breaks the live-store tests.** Each process is
+  single-threaded, but they share one WFP store, so the filter counts interfere and the run goes
+  red on tests that pass on their own. One cargo process at a time, always.

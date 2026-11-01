@@ -215,12 +215,11 @@ mod tests {
 
     fn rules(pattern: &str) -> RuleFile {
         RuleFile {
-            rule: vec![crate::rules::Rule {
-                name: "one".to_owned(),
-                action: crate::rules::Action::Allow,
-                pattern: pattern.to_owned(),
-                enabled: true,
-            }],
+            rule: vec![crate::rules::Rule::plain(
+                "one",
+                crate::rules::Action::Allow,
+                pattern,
+            )],
         }
     }
 

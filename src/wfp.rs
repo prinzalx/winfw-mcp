@@ -11,11 +11,12 @@ use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTION_TYPE, FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE,
     FWP_CONDITION_FLAG_IS_APPCONTAINER_LOOPBACK, FWP_CONDITION_FLAG_IS_LOOPBACK,
     FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ANY_SET,
-    FWP_UINT8, FWP_UINT16, FWP_UINT32, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
-    FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS, FWPM_CONDITION_IP_LOCAL_PORT,
-    FWPM_CONDITION_IP_PROTOCOL, FWPM_DISPLAY_DATA0, FWPM_FILTER_CONDITION0,
-    FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_FILTER_FLAG_INDEXED, FWPM_FILTER_FLAG_PERSISTENT,
-    FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+    FWP_MATCH_RANGE, FWP_RANGE_TYPE, FWP_RANGE0, FWP_UINT8, FWP_UINT16, FWP_UINT32, FWP_VALUE0,
+    FWP_VALUE0_0, FWPM_ACTION0, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS,
+    FWPM_CONDITION_IP_LOCAL_PORT, FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_PORT,
+    FWPM_DISPLAY_DATA0, FWPM_FILTER_CONDITION0, FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT,
+    FWPM_FILTER_FLAG_INDEXED, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0,
+    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
     FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_PROVIDER0, FWPM_SUBLAYER_FLAG_PERSISTENT, FWPM_SUBLAYER0,
     FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterCreateEnumHandle0,
@@ -28,7 +29,7 @@ use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
 use windows::core::{GUID, PCWSTR, PWSTR};
 
 use crate::config::Policy;
-use crate::rules::{Action, Rule, RuleFile, is_wildcard, wildcard_match};
+use crate::rules::{Action, Direction, Rule, RuleFile, is_wildcard, wildcard_match};
 
 /// The name the store shows for us, in provider, sublayer and filter display data alike.
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
@@ -482,8 +483,9 @@ impl Engine {
         Ok(removed)
     }
 
-    /// Install one rule as one filter per application per layer, so both directions and both
-    /// address families are covered. Returns the number of filters installed.
+    /// Install one rule as one filter per application per layer. Which layers that is depends on
+    /// the direction of the rule; with no direction both an outbound and an inbound connection are
+    /// covered, for both address families. Returns the number of filters installed.
     fn add_rule(&self, rule: &Rule, known: &[String]) -> Result<usize> {
         let apps = app_ids(&rule.pattern, known);
 
@@ -516,9 +518,10 @@ impl Engine {
 
         let mut installed = 0;
 
-        // One condition per application, because it points into that application's blob.
+        // One set of conditions per application, because the application condition points into
+        // that application's blob.
         for (index, app) in apps.iter().enumerate() {
-            let mut condition = FWPM_FILTER_CONDITION0 {
+            let app_condition = FWPM_FILTER_CONDITION0 {
                 fieldKey: FWPM_CONDITION_ALE_APP_ID,
                 matchType: FWP_MATCH_EQUAL,
                 conditionValue: FWP_CONDITION_VALUE0 {
@@ -529,7 +532,64 @@ impl Engine {
                 },
             };
 
-            for layer in LAYERS {
+            let protocol = rule.protocol.map(|protocol| FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_PROTOCOL,
+                matchType: FWP_MATCH_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_UINT8,
+                    Anonymous: FWP_CONDITION_VALUE0_0 {
+                        uint8: protocol.number(),
+                    },
+                },
+            });
+
+            // WFP keeps a pointer to the range rather than a copy of it, so the value lives here,
+            // for as long as the filters of this application are being added. It is not an `Option`:
+            // the pointer has to be a pointer to the range itself.
+            let port_range = rule.port.map_or(FWP_RANGE0::default(), |port| FWP_RANGE0 {
+                valueLow: FWP_VALUE0 {
+                    r#type: FWP_UINT16,
+                    Anonymous: FWP_VALUE0_0 { uint16: port.lo },
+                },
+                valueHigh: FWP_VALUE0 {
+                    r#type: FWP_UINT16,
+                    Anonymous: FWP_VALUE0_0 { uint16: port.hi },
+                },
+            });
+
+            for layer in layers_for(rule.direction) {
+                let mut conditions = vec![app_condition];
+
+                if let Some(condition) = protocol {
+                    conditions.push(condition);
+                }
+
+                if let Some(port) = rule.port {
+                    // One port is matched exactly; a range needs the range type and the range the
+                    // store keeps a pointer to.
+                    conditions.push(if port.is_single() {
+                        FWPM_FILTER_CONDITION0 {
+                            fieldKey: port_condition(layer),
+                            matchType: FWP_MATCH_EQUAL,
+                            conditionValue: FWP_CONDITION_VALUE0 {
+                                r#type: FWP_UINT16,
+                                Anonymous: FWP_CONDITION_VALUE0_0 { uint16: port.lo },
+                            },
+                        }
+                    } else {
+                        FWPM_FILTER_CONDITION0 {
+                            fieldKey: port_condition(layer),
+                            matchType: FWP_MATCH_RANGE,
+                            conditionValue: FWP_CONDITION_VALUE0 {
+                                r#type: FWP_RANGE_TYPE,
+                                Anonymous: FWP_CONDITION_VALUE0_0 {
+                                    rangeValue: &raw const port_range as *mut _,
+                                },
+                            },
+                        }
+                    });
+                }
+
                 let mut filter = FWPM_FILTER0::default();
                 filter.filterKey = filter_key(&format!("{}#{index}", rule.name), &layer);
                 filter.displayData = FWPM_DISPLAY_DATA0 {
@@ -544,8 +604,8 @@ impl Engine {
                     r#type: FWP_UINT8,
                     Anonymous: FWP_VALUE0_0 { uint8: weight },
                 };
-                filter.numFilterConditions = 1;
-                filter.filterCondition = &mut condition;
+                filter.numFilterConditions = conditions.len() as u32;
+                filter.filterCondition = conditions.as_ptr() as *mut _;
                 filter.action = FWPM_ACTION0 {
                     r#type: action,
                     ..Default::default()
@@ -889,6 +949,32 @@ pub fn filter_key(name: &str, layer: &GUID) -> GUID {
     GUID::from_u128(u128::from_be_bytes(raw))
 }
 
+/// The layers a rule is installed on.
+///
+/// A rule with no direction is installed on all four, which is what every rule did before the
+/// dimension existed. Outbound is the connect layer of each address family, inbound the
+/// recv-accept layer of each, mirroring where a connection is authorized in each direction.
+fn layers_for(direction: Option<Direction>) -> Vec<GUID> {
+    match direction {
+        None => LAYERS.to_vec(),
+        Some(Direction::Out) => vec![LAYERS[0], LAYERS[1]],
+        Some(Direction::In) => vec![LAYERS[2], LAYERS[3]],
+    }
+}
+
+/// The condition that names the port a connection is about on a layer.
+///
+/// On an outbound layer the port the user means is the remote one, because that is where the
+/// connection goes; on an inbound layer it is the local one. Picking one of the two for every layer
+/// would make a port rule apply in only one direction, whatever its direction says.
+fn port_condition(layer: GUID) -> GUID {
+    if layer == FWPM_LAYER_ALE_AUTH_CONNECT_V4 || layer == FWPM_LAYER_ALE_AUTH_CONNECT_V6 {
+        FWPM_CONDITION_IP_REMOTE_PORT
+    } else {
+        FWPM_CONDITION_IP_LOCAL_PORT
+    }
+}
+
 /// Which of the four layers a GUID is, so an error message can name the position in `LAYERS`.
 fn layer_index(layer: GUID) -> usize {
     LAYERS
@@ -911,9 +997,40 @@ fn display_name(data: &FWPM_DISPLAY_DATA0) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::Protocol;
 
     /// A path that exists on every Windows install, so the application-id resolution succeeds.
     const TEST_APP: &str = "C:\\Windows\\System32\\cmd.exe";
+
+    /// A rule with no direction is installed everywhere, and each direction picks the two layers
+    /// where its connections are authorized.
+    #[test]
+    fn a_direction_narrows_the_layers_a_rule_is_installed_on() {
+        assert_eq!(layers_for(None).len(), LAYERS.len());
+        assert_eq!(layers_for(Some(Direction::Out)), vec![LAYERS[0], LAYERS[1]]);
+        assert_eq!(layers_for(Some(Direction::In)), vec![LAYERS[2], LAYERS[3]]);
+    }
+
+    /// The port a user means is the remote one on the way out and the local one on the way in.
+    #[test]
+    fn a_port_is_matched_on_the_side_the_connection_is_about() {
+        assert_eq!(
+            port_condition(FWPM_LAYER_ALE_AUTH_CONNECT_V4),
+            FWPM_CONDITION_IP_REMOTE_PORT
+        );
+        assert_eq!(
+            port_condition(FWPM_LAYER_ALE_AUTH_CONNECT_V6),
+            FWPM_CONDITION_IP_REMOTE_PORT
+        );
+        assert_eq!(
+            port_condition(FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4),
+            FWPM_CONDITION_IP_LOCAL_PORT
+        );
+        assert_eq!(
+            port_condition(FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6),
+            FWPM_CONDITION_IP_LOCAL_PORT
+        );
+    }
 
     /// Read the live store, and assert on whatever we are allowed to read.
     ///
@@ -955,18 +1072,8 @@ mod tests {
 
         let rules = RuleFile {
             rule: vec![
-                Rule {
-                    name: "winfw-mcp write test".to_owned(),
-                    action: Action::Deny,
-                    pattern: TEST_APP.to_owned(),
-                    enabled: true,
-                },
-                Rule {
-                    name: "winfw-mcp write test allow".to_owned(),
-                    action: Action::Allow,
-                    pattern: TEST_APP.to_owned(),
-                    enabled: true,
-                },
+                Rule::plain("winfw-mcp write test", Action::Deny, TEST_APP),
+                Rule::plain("winfw-mcp write test allow", Action::Allow, TEST_APP),
             ],
         };
 
@@ -1006,6 +1113,53 @@ mod tests {
             cleared, expected,
             "clearing removes every filter we installed"
         );
+    }
+
+    /// A rule narrowed by protocol, direction and a port is installed on the two layers of its
+    /// direction alone, and the store accepts the conditions it carries. Both port encodings are
+    /// exercised: a single port is matched exactly, a range needs the range type. The conditions
+    /// are the point here — one WFP could not read would fail this test rather than quietly widen
+    /// the rule to every port.
+    #[test]
+    fn a_narrowed_rule_is_installed_on_its_direction_alone() {
+        let engine = Engine::open().expect("open engine");
+
+        match engine.clear() {
+            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
+            Err(error) => {
+                let reason = format!("{error:#}");
+                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
+                println!("write path skipped, access denied");
+                return;
+            }
+        }
+
+        for port in ["443", "1024-2048"] {
+            let rules = RuleFile {
+                rule: vec![Rule {
+                    protocol: Some(Protocol::Tcp),
+                    direction: Some(Direction::Out),
+                    port: Some(port.parse().expect("parse a port")),
+                    ..Rule::plain("winfw-mcp narrow test", Action::Allow, TEST_APP)
+                }],
+            };
+
+            let applied = engine
+                .apply(&rules, &[], Policy::Allow)
+                .expect("apply the narrowed rule");
+
+            assert_eq!(
+                applied.installed, 2,
+                "port '{port}': outbound is the connect layer of both address families, not four",
+            );
+
+            let cleared = engine.clear().expect("clear the store");
+
+            assert_eq!(
+                cleared, 2,
+                "port '{port}': a narrowed rule leaves nothing on the other layers",
+            );
+        }
     }
 
     /// The default-deny policy adds the base filters on top of the rules: a loopback permit on

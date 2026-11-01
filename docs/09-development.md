@@ -70,6 +70,7 @@ their own.
 | 0.11.4 | Wildcard rules are rebuilt when a new application turns up, learned or not, and the store is rebuilt from the rules at startup |
 | 0.12.0 | `default_policy` in `config.toml`: `deny` installs the base block plus the loopback, 6to4 and ICMPv6 permits, so an application no rule mentions is denied |
 | 0.13.0 | Settings became writable: `POST /api/settings` and the MCP tool `settings.set` change `learn_mode` and `default_policy` on a running process, write `config.toml`, and rebuild the store; the page header shows both as clickable toggles, and an unknown field is refused rather than ignored. CI runs the tests single-threaded, which is what the two live-store tests always needed |
+| 0.14.0 | Rules gained three optional dimensions: `protocol` (`tcp`/`udp`), `direction` (`in`/`out`) and `port` (a single port or a range such as `1024-2048`). They are real conditions rather than labels — direction picks the layers a rule is installed on, protocol and port become WFP filter conditions — and they travel through the file, the page, the HTTP API, Share/Import and MCP. A value the server cannot read is refused instead of quietly meaning "any" |
 
 ---
 

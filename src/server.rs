@@ -53,7 +53,7 @@ use crate::learn::{Detected, Detector};
 use crate::mcp;
 use crate::monitor::{EventLog, NetEvent};
 use crate::paths::DataPaths;
-use crate::rules::{Action, Rule, RuleFile};
+use crate::rules::{Action, Direction, PortRange, Protocol, Rule, RuleFile};
 
 /// The page served at `/`, embedded so the binary stays a single file.
 const INDEX_HTML: &str = include_str!("../web/index.html");
@@ -740,12 +740,9 @@ impl Server {
                 let applied = {
                     let mut current = state.rules.lock().expect("rules lock poisoned");
 
-                    current.rule.push(Rule {
-                        name,
-                        action: decision.action,
-                        pattern,
-                        enabled: true,
-                    });
+                    current
+                        .rule
+                        .push(Rule::plain(name, decision.action, pattern));
 
                     current
                         .save(&state.rules_path())
@@ -980,6 +977,18 @@ fn tool_list() -> Vec<serde_json::Value> {
                         "type": "string",
                         "enum": ["rules", "config", "detected", "all"],
                     },
+                    "protocol": {
+                        "type": "string",
+                        "enum": ["tcp", "udp"],
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["in", "out"],
+                    },
+                    "port": {
+                        "type": ["integer", "string"],
+                        "description": "a port such as 443 or a range such as 1024-2048",
+                    },
                     "learn_mode": { "type": "boolean" },
                     "default_policy": {
                         "type": "string",
@@ -1082,14 +1091,57 @@ fn mcp_tool(
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or_else(|| app.rsplit(['\\', '/']).next().unwrap_or("agent").to_owned());
 
+            // The three narrowing arguments are optional, and an agent may pass a port as a number
+            // or as the range text the file uses.
+            let protocol = match call.arg("protocol") {
+                Some(value) => Some(serde_json::from_value::<Protocol>(value).map_err(|_| {
+                    (
+                        mcp::INVALID_PARAMS,
+                        "protocol must be tcp or udp".to_owned(),
+                    )
+                })?),
+                None => None,
+            };
+
+            let direction = match call.arg("direction") {
+                Some(value) => Some(serde_json::from_value::<Direction>(value).map_err(|_| {
+                    (
+                        mcp::INVALID_PARAMS,
+                        "direction must be in or out".to_owned(),
+                    )
+                })?),
+                None => None,
+            };
+
+            // A port of a type neither form has is refused rather than read as absent.
+            let port = match call.arg("port") {
+                Some(serde_json::Value::Number(number)) => Some(
+                    number
+                        .to_string()
+                        .parse::<PortRange>()
+                        .map_err(|error| (mcp::INVALID_PARAMS, error))?,
+                ),
+                Some(serde_json::Value::String(text)) => Some(
+                    text.parse::<PortRange>()
+                        .map_err(|error| (mcp::INVALID_PARAMS, error))?,
+                ),
+                Some(_) => {
+                    return Err((
+                        mcp::INVALID_PARAMS,
+                        "port must be a number or a range string".to_owned(),
+                    ));
+                }
+                None => None,
+            };
+
             let applied = {
                 let mut current = state.rules.lock().expect("rules lock poisoned");
 
                 current.rule.push(Rule {
-                    name: name.clone(),
-                    action,
-                    pattern,
-                    enabled: true,
+                    protocol,
+                    direction,
+                    port,
+                    ..Rule::plain(name.clone(), action, pattern)
                 });
                 current
                     .save(&state.rules_path())
@@ -1602,12 +1654,11 @@ mod tests {
             paths,
             Settings::default(),
             Arc::new(Mutex::new(RuleFile {
-                rule: vec![Rule {
-                    name: "browser".to_owned(),
-                    action: crate::rules::Action::Allow,
-                    pattern: "C:\\Program Files\\*\\browser.exe".to_owned(),
-                    enabled: true,
-                }],
+                rule: vec![Rule::plain(
+                    "browser",
+                    crate::rules::Action::Allow,
+                    "C:\\Program Files\\*\\browser.exe",
+                )],
             })),
             Arc::new(detector),
             events,
@@ -1827,6 +1878,123 @@ mod tests {
         assert!(
             server_state.live.policy() == Policy::Allow,
             "a refused call must change nothing",
+        );
+    }
+
+    /// A rule narrowed by protocol, direction and port travels through the API, lands in
+    /// `rules.toml`, and comes back in the state, which is what the three new columns of the page
+    /// rely on.
+    #[test]
+    fn a_narrowed_rule_travels_through_the_api() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"a","enabled":true,"protocol":"tcp","direction":"out","port":"1024-2048"}]}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains(r#""protocol":"tcp""#), "{body}");
+        assert!(body.contains(r#""direction":"out""#), "{body}");
+        assert!(body.contains(r#""port":"1024-2048""#), "{body}");
+
+        let written = std::fs::read_to_string(server_state.rules_path()).expect("read the rules");
+
+        assert!(
+            written.contains(r#"protocol = "tcp""#),
+            "the narrowing has to survive a restart: {written}",
+        );
+    }
+
+    /// A port the server cannot read is refused rather than read as no port, so a typo in the page
+    /// cannot silently widen a rule to every port.
+    #[test]
+    fn the_rules_endpoint_refuses_a_port_it_cannot_read() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"a","enabled":true,"port":"http"}]}"#.to_vec(),
+            ),
+        );
+
+        assert!(response.is_err(), "a port must be a port");
+    }
+
+    /// An agent may name a port as a number or as the range text the file uses, and a value that
+    /// is neither is refused. `rules` write permission is enough here: naming a port narrows a
+    /// rule, it does not widen what an agent may ask for.
+    #[test]
+    fn the_mcp_rule_tools_read_a_port_in_both_forms() {
+        let scratch = crate::testutil::scratch_dir("mcp-port");
+        let paths = DataPaths::under(scratch.join("data"));
+
+        paths.ensure().expect("create the data directories");
+
+        let detector = Detector::load(&paths.learn).expect("load the detected list");
+
+        let settings = Settings {
+            mcp_writes: Writes::Rules,
+            ..Settings::default()
+        };
+
+        let server_state = AppState::new(
+            paths,
+            settings,
+            Arc::new(Mutex::new(RuleFile::default())),
+            Arc::new(detector),
+            Arc::new(EventLog::new()),
+            Arc::new(Live::default()),
+            scratch.join("data").join("rules.toml"),
+            String::new(),
+        );
+        let worker = WfpWorker::start();
+
+        for port in [r#"443"#, r#""1024-2048""#] {
+            let response = Server::route(
+                &server_state,
+                &worker,
+                &Request::new(
+                    "POST",
+                    "/mcp",
+                    format!(
+                        r#"{{"jsonrpc":"2.0","id":1,"method":"rules.deny","params":{{"app":"a","port":{port}}}}}"#,
+                    )
+                    .into_bytes(),
+                ),
+            )
+            .expect("route");
+
+            let body = String::from_utf8_lossy(&response.body).into_owned();
+
+            assert!(
+                body.contains("structuredContent"),
+                "port {port} must be accepted: {body}",
+            );
+            assert!(
+                body.contains(r#""isError":false"#),
+                "port {port} must be accepted: {body}",
+            );
+        }
+
+        let written = std::fs::read_to_string(server_state.rules_path()).expect("read the rules");
+
+        assert!(
+            written.contains(r#"port = "443""#) && written.contains(r#"port = "1024-2048""#),
+            "both forms have to reach the file: {written}",
         );
     }
 

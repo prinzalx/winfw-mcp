@@ -35,6 +35,30 @@ Re-applying is the normal case, not an error. The provider and sublayer stay in 
 `--clear`, and both `Fwpm*Add0` calls answer `FWP_E_ALREADY_EXISTS` when they are added again, which
 the write path accepts.
 
+## The layers a rule is installed on
+
+One rule becomes one filter per application it matches, per layer it applies to. Which layers that
+are depends on the direction of the rule:
+
+| `direction` | Layers |
+|---|---|
+| absent | all four: connect and recv-accept, for both address families |
+| `"out"` | `ALE_AUTH_CONNECT_V4` and `ALE_AUTH_CONNECT_V6` |
+| `"in"` | `ALE_AUTH_RECV_ACCEPT_V4` and `ALE_AUTH_RECV_ACCEPT_V6` |
+
+Each filter carries the application condition (`FWPM_CONDITION_ALE_APP_ID`) and, when the rule
+narrows, a protocol condition (`FWPM_CONDITION_IP_PROTOCOL`, `FWP_UINT8`) and a port condition. The
+port condition is `FWPM_CONDITION_IP_REMOTE_PORT` on a connect layer and `FWPM_CONDITION_IP_LOCAL_PORT`
+on a recv-accept layer, because that is the port the connection is about in each direction.
+
+A single port is matched with `FWP_UINT16` and `FWP_MATCH_EQUAL`; a range with `FWP_RANGE_TYPE` and
+`FWP_MATCH_RANGE`. The range is the one condition WFP keeps a **pointer** to rather than a copy, so
+the `FWP_RANGE0` has to outlive the call.
+
+> Getting that pointer wrong is easy and the failure is not obvious. Handing WFP the address of an
+> `Option<FWP_RANGE0>` instead of the address of the `FWP_RANGE0` inside it installs a filter whose
+> range is read out of the wrong bytes, and WFP answers `FWP_E_INVALID_ENUMERATOR`.
+
 ## The default-deny base
 
 `default_policy = "deny"` in `config.toml` installs thirteen base filters next to the rule filters:

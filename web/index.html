@@ -220,6 +220,9 @@
           <th style="width: 12rem">Name</th>
           <th style="width: 7rem">Action</th>
           <th>Pattern</th>
+          <th style="width: 6rem">Protocol</th>
+          <th style="width: 6rem">Direction</th>
+          <th style="width: 7rem">Port</th>
           <th style="width: 4rem"></th>
           <th style="width: 5rem"></th>
         </tr>
@@ -255,7 +258,9 @@
 
     <p class="sub">
       A deny always beats an allow, whatever the order of the list. Patterns accept the wildcards
-      <code>*</code> and <code>?</code>. Every change is written to <code>rules.toml</code> and
+      <code>*</code> and <code>?</code>. A rule can be narrowed to one protocol, one direction and
+      one port or port range such as <code>1024-2048</code>; a rule that names none of them is about
+      all of them. Every change is written to <code>rules.toml</code> and
       pushed to the store immediately. A detected application is one no rule speaks about yet; edit
       its path into a pattern such as <code>C:\Program Files\*\app.exe</code> before you allow or
       deny it, if you want to cover more than that one file.
@@ -287,6 +292,24 @@
         }
 
         return node;
+      }
+
+      // A dropdown of the choices an optional rule field allows. The empty choice is shown as
+      // "any" and sent as null, because the server reads a field it is not told about as absent
+      // rather than as the word "any".
+      function select_choices(choices, current, on_change) {
+        const select = element("select");
+
+        for (const choice of choices) {
+          const option = element("option", null, choice === "" ? "any" : choice);
+
+          option.value = choice;
+          option.selected = (current ?? "") === choice;
+          select.appendChild(option);
+        }
+        select.addEventListener("change", () => on_change(select.value || null));
+
+        return select;
       }
 
       function renderBanner(store) {
@@ -393,6 +416,33 @@
             save();
           });
           row.appendChild(element("td", "pattern")).appendChild(pattern);
+
+          // The three narrowing columns are optional on a rule, which the server reads as null.
+          // An empty choice is therefore sent as null rather than as the word "any".
+          const protocol = select_choices(["", "tcp", "udp"], rule.protocol, (value) => {
+            rule.protocol = value;
+            save();
+          });
+          row.appendChild(element("td", null)).appendChild(protocol);
+
+          const direction = select_choices(["", "out", "in"], rule.direction, (value) => {
+            rule.direction = value;
+            save();
+          });
+          row.appendChild(element("td", null)).appendChild(direction);
+
+          const port = element("input");
+          port.type = "text";
+          port.value = rule.port ?? "";
+          port.placeholder = "any";
+          port.title = "a port such as 443 or a range such as 1024-2048";
+          port.addEventListener("change", () => {
+            const text = port.value.trim();
+
+            rule.port = text === "" ? null : text;
+            save();
+          });
+          row.appendChild(element("td", null)).appendChild(port);
 
           const remove = element("button", null, "remove");
           remove.addEventListener("click", () => {
@@ -652,6 +702,9 @@
           action: "allow",
           pattern: "C:\\Program Files\\*",
           enabled: true,
+          protocol: null,
+          direction: null,
+          port: null,
         });
         save();
       });
