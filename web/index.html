@@ -223,6 +223,7 @@
           <th style="width: 6rem">Protocol</th>
           <th style="width: 6rem">Direction</th>
           <th style="width: 7rem">Port</th>
+          <th style="width: 10rem">Remote</th>
           <th style="width: 4rem"></th>
           <th style="width: 5rem"></th>
         </tr>
@@ -258,8 +259,9 @@
 
     <p class="sub">
       A deny always beats an allow, whatever the order of the list. Patterns accept the wildcards
-      <code>*</code> and <code>?</code>. A rule can be narrowed to one protocol, one direction and
-      one port or port range such as <code>1024-2048</code>; a rule that names none of them is about
+      <code>*</code> and <code>?</code>. A rule can be narrowed to one protocol, one direction,
+      one port or port range such as <code>1024-2048</code> and one remote address or network
+      such as <code>192.168.1.0/24</code>; a rule that names none of them is about
       all of them. Every change is written to <code>rules.toml</code> and
       pushed to the store immediately. A detected application is one no rule speaks about yet; edit
       its path into a pattern such as <code>C:\Program Files\*\app.exe</code> before you allow or
@@ -417,7 +419,7 @@
           });
           row.appendChild(element("td", "pattern")).appendChild(pattern);
 
-          // The three narrowing columns are optional on a rule, which the server reads as null.
+          // The four narrowing columns are optional on a rule, which the server reads as null.
           // An empty choice is therefore sent as null rather than as the word "any".
           const protocol = select_choices(["", "tcp", "udp"], rule.protocol, (value) => {
             rule.protocol = value;
@@ -443,6 +445,19 @@
             save();
           });
           row.appendChild(element("td", null)).appendChild(port);
+
+          const remote = element("input");
+          remote.type = "text";
+          remote.value = rule.remote ?? "";
+          remote.placeholder = "any";
+          remote.title = "a remote address or network such as 10.0.0.5 or 192.168.1.0/24";
+          remote.addEventListener("change", () => {
+            const text = remote.value.trim();
+
+            rule.remote = text === "" ? null : text;
+            save();
+          });
+          row.appendChild(element("td", null)).appendChild(remote);
 
           const remove = element("button", null, "remove");
           remove.addEventListener("click", () => {
@@ -705,6 +720,7 @@
           protocol: null,
           direction: null,
           port: null,
+          remote: null,
         });
         save();
       });

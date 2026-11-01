@@ -16,8 +16,8 @@ client that asks for anything else is told so rather than silently ignored.
 | `status` | settings, rule count, store health, how much the endpoint may write | no |
 | `rules.list` | every rule, in file order | no |
 | `rules.share` | one rule as a Base64 string (takes `index`) | no |
-| `rules.allow` | add an allow rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`) | yes |
-| `rules.deny` | add a deny rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`) | yes |
+| `rules.allow` | add an allow rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`, `remote`) | yes |
+| `rules.deny` | add a deny rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`, `remote`) | yes |
 | `detected.list` | what learning mode collected | no |
 | `events.list` | recent connection events | no |
 | `export` | copy an area (`rules`, `config`, `detected`, `all`) into `export\` | yes |

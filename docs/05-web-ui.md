@@ -16,11 +16,12 @@ actually got.
 - **Header** line: address, learning mode, default policy. Learning mode and the default policy are
   underlined because they are clickable — clicking one asks the server to switch it to the other
   value, which writes `config.toml` and rebuilds the store in the same request.
-- **Rules** table: enabled flag, name, action, pattern, protocol, direction, port, remove, share.
-  Every field is edited in place and saved on change. Protocol and direction are dropdowns whose
-  first entry is `any`, which is sent as no value at all; the port box takes `443` or
-  `1024-2048` and is left empty for any port. A port the server cannot read bounces back as an
-  error and the row is redrawn from what the server has.
+- **Rules** table: enabled flag, name, action, pattern, protocol, direction, port, remote address,
+  remove, share. Every field is edited in place and saved on change. Protocol and direction are
+  dropdowns whose first entry is `any`, which is sent as no value at all; the port box takes `443`
+  or `1024-2048` and the remote box `10.0.0.5` or `192.168.1.0/24`, both left empty for anything
+  goes. A value the server cannot read bounces back as an error and the row is redrawn from what
+  the server has.
 - **Detected** table: the learning mode, with `allow`, `deny` and `dismiss` per row.
 - **Recent connections**: fed over SSE, newest first.
 - **Actions**: Add rule, Apply to WFP, Clear our filters, Export, Import, Quit.

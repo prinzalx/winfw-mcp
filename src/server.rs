@@ -53,7 +53,7 @@ use crate::learn::{Detected, Detector};
 use crate::mcp;
 use crate::monitor::{EventLog, NetEvent};
 use crate::paths::DataPaths;
-use crate::rules::{Action, Direction, PortRange, Protocol, Rule, RuleFile};
+use crate::rules::{Action, Cidr, Direction, PortRange, Protocol, Rule, RuleFile};
 
 /// The page served at `/`, embedded so the binary stays a single file.
 const INDEX_HTML: &str = include_str!("../web/index.html");
@@ -932,9 +932,12 @@ fn tool_list() -> Vec<serde_json::Value> {
         ("rules.share", "one rule as a Base64 string; takes an index"),
         (
             "rules.allow",
-            "append an allow rule; takes app, pattern, name",
+            "append an allow rule; takes app, pattern, name, protocol, direction, port, remote",
         ),
-        ("rules.deny", "append a deny rule; takes app, pattern, name"),
+        (
+            "rules.deny",
+            "append a deny rule; takes app, pattern, name, protocol, direction, port, remote",
+        ),
         (
             "detected.list",
             "the applications learning mode collected, newest first",
@@ -988,6 +991,10 @@ fn tool_list() -> Vec<serde_json::Value> {
                     "port": {
                         "type": ["integer", "string"],
                         "description": "a port such as 443 or a range such as 1024-2048",
+                    },
+                    "remote": {
+                        "type": "string",
+                        "description": "a remote address or network such as 10.0.0.5 or 192.168.1.0/24",
                     },
                     "learn_mode": { "type": "boolean" },
                     "default_policy": {
@@ -1134,6 +1141,22 @@ fn mcp_tool(
                 None => None,
             };
 
+            // A remote address is written the way the file writes it, and only as text: a number
+            // has no prefix to tell v4 from v6.
+            let remote = match call.arg("remote") {
+                Some(serde_json::Value::String(text)) => Some(
+                    text.parse::<Cidr>()
+                        .map_err(|error| (mcp::INVALID_PARAMS, error))?,
+                ),
+                Some(_) => {
+                    return Err((
+                        mcp::INVALID_PARAMS,
+                        "remote must be an address such as 192.168.1.0/24".to_owned(),
+                    ));
+                }
+                None => None,
+            };
+
             let applied = {
                 let mut current = state.rules.lock().expect("rules lock poisoned");
 
@@ -1141,6 +1164,7 @@ fn mcp_tool(
                     protocol,
                     direction,
                     port,
+                    remote,
                     ..Rule::plain(name.clone(), action, pattern)
                 });
                 current
@@ -1881,9 +1905,9 @@ mod tests {
         );
     }
 
-    /// A rule narrowed by protocol, direction and port travels through the API, lands in
-    /// `rules.toml`, and comes back in the state, which is what the three new columns of the page
-    /// rely on.
+    /// A rule narrowed by protocol, direction, port and remote address travels through the API,
+    /// lands in `rules.toml`, and comes back in the state, which is what the four narrowing
+    /// columns of the page rely on.
     #[test]
     fn a_narrowed_rule_travels_through_the_api() {
         let server_state = state();
@@ -1895,7 +1919,7 @@ mod tests {
             &Request::new(
                 "POST",
                 "/api/rules",
-                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"a","enabled":true,"protocol":"tcp","direction":"out","port":"1024-2048"}]}"#.to_vec(),
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"a","enabled":true,"protocol":"tcp","direction":"out","port":"1024-2048","remote":"192.168.1.0/24"}]}"#.to_vec(),
             ),
         )
         .expect("route");
@@ -1905,12 +1929,51 @@ mod tests {
         assert!(body.contains(r#""protocol":"tcp""#), "{body}");
         assert!(body.contains(r#""direction":"out""#), "{body}");
         assert!(body.contains(r#""port":"1024-2048""#), "{body}");
+        assert!(body.contains(r#""remote":"192.168.1.0/24""#), "{body}");
 
         let written = std::fs::read_to_string(server_state.rules_path()).expect("read the rules");
 
         assert!(
             written.contains(r#"protocol = "tcp""#),
             "the narrowing has to survive a restart: {written}",
+        );
+    }
+
+    /// A remote address the server cannot read is refused rather than read as any address, and a
+    /// network written with host bits comes back as the network.
+    #[test]
+    fn the_rules_endpoint_refuses_an_address_it_cannot_read() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let refused = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"a","enabled":true,"remote":"192.168.1.0/33"}]}"#.to_vec(),
+            ),
+        );
+
+        assert!(refused.is_err(), "a prefix has a maximum");
+
+        let accepted = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"a","enabled":true,"remote":"10.0.0.5/24"}]}"#.to_vec(),
+            ),
+        )
+        .expect("route the network");
+
+        let body = String::from_utf8_lossy(&accepted.body).into_owned();
+
+        assert!(
+            body.contains(r#""remote":"10.0.0.0/24""#),
+            "the host bits are dropped: {body}",
         );
     }
 

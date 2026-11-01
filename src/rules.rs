@@ -45,6 +45,146 @@ pub enum Direction {
     Out,
 }
 
+/// The address family an address belongs to.
+///
+/// WFP keeps the two families in separate layers, so this decides which of them a rule with a
+/// remote address is installed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Family {
+    V4,
+    V6,
+}
+
+impl Family {
+    /// The width of an address of this family, which is the longest prefix it accepts.
+    pub const fn bits(self) -> u8 {
+        match self {
+            Self::V4 => 32,
+            Self::V6 => 128,
+        }
+    }
+}
+
+/// A remote address, written `192.168.1.0/24`, `10.0.0.5` or `fe80::/10`.
+///
+/// A bare address is a prefix as wide as its family, so `10.0.0.5` means `10.0.0.5/32` and
+/// `fe80::1` means `fe80::1/128`. Host bits are masked away while the text is read, so what ends
+/// up in the file is exactly the network WFP will match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cidr {
+    /// The network address: four significant bytes for v4, sixteen for v6.
+    pub addr: [u8; 16],
+    /// How many leading bits of `addr` have to match.
+    pub prefix: u8,
+    /// Which family the address is in.
+    pub family: Family,
+}
+
+impl Cidr {
+    /// The four bytes of a v4 address, which is how WFP wants them in a v4 condition.
+    pub fn v4_bytes(&self) -> [u8; 4] {
+        [self.addr[0], self.addr[1], self.addr[2], self.addr[3]]
+    }
+
+    /// The v4 mask WFP wants beside the address: the prefix widened to 32 bits, read big-endian
+    /// like the address itself. `/0` masks everything away, which matches any address.
+    pub fn v4_mask(&self) -> u32 {
+        if self.prefix == 0 {
+            0
+        } else {
+            u32::MAX << (Family::V4.bits() - self.prefix)
+        }
+    }
+}
+
+impl std::str::FromStr for Cidr {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let (host, given) = match text.split_once('/') {
+            Some((host, prefix)) => (
+                host,
+                Some(
+                    prefix
+                        .parse::<u8>()
+                        .map_err(|_| format!("'{prefix}' is not a prefix length"))?,
+                ),
+            ),
+            None => (text, None),
+        };
+
+        // IPv4 is tried first, because Rust reads a dotted quad as an IPv4-mapped IPv6 address
+        // too, and `10.0.0.5` should stay the four byte address the user typed.
+        let (addr, family) = if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
+            let mut addr = [0u8; 16];
+            addr[..4].copy_from_slice(&v4.octets());
+            (addr, Family::V4)
+        } else if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
+            (v6.octets(), Family::V6)
+        } else {
+            return Err(format!("'{host}' is not an IP address"));
+        };
+
+        let prefix = given.unwrap_or_else(|| family.bits());
+
+        if prefix > family.bits() {
+            return Err(format!(
+                "'{text}' has a prefix longer than {}",
+                family.bits()
+            ));
+        }
+
+        // Keep only the network part, so `10.0.0.5/24` is stored and shown as `10.0.0.0/24`.
+        let mut addr = addr;
+        for (index, byte) in addr.iter_mut().enumerate() {
+            let keep = prefix.saturating_sub(8 * index as u8);
+
+            *byte &= if keep >= 8 {
+                0xff
+            } else if keep == 0 {
+                0
+            } else {
+                0xffu8 << (8 - keep)
+            };
+        }
+
+        Ok(Self {
+            addr,
+            prefix,
+            family,
+        })
+    }
+}
+
+impl std::fmt::Display for Cidr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.family {
+            Family::V4 => write!(f, "{}", std::net::Ipv4Addr::from(self.v4_bytes()))?,
+            Family::V6 => write!(f, "{}", std::net::Ipv6Addr::from(self.addr))?,
+        }
+
+        if self.prefix == self.family.bits() {
+            Ok(())
+        } else {
+            write!(f, "/{}", self.prefix)
+        }
+    }
+}
+
+impl Serialize for Cidr {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Cidr {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 /// A port, or an inclusive range of them, written `443` or `1024-2048`.
 ///
 /// It is a string in the file and in JSON rather than a number, because a range has no number form
@@ -117,8 +257,9 @@ impl<'de> Deserialize<'de> for PortRange {
 /// `pattern` may contain the wildcards `*` and `?` (PLAN.md section 4). Matching is our job,
 /// not the kernel's, so the string is stored exactly as the user typed it.
 ///
-/// `protocol`, `direction` and `port` narrow the rule and are absent when it is about all of
-/// them. They are skipped when written out, so a rule that does not use them is stored exactly as
+/// `protocol`, `direction`, `port` and `remote` narrow the rule and are absent when it is about
+/// all of them. They are skipped when written out, so a rule that does not use them is stored
+/// exactly as
 /// it was before they existed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -134,6 +275,10 @@ pub struct Rule {
     pub direction: Option<Direction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<PortRange>,
+    /// The remote address the rule is about, written `192.168.1.0/24`. Absent means any address,
+    /// which is also what narrows the rule to the application alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<Cidr>,
 }
 
 const fn always_enabled() -> bool {
@@ -142,7 +287,8 @@ const fn always_enabled() -> bool {
 
 impl Rule {
     /// A rule that narrows nothing: an enabled rule about an application, with no protocol,
-    /// direction or port. This is what a detected application and an MCP agent turn into.
+    /// direction, port or remote address. This is what a detected application and an MCP agent
+    /// turn into.
     pub fn plain(name: impl Into<String>, action: Action, pattern: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -152,6 +298,7 @@ impl Rule {
             protocol: None,
             direction: None,
             port: None,
+            remote: None,
         }
     }
 }
@@ -410,6 +557,65 @@ mod tests {
         );
         assert!("70000".parse::<PortRange>().is_err(), "past a u16");
         assert!("1024-".parse::<PortRange>().is_err(), "no upper end");
+    }
+
+    /// A prefix is read in both families, a bare address is one host, and the host bits of a
+    /// network do not survive the read.
+    #[test]
+    fn a_cidr_reads_its_written_forms() {
+        let network: Cidr = "192.168.1.0/24".parse().expect("parse a network");
+        assert_eq!(network.family, Family::V4);
+        assert_eq!(network.prefix, 24);
+        assert_eq!(network.v4_bytes(), [192, 168, 1, 0]);
+        assert_eq!(network.v4_mask(), 0xffff_ff00);
+
+        let host: Cidr = "10.0.0.5".parse().expect("parse a host");
+        assert_eq!(host.prefix, 32);
+        assert_eq!(host.to_string(), "10.0.0.5");
+
+        let scoped: Cidr = "fe80::1/64".parse().expect("parse a scoped network");
+        assert_eq!(scoped.family, Family::V6);
+        assert_eq!(scoped.prefix, 64);
+        assert_eq!(scoped.to_string(), "fe80::/64");
+
+        // A whole family is a prefix as wide as the family, and is written without one.
+        let any: Cidr = "::/0".parse().expect("parse the whole family");
+        assert_eq!(any.prefix, 0);
+        assert_eq!(any.to_string(), "::/0");
+    }
+
+    /// Reading a prefix keeps the network and drops the host bits, so what is stored is what WFP
+    /// matches.
+    #[test]
+    fn a_cidr_keeps_only_its_network_part() {
+        for (text, expected) in [
+            ("10.0.0.5/24", "10.0.0.0/24"),
+            ("10.0.0.5/32", "10.0.0.5"),
+            ("10.0.0.5/0", "0.0.0.0/0"),
+            ("2001:db8::5/48", "2001:db8::/48"),
+        ] {
+            let parsed: Cidr = text
+                .parse()
+                .unwrap_or_else(|error| panic!("parse {text}: {error}"));
+
+            assert_eq!(parsed.to_string(), expected, "keep the network of {text}");
+        }
+    }
+
+    /// What is refused: text that is not an address, a prefix that is not a number, and a prefix
+    /// wider than the family.
+    #[test]
+    fn a_cidr_refuses_what_is_not_one() {
+        for text in [
+            "example.com",
+            "10.0.0.5/abc",
+            "10.0.0.5/33",
+            "10.0.0.5/",
+            "::/129",
+            "",
+        ] {
+            assert!(text.parse::<Cidr>().is_err(), "'{text}' is not a prefix");
+        }
     }
 
     #[test]

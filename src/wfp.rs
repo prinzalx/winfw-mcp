@@ -11,12 +11,13 @@ use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTION_TYPE, FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE,
     FWP_CONDITION_FLAG_IS_APPCONTAINER_LOOPBACK, FWP_CONDITION_FLAG_IS_LOOPBACK,
     FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ANY_SET,
-    FWP_MATCH_RANGE, FWP_RANGE_TYPE, FWP_RANGE0, FWP_UINT8, FWP_UINT16, FWP_UINT32, FWP_VALUE0,
+    FWP_MATCH_RANGE, FWP_RANGE_TYPE, FWP_RANGE0, FWP_UINT8, FWP_UINT16, FWP_UINT32,
+    FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_V6_ADDR_AND_MASK, FWP_V6_ADDR_MASK, FWP_VALUE0,
     FWP_VALUE0_0, FWPM_ACTION0, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS,
-    FWPM_CONDITION_IP_LOCAL_PORT, FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_PORT,
-    FWPM_DISPLAY_DATA0, FWPM_FILTER_CONDITION0, FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT,
-    FWPM_FILTER_FLAG_INDEXED, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0,
-    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+    FWPM_CONDITION_IP_LOCAL_PORT, FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_ADDRESS,
+    FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0, FWPM_FILTER_CONDITION0,
+    FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_FILTER_FLAG_INDEXED, FWPM_FILTER_FLAG_PERSISTENT,
+    FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
     FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_PROVIDER0, FWPM_SUBLAYER_FLAG_PERSISTENT, FWPM_SUBLAYER0,
     FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterCreateEnumHandle0,
@@ -29,7 +30,7 @@ use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
 use windows::core::{GUID, PCWSTR, PWSTR};
 
 use crate::config::Policy;
-use crate::rules::{Action, Direction, Rule, RuleFile, is_wildcard, wildcard_match};
+use crate::rules::{Action, Direction, Family, Rule, RuleFile, is_wildcard, wildcard_match};
 
 /// The name the store shows for us, in provider, sublayer and filter display data alike.
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
@@ -557,7 +558,21 @@ impl Engine {
                 },
             });
 
-            for layer in layers_for(rule.direction) {
+            // Both address conditions are a pointer into a struct WFP reads while the filter is
+            // added, so the value lives here for as long as this application's filters are being
+            // added. It is not an `Option` of the struct: the pointer has to reach the struct.
+            let addr = rule.remote.map(|remote| match remote.family {
+                Family::V4 => AddrValue::V4(FWP_V4_ADDR_AND_MASK {
+                    addr: u32::from_be_bytes(remote.v4_bytes()),
+                    mask: remote.v4_mask(),
+                }),
+                Family::V6 => AddrValue::V6(FWP_V6_ADDR_AND_MASK {
+                    addr: remote.addr,
+                    prefixLength: remote.prefix,
+                }),
+            });
+
+            for layer in layers_for(rule.direction, rule.remote.map(|remote| remote.family)) {
                 let mut conditions = vec![app_condition];
 
                 if let Some(condition) = protocol {
@@ -587,6 +602,31 @@ impl Engine {
                                 },
                             },
                         }
+                    });
+                }
+
+                if let Some(addr) = &addr {
+                    conditions.push(match addr {
+                        AddrValue::V4(addr) => FWPM_FILTER_CONDITION0 {
+                            fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                            matchType: FWP_MATCH_EQUAL,
+                            conditionValue: FWP_CONDITION_VALUE0 {
+                                r#type: FWP_V4_ADDR_MASK,
+                                Anonymous: FWP_CONDITION_VALUE0_0 {
+                                    v4AddrMask: addr as *const FWP_V4_ADDR_AND_MASK as *mut _,
+                                },
+                            },
+                        },
+                        AddrValue::V6(addr) => FWPM_FILTER_CONDITION0 {
+                            fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                            matchType: FWP_MATCH_EQUAL,
+                            conditionValue: FWP_CONDITION_VALUE0 {
+                                r#type: FWP_V6_ADDR_MASK,
+                                Anonymous: FWP_CONDITION_VALUE0_0 {
+                                    v6AddrMask: addr as *const FWP_V6_ADDR_AND_MASK as *mut _,
+                                },
+                            },
+                        },
                     });
                 }
 
@@ -954,12 +994,38 @@ pub fn filter_key(name: &str, layer: &GUID) -> GUID {
 /// A rule with no direction is installed on all four, which is what every rule did before the
 /// dimension existed. Outbound is the connect layer of each address family, inbound the
 /// recv-accept layer of each, mirroring where a connection is authorized in each direction.
-fn layers_for(direction: Option<Direction>) -> Vec<GUID> {
-    match direction {
+///
+/// A rule with a remote address is installed only on the layers of that address's family, because
+/// a v4 address condition is refused on a v6 layer and could not match a v6 connection anyway.
+fn layers_for(direction: Option<Direction>, family: Option<Family>) -> Vec<GUID> {
+    let layers = match direction {
         None => LAYERS.to_vec(),
         Some(Direction::Out) => vec![LAYERS[0], LAYERS[1]],
         Some(Direction::In) => vec![LAYERS[2], LAYERS[3]],
+    };
+
+    match family {
+        None => layers,
+        Some(family) => layers
+            .into_iter()
+            .filter(|layer| layer_family(*layer) == family)
+            .collect(),
     }
+}
+
+/// Which family a layer belongs to.
+fn layer_family(layer: GUID) -> Family {
+    if layer == FWPM_LAYER_ALE_AUTH_CONNECT_V4 || layer == FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4 {
+        Family::V4
+    } else {
+        Family::V6
+    }
+}
+
+/// The address a rule's remote condition carries, in whichever family the address is in.
+enum AddrValue {
+    V4(FWP_V4_ADDR_AND_MASK),
+    V6(FWP_V6_ADDR_AND_MASK),
 }
 
 /// The condition that names the port a connection is about on a layer.
@@ -997,7 +1063,7 @@ fn display_name(data: &FWPM_DISPLAY_DATA0) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::Protocol;
+    use crate::rules::{Cidr, Protocol};
 
     /// A path that exists on every Windows install, so the application-id resolution succeeds.
     const TEST_APP: &str = "C:\\Windows\\System32\\cmd.exe";
@@ -1006,9 +1072,46 @@ mod tests {
     /// where its connections are authorized.
     #[test]
     fn a_direction_narrows_the_layers_a_rule_is_installed_on() {
-        assert_eq!(layers_for(None).len(), LAYERS.len());
-        assert_eq!(layers_for(Some(Direction::Out)), vec![LAYERS[0], LAYERS[1]]);
-        assert_eq!(layers_for(Some(Direction::In)), vec![LAYERS[2], LAYERS[3]]);
+        assert_eq!(layers_for(None, None).len(), LAYERS.len());
+        assert_eq!(
+            layers_for(Some(Direction::Out), None),
+            vec![LAYERS[0], LAYERS[1]]
+        );
+        assert_eq!(
+            layers_for(Some(Direction::In), None),
+            vec![LAYERS[2], LAYERS[3]]
+        );
+    }
+
+    /// An address of one family cannot match on a layer of the other, so a rule with a remote
+    /// address is only installed on the layers it could ever fire on. The two families together
+    /// are exactly the layers the rule would be installed on without an address.
+    #[test]
+    fn a_remote_address_narrows_the_layers_to_its_family() {
+        let v4: Cidr = "192.168.1.0/24".parse().expect("parse a v4 network");
+        let v6: Cidr = "fe80::/10".parse().expect("parse a v6 network");
+
+        assert_eq!(
+            layers_for(None, Some(v4.family)),
+            vec![LAYERS[0], LAYERS[2]]
+        );
+        assert_eq!(
+            layers_for(None, Some(v6.family)),
+            vec![LAYERS[1], LAYERS[3]]
+        );
+        assert_eq!(
+            layers_for(Some(Direction::In), Some(v4.family)),
+            vec![LAYERS[2]]
+        );
+        assert_eq!(
+            layers_for(Some(Direction::Out), Some(v6.family)),
+            vec![LAYERS[1]]
+        );
+
+        // Both families together are the unaddressed case again, so nothing is lost.
+        let mut both = layers_for(None, Some(v4.family));
+        both.extend(layers_for(None, Some(v6.family)));
+        assert_eq!(both.len(), LAYERS.len());
     }
 
     /// The port a user means is the remote one on the way out and the local one on the way in.
@@ -1159,6 +1262,46 @@ mod tests {
                 cleared, 2,
                 "port '{port}': a narrowed rule leaves nothing on the other layers",
             );
+        }
+    }
+
+    /// A remote address is installed as a real condition on the layers of its family only. This
+    /// is what exercises the pointer WFP keeps to the address-and-mask struct, which is the same
+    /// trap the port range is: an `Option` there is a pointer to the wrong thing.
+    #[test]
+    fn a_remote_address_is_installed_on_the_layers_of_its_family() {
+        let engine = Engine::open().expect("open engine");
+
+        match engine.clear() {
+            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
+            Err(error) => {
+                let reason = format!("{error:#}");
+                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
+                println!("write path skipped, access denied");
+                return;
+            }
+        }
+
+        for address in ["192.168.1.0/24", "10.0.0.5", "fe80::/10", "2001:db8::1/64"] {
+            let rules = RuleFile {
+                rule: vec![Rule {
+                    remote: Some(address.parse().expect("parse an address")),
+                    ..Rule::plain("winfw-mcp address test", Action::Deny, TEST_APP)
+                }],
+            };
+
+            let applied = engine
+                .apply(&rules, &[], Policy::Allow)
+                .expect("apply the addressed rule");
+
+            assert_eq!(
+                applied.installed, 2,
+                "'{address}': an address narrows four layers to the two of its family",
+            );
+
+            let cleared = engine.clear().expect("clear the store");
+
+            assert_eq!(cleared, 2, "'{address}': nothing is left behind");
         }
     }
 

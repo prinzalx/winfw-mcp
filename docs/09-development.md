@@ -71,6 +71,7 @@ their own.
 | 0.12.0 | `default_policy` in `config.toml`: `deny` installs the base block plus the loopback, 6to4 and ICMPv6 permits, so an application no rule mentions is denied |
 | 0.13.0 | Settings became writable: `POST /api/settings` and the MCP tool `settings.set` change `learn_mode` and `default_policy` on a running process, write `config.toml`, and rebuild the store; the page header shows both as clickable toggles, and an unknown field is refused rather than ignored. CI runs the tests single-threaded, which is what the two live-store tests always needed |
 | 0.14.0 | Rules gained three optional dimensions: `protocol` (`tcp`/`udp`), `direction` (`in`/`out`) and `port` (a single port or a range such as `1024-2048`). They are real conditions rather than labels — direction picks the layers a rule is installed on, protocol and port become WFP filter conditions — and they travel through the file, the page, the HTTP API, Share/Import and MCP. A value the server cannot read is refused instead of quietly meaning "any" |
+| 0.15.0 | Rules gained the fourth dimension, `remote`: an address or network such as `10.0.0.5` or `192.168.1.0/24`, in either family. Host bits are dropped while it is read, so the file holds the network the filter matches, and it narrows the layers to its own address family on top of what `direction` picked. It is a real `FWPM_CONDITION_IP_REMOTE_ADDRESS` condition with an address-and-mask, and it travels through the file, the page, the HTTP API, Share/Import and MCP like the other three |
 
 ---
 

@@ -47,7 +47,7 @@ Kept as asked, with the two audits now folded in below.
 | 4 | Rules and their storage are fragile around escaping | partly answered — see §4.4 |
 | 5 | Systray needs a logo, and so does the executable | open |
 | 6 | Does quit keep the firewall rules? | **answered: yes.** Filters are added with `FWPM_FILTER_FLAG_PERSISTENT` (`src/wfp.rs:484`) and outlive the process; `--clear` removes them. The reference behaves the same way. |
-| 7 | A new destination for an already allowed application must be noticed | open — this is §4.2, the biggest model gap |
+| 7 | A new destination for an already allowed application must be noticed | open — the rule can now *express* a destination (0.15.0); noticing one is still the detector's job, see §4.2 |
 | 8 | Entries for attempted accesses that were blocked, and for accesses with no allow | partly — see §4.3 |
 | 9 | Is an application in neither list therefore denied? | **answered: not by us** — see §4.1 |
 
@@ -181,19 +181,25 @@ an OS-version gate. Ours was `name`, `action`, `pattern`, `enabled`, and the onl
 set is `FWPM_CONDITION_ALE_APP_ID`.
 
 **Closed in 0.14.0:** protocol (TCP/UDP), direction (in/out, which picks the layers) and port
-(single or range). Still missing:
+(single or range). **Closed in 0.15.0:** the remote address with a CIDR prefix, and with it the
+address family, which an address decides for itself. Still missing:
 
 - **Protocol by number.** Only TCP and UDP are offered; the reference also takes a number, which is
   how a rule about ESP or GRE would be written.
-- **Address family.** We always install for both IPv4 and IPv6.
-- **Remote address**, with CIDR prefix and ranges — this is the per-destination dimension the
+- ~~**Address family.** We always install for both IPv4 and IPv6.~~ — done in 0.15.0, as a
+  consequence of the remote address: a rule with a v4 address is installed on the v4 layers only.
+  A rule **without** an address still goes on both families, which is right.
+- ~~**Remote address**, with CIDR prefix and ranges — this is the per-destination dimension the
   original list asks about in item 7, and it is the largest dimension left. It needs
-  `FWP_V4_ADDR_AND_MASK`/`FWP_V6_ADDR_AND_MASK`, which the crate exports.
+  `FWP_V4_ADDR_AND_MASK`/`FWP_V6_ADDR_AND_MASK`, which the crate exports.~~ — done in 0.15.0,
+  except **address ranges** (`10.0.0.1` to `10.0.0.9`), which the reference supports through a
+  `FWP_RANGE_TYPE` of `FWP_UINT32` or `FWP_BYTE_ARRAY16_TYPE`. Our `remote` takes one address or
+  one prefix, which covers the common case.
 - **Local address** as a separate dimension.
 - ~~**Ports and port ranges** (`80`, `1024-2048`)~~ — done in 0.14.0.
-- **Multi-valued** remote and local lists inside one rule. Our three new fields are single-valued:
-  one protocol, one direction, one port range. A rule that wants TCP *and* UDP simply leaves the
-  field out, and two ports that are not contiguous need two rules.
+- **Multi-valued** remote and local lists inside one rule. Our four narrowing fields are
+  single-valued: one protocol, one direction, one port range, one address. A rule that wants TCP
+  *and* UDP simply leaves the field out, and two ports that are not contiguous need two rules.
 - **Comment** on a rule and on an application.
 - **Rule class / group** (blocklist, system, user), which also decides the weight, and a separate
   overlay table so a stock rule can be toggled without editing it.
@@ -298,9 +304,11 @@ Roughly by how much they cost to change later:
    loopback permits and the IPv6 permits are installed when `default_policy = "deny"`. What is left of
    the item was making the policy changeable at runtime, which 0.13.0 closed with the settings write
    path.
-2. **Remote destination and address family** (§4.2) — protocol, direction and port are done in
-   0.14.0; the destination address is what is left of the rule shape, and item 7 of the original
-   list cannot be answered without it.
+2. ~~**Remote destination and address family** (§4.2)~~ — protocol, direction and port are done in
+   0.14.0 and the destination address with it in 0.15.0, so the rule shape is complete for the
+   common case. What is left of the item is item 7 of the original list: noticing that an
+   application already allowed to one network reached a different one, which needs the detector to
+   look at destinations rather than only at applications.
 3. **Which filter decided an event** (§4.3) — without provider attribution no honest "blocked by rule
    X" view is possible.
 4. ~~**A settings write path** (§3.2)~~ — done in 0.13.0 for the two settings that matter at runtime.
@@ -331,8 +339,8 @@ on the spot.
 
 ## 8. Rule-dimension round notes (2026-11-01)
 
-Found while protocol, direction and port were built. The first is a live bug class worth keeping in
-mind for the address dimension, which needs two more pointer conditions.
+Found while protocol, direction and port were built. The first is a live bug class, and it did
+recur one round later, when the address conditions arrived (§9).
 
 - **A pointer condition has to point at the value, not at an `Option` of it.** WFP keeps a pointer
   for `FWP_RANGE_TYPE` rather than a copy. Handing it `&raw const` of an `Option<FWP_RANGE0>` — the
@@ -345,3 +353,27 @@ mind for the address dimension, which needs two more pointer conditions.
 - **Running several `cargo test` processes at once breaks the live-store tests.** Each process is
   single-threaded, but they share one WFP store, so the filter counts interfere and the run goes
   red on tests that pass on their own. One cargo process at a time, always.
+
+## 9. Remote-address round notes (2026-11-01)
+
+Found while the remote address was built. They confirm what §8 warned about and add one point of
+their own.
+
+- **The pointer trap was real for addresses too, and the same fix applies.** The two address
+  conditions are pointer conditions, and a rule carries one address in one of two families, so an
+  `Option` of each would be two `Option`s where one is empty. Building an enum of the two structs
+  and taking the address of the matched inner value keeps the pointer aimed at the struct; the live
+  test installs a v4 and a v6 address through the real store to hold that.
+- **A v4 address is a big-endian `u32` to WFP, a v6 address is a prefix length.** `FWP_V4_ADDR_AND_MASK`
+  wants address and mask as `u32` read most significant octet first, which is what the reference
+  gets by byte-swapping the `IN_ADDR` (`helper.c:1291`). `FWP_V6_ADDR_AND_MASK` takes the sixteen
+  octets and the prefix as-is. Anyone extending this should not assume the two are shaped alike.
+- **Normalising the host bits while reading is what keeps the file honest.** `10.0.0.5/24` is stored
+  as `10.0.0.0/24`, so a rule file always shows the network the filter matches rather than whatever
+  the user typed. A test asserts this for both families.
+- **A hostname is not an address, and nothing resolves one.** The reference does not resolve names
+  in a filter either, so `remote` refuses `example.com`. If name rules are ever wanted, they are a
+  layer of their own on top of the address, not a WFP condition.
+- **Address ranges are the remaining gap in the dimension** (§4.2). A prefix cannot express
+  `10.0.0.1` to `10.0.0.9`; the reference does it with a `FWP_RANGE_TYPE` of `FWP_UINT32`. The
+  port dimension already proves that shape here.

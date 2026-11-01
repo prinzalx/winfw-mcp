@@ -7,7 +7,7 @@ enabled. Rules live in `rules.toml` in the order they were written, and that ord
 
 ## Narrowing a rule
 
-Beyond the application, a rule can be narrowed by three optional fields. A rule that names none of
+Beyond the application, a rule can be narrowed by four optional fields. A rule that names none of
 them is about all of them, which is every rule written before these fields existed.
 
 | Field | Values | Meaning |
@@ -15,6 +15,7 @@ them is about all of them, which is every rule written before these fields exist
 | `protocol` | `"tcp"`, `"udp"` | the transport the connection uses |
 | `direction` | `"in"`, `"out"` | which way the connection goes |
 | `port` | `"443"`, `"1024-2048"` | one port, or an inclusive range of them |
+| `remote` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"fe80::/10"` | the address the connection goes to |
 
 ```toml
 [[rule]]
@@ -25,16 +26,40 @@ enabled = true
 protocol = "tcp"
 direction = "out"
 port = "1024-2048"
+remote = "192.168.1.0/24"
 ```
 
-All three are written in the file, read back from it, shown in the page and accepted over both the
+All four are written in the file, read back from it, shown in the page and accepted over both the
 HTTP API and MCP. A value the server cannot read is refused rather than ignored, so `port = "http"`
 bounces instead of silently turning into "every port".
 
 The narrowing is real, not cosmetic. `direction` decides which layers the rule is installed on, and
-`protocol` and `port` become conditions on the filter, so a narrowed rule leaves other connections
-alone rather than deciding them. Details in
+`protocol`, `port` and `remote` become conditions on the filter, so a narrowed rule leaves other
+connections alone rather than deciding them. Details in
 [WFP internals](07-wfp-internals.md#the-layers-a-rule-is-installed-on).
+
+## Writing a remote address
+
+`remote` is one address or one network in either family, written the way networks are written
+everywhere else:
+
+| Written | Read as |
+|---|---|
+| `10.0.0.5` | `10.0.0.5/32`, one host |
+| `192.168.1.0/24` | that network |
+| `10.0.0.5/24` | `10.0.0.0/24` |
+| `fe80::/10` | an IPv6 network |
+| `::/0` | every IPv6 address |
+
+A bare address is a prefix as wide as its family, so it names one host. Host bits are dropped while
+the text is read, which is why `10.0.0.5/24` is stored and shown as `10.0.0.0/24`: what is in the
+file is exactly the network the filter matches. A prefix longer than the family (`10.0.0.5/33`,
+`::/129`) is refused, and so is text that is not an address at all. A hostname such as
+`example.com` is not an address; resolving names is not something WFP does for a filter condition,
+so a name would have to be turned into an address by hand.
+
+Because an IPv4 address can never match on an IPv6 layer and the other way round, an address also
+narrows the layers the rule is installed on, exactly as `direction` does.
 
 A port is matched on the side of the connection it is about: the remote port on the way out, the
 local port on the way in. "Port 443" therefore means the same thing in both directions, which is
