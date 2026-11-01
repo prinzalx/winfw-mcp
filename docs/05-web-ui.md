@@ -73,7 +73,8 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 Export answers which files it copied and where, which is the manual backup path: every area can be
 copied into `export\` on demand. Import is deliberately narrow — it appends the one rule a share
 string carries, rather than replacing anything, so pasting a string cannot silently discard a rule
-set.
+set. An agent needs no page for the read direction: the MCP `rules.decode` tool answers with the
+rule a string carries, and appends it only when asked to with `add`.
 
 ## Stopping the page's server
 

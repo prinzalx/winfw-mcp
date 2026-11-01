@@ -89,8 +89,10 @@ Kept as asked, with the two audits now folded in below.
 - **Import appends one shared rule; it does not replace.** PLAN.md §2 describes import as "replace what
   you have" and defers it. What exists is `POST /api/rules/import` appending one Base64-decoded rule.
   There is no way to load a whole exported rules file back in.
-- **No decode direction over MCP.** `rules.share` encodes; a client cannot decode a share string
-  because no import tool is exposed.
+- ~~**No decode direction over MCP.**~~ — closed in 0.29.0. `rules.decode` reads a share string back
+  and writes it only when the caller asks with `add`, so the read stays available under the default
+  `mcp_writes = none`. What is left is the whole-file import two bullets above, which one rule at a
+  time does not settle.
 - ~~**No generation kept of a rules file.**~~ — closed in 0.24.0. Every rule-file write copies the
   file that was there to `<name>.bak` first, and a file that cannot be parsed at startup falls back
   to it with a warning rather than failing to start. What the backup cannot cover is a file that
@@ -124,11 +126,15 @@ Kept as asked, with the two audits now folded in below.
 
 - **The write gate is not in the core.** PLAN.md §10 wants it enforced below the transport. It lives
   inside `mcp_tool` in `server.rs`, and a comment there claims the opposite of what the code does.
-- **`mcp_writes = "rules"` promises add, edit, remove and reorder; only add exists.**
+- ~~**`mcp_writes = "rules"` promises add, edit, remove and reorder; only add exists.**~~ — remove
+  landed in 0.29.0 as `rules.remove`, which takes an index because an index is the only handle an
+  agent has on a rule it did not write. Edit and reorder are still open, and both need an argument
+  story: which fields an agent may widen is a policy question rather than a transport one.
 - **`mcp_writes = "all"` promises flipping settings and switching profiles; only profiles work**
   (see §3.2).
-- **An MCP `rules.allow` of a Detected entry leaves the entry in the list.** Only the HTTP route
-  dismisses, so milestone 9's exit test is met only from the browser.
+- ~~**An MCP `rules.allow` of a Detected entry leaves the entry in the list.**~~ — closed in 0.29.0.
+  Only the HTTP route dismissed, so milestone 9's exit test was met only from the browser; the two
+  tools now follow the same rule, dismissal after the store accepted the rule and not before.
 - **No protection against a write race.** No generation counter exists; every write is a full rebuild
   and the last writer wins silently. PLAN.md §10 asked for this before the MCP endpoint shipped.
 
@@ -608,3 +614,32 @@ Found while 0.28.0 ("create, rename and delete a profile from the browser") was 
   would have left the backup behind with the old name inside it.
 - **The backup travels with the file.** Every delete removes the backup path too, because a stale
   backup for a profile that no longer exists can only ever confuse the next import.
+
+## 20. MCP rule editing round notes (2026-11-01)
+
+Found while 0.29.0 ("an agent can edit the rule list") was built.
+
+- **An index is the only handle an agent has.** A rule the agent did not write has no name it can
+  trust — the UI's default `new rule` repeats, and a rule it wrote itself may have been renamed by
+  hand — so `rules.remove` takes the index `rules.list` reported. An index past the end is refused by
+  name rather than answered with a no-op, because the usual cause is a list the agent read before
+  something else changed it.
+- **Removing has to reach the file, not only the store.** The rules are the source of truth and the
+  store is derived from them, so the tool saves first and rebuilds after, exactly as the browser's
+  route does. Rebuilding without writing would have undone itself on the next start.
+- **A share string needed the other direction before it was a feature.** `rules.share` could encode
+  since 0.12.0 and nothing over MCP could read one back, so an agent could hand a rule out but not
+  take one in. `rules.decode` answers with the rule and writes nothing unless told to with `add`,
+  which keeps the read usable under the default `mcp_writes = none`.
+- **Decoding validates on the way in.** Base64 around JSON is a format a human edits by hand, so the
+  pattern is checked before the write rather than after, and a share string holding `not-a-path` is
+  refused like any other bad argument.
+- **Dismissal was the asymmetry, not the rule.** Both paths could already append a rule; only the
+  browser took the entry off the Detected list, so a decision made by an agent left work behind that
+  a human then had to clear. Both now follow the same rule, and it is the one the store decides:
+  dismissal happens only once the write is accepted, so an unelevated run leaves the entry visible
+  instead of pretending the decision was lost.
+- **The comparison is exact on purpose.** A Detected entry carries the application in device form and
+  the destination as the text the event reported, so `rules.allow` dismisses against the arguments it
+  was given rather than against a normalised copy, and an agent that passes what `detected.list`
+  reported clears exactly one entry.

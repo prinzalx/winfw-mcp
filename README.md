@@ -63,12 +63,16 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.28.0**, in which profiles are managed where they are used: `New` copies
-the rules on screen into a new profile and switches to it, `Rename` moves the file and its backup,
-and `Delete` takes both out and falls back to `rules.toml` when the profile it removed was the live
-one ([rules and profiles](docs/03-rules-and-profiles.md#profiles)).
+The current release is **0.29.0**, in which an agent can edit the rule list instead of only
+lengthening it: `rules.remove` takes the rule at an index out of the file and rebuilds the store,
+`rules.decode` reads a Base64 share string back and appends it only when told to with `add`, and
+`rules.allow` / `rules.deny` dismiss the Detected entry they decided — which the browser had always
+done and the endpoint had not ([the MCP endpoint](docs/06-mcp-endpoint.md)).
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
+profiles became manageable from the browser in **0.28.0**, where `New` copies the rules on screen
+into the new file and `Delete` falls back to `rules.toml` when it removes the live one
+([rules and profiles](docs/03-rules-and-profiles.md#profiles));
 the connection list learned to explain itself in **0.27.0**, reporting the state of the event feed
 next to the list so an empty panel says whether the machine was quiet or the subscription never
 opened; the log learned to rotate in **0.26.0**, so every line reaches `logs\winfw-mcp.log` and the

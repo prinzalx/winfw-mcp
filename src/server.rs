@@ -25,6 +25,9 @@
 //! | POST | `/api/export` | copy rules, config and the Detected list into `export\` |
 //! | POST | `/api/rules/share` | one rule as a Base64 string, for copy and paste |
 //! | POST | `/api/rules/import` | append the rule a Base64 string carries |
+//! | POST | `/api/profiles/create` | create a profile from the current rules and switch to it |
+//! | POST | `/api/profiles/rename` | rename a profile, keeping it live when it was live |
+//! | POST | `/api/profiles/delete` | remove a profile, falling back to the default rules |
 //! | POST | `/mcp` | JSON-RPC 2.0 for an MCP client: see `crate::mcp` |
 //!
 //! ## Threading
@@ -1054,12 +1057,20 @@ fn tool_list() -> Vec<serde_json::Value> {
         ),
         ("rules.share", "one rule as a Base64 string; takes an index"),
         (
+            "rules.decode",
+            "read a Base64 share string back; takes share, and add to append the rule",
+        ),
+        (
             "rules.allow",
             "append an allow rule; takes app, pattern, name, protocol, direction, port, remote",
         ),
         (
             "rules.deny",
             "append a deny rule; takes app, pattern, name, protocol, direction, port, remote",
+        ),
+        (
+            "rules.remove",
+            "remove the rule at an index, write the file, rebuild the store",
         ),
         (
             "detected.list",
@@ -1096,6 +1107,8 @@ fn tool_list() -> Vec<serde_json::Value> {
                 "type": "object",
                 "properties": {
                     "index": { "type": "integer" },
+                    "share": { "type": "string" },
+                    "add": { "type": "boolean" },
                     "app": { "type": "string" },
                     "pattern": { "type": "string" },
                     "name": { "type": "string" },
@@ -1269,7 +1282,10 @@ fn mcp_tool(
             };
 
             // A remote address is written the way the file writes it, and only as text: a number
-            // has no prefix to tell v4 from v6.
+            // has no prefix to tell v4 from v6. The text is kept as it was given, because that is
+            // what a Detected entry carries and dismissal compares against exactly that.
+            let remote_text = call.string_arg("remote");
+
             let remote = match call.arg("remote") {
                 Some(serde_json::Value::String(text)) => Some(
                     text.parse::<Cidr>()
@@ -1308,8 +1324,129 @@ fn mcp_tool(
                 })
                 .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
 
+            // The entry the agent decided on leaves the Detected list with the rule, which is what
+            // makes `rules.allow` over MCP the same decision the page makes rather than a rule on
+            // top of a list nobody clears. The same rule the browser's route follows: only a store
+            // that took the rule takes the entry off, so a refused write leaves the decision
+            // visible. The remote text is compared as it was given, because that is the form a
+            // Detected entry carries.
+            let dismissed = outcome.ok
+                && state
+                    .detector
+                    .dismiss(&app, remote_text.as_deref())
+                    .unwrap_or(false);
+
             Ok(mcp::tool_json(serde_json::json!({
                 "added": { "name": name, "action": action, "app": app },
+                "dismissed": dismissed,
+                "installed": outcome.installed,
+                "store": outcome.ok,
+            })))
+        }
+        "rules.remove" => {
+            if state.settings.mcp_writes == Writes::None {
+                return Ok(mcp::tool_refusal(
+                    "rules.remove refused: mcp_writes is none",
+                ));
+            }
+
+            let index = call.arg("index").and_then(|value| value.as_u64()).ok_or((
+                mcp::INVALID_PARAMS,
+                "rules.remove needs an index".to_owned(),
+            ))? as usize;
+
+            let (applied, removed) = {
+                let mut current = state.rules.lock().expect("rules lock poisoned");
+
+                if index >= current.rule.len() {
+                    return Err((
+                        mcp::INVALID_PARAMS,
+                        format!("there is no rule at index {index}"),
+                    ));
+                }
+
+                let removed = current.rule.remove(index).name;
+
+                current
+                    .save(&state.rules_path())
+                    .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+
+                (current.clone(), removed)
+            };
+
+            let outcome = worker
+                .ask(StoreWork::Apply {
+                    rules: applied,
+                    known: state.detector.apps(),
+                    policy: state.policy(),
+                })
+                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+
+            Ok(mcp::tool_json(serde_json::json!({
+                "removed": removed,
+                "installed": outcome.installed,
+                "store": outcome.ok,
+            })))
+        }
+        "rules.decode" => {
+            let share = call
+                .string_arg("share")
+                .filter(|text| !text.trim().is_empty())
+                .ok_or((
+                    mcp::INVALID_PARAMS,
+                    "rules.decode needs a share string".to_owned(),
+                ))?;
+
+            let rule = export::decode(&share)
+                .map_err(|error| (mcp::INVALID_PARAMS, format!("{error:#}")))?;
+
+            // Validated before anything is written. A share string is Base64 around JSON a human
+            // may have edited, and a pattern the file cannot hold must not reach the store.
+            validate_pattern(&rule.pattern)
+                .map_err(|error| (mcp::INVALID_PARAMS, format!("{error:#}")))?;
+
+            if !call
+                .arg("add")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                return Ok(mcp::tool_json(
+                    serde_json::to_value(rule)
+                        .map_err(|error| (mcp::REFUSED, error.to_string()))?,
+                ));
+            }
+
+            if state.settings.mcp_writes == Writes::None {
+                return Ok(mcp::tool_refusal(
+                    "rules.decode refused: mcp_writes is none",
+                ));
+            }
+
+            let name = rule.name.clone();
+            let action = rule.action;
+
+            let applied = {
+                let mut current = state.rules.lock().expect("rules lock poisoned");
+
+                current.rule.push(rule);
+
+                current
+                    .save(&state.rules_path())
+                    .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+
+                current.clone()
+            };
+
+            let outcome = worker
+                .ask(StoreWork::Apply {
+                    rules: applied,
+                    known: state.detector.apps(),
+                    policy: state.policy(),
+                })
+                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+
+            Ok(mcp::tool_json(serde_json::json!({
+                "added": { "name": name, "action": action },
                 "installed": outcome.installed,
                 "store": outcome.ok,
             })))
@@ -1997,6 +2134,49 @@ mod tests {
         )
     }
 
+    /// The same rules a page holds, but with the write permission the rule tools ask for, which
+    /// the default does not give them.
+    fn writable_state() -> AppState {
+        let scratch = crate::testutil::scratch_dir("server-write");
+        let paths = DataPaths::under(scratch.join("data"));
+
+        paths.ensure().expect("create the data directories");
+
+        let detector = Detector::load(&paths.learn).expect("load the detected list");
+
+        let active_file = paths.rules.clone();
+
+        AppState::new(
+            paths,
+            Settings {
+                mcp_writes: Writes::Rules,
+                ..Settings::default()
+            },
+            Arc::new(Mutex::new(RuleFile {
+                rule: vec![Rule::plain(
+                    "browser",
+                    crate::rules::Action::Allow,
+                    "C:\\Program Files\\*\\browser.exe",
+                )],
+            })),
+            Arc::new(detector),
+            Arc::new(EventLog::new()),
+            Arc::new(Live::default()),
+            active_file,
+            String::new(),
+        )
+    }
+
+    /// Whether the store accepted what a tool just wrote. A tool nests its own answer under
+    /// `structuredContent`, so the flag sits one level deeper than it does in a state body.
+    fn tool_store_accepted(body: &str) -> bool {
+        serde_json::from_str::<serde_json::Value>(body)
+            .expect("a tool body is JSON")
+            .pointer("/structuredContent/store")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
     /// Whether the store accepted the work a route just did. Only an accepted write takes an entry
     /// off the Detected list, and an unelevated run is refused by the store, which is a fact about
     /// the machine rather than about the code. The store tests cover the accepted case.
@@ -2639,7 +2819,228 @@ mod tests {
         );
         assert!(
             body.contains("structuredContent"),
-            "the tool itself answered: {body}"
+            "the tool itself answered: {body}",
+        );
+    }
+
+    /// An index is the only handle an agent has on an existing rule, so removing by index has to
+    /// reach the file: cleanup over MCP is otherwise impossible.
+    #[test]
+    fn a_rule_is_removed_by_index_over_mcp() {
+        let server_state = writable_state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                br#"{"jsonrpc":"2.0","id":1,"method":"rules.remove","params":{"index":0}}"#
+                    .to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains("\"removed\":\"browser\""),
+            "the tool names what it removed: {body}",
+        );
+
+        let written = std::fs::read_to_string(&server_state.paths.rules).expect("rules.toml");
+
+        assert!(
+            !written.contains("browser.exe"),
+            "the removed rule is gone from the file: {written}",
+        );
+    }
+
+    /// An index past the end is a wrong argument rather than a silent no-op, because an agent that
+    /// counted rules from an older `rules.list` needs to hear that its picture was stale.
+    #[test]
+    fn removing_a_rule_that_is_not_there_names_the_index() {
+        let server_state = writable_state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                br#"{"jsonrpc":"2.0","id":1,"method":"rules.remove","params":{"index":5}}"#
+                    .to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains("there is no rule at index 5"),
+            "a stale index is refused by name: {body}",
+        );
+    }
+
+    /// The write gate covers the new verbs as much as the old ones, and by default an agent may
+    /// read everything and write nothing.
+    #[test]
+    fn an_mcp_rule_write_is_refused_when_the_gate_is_none() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                br#"{"jsonrpc":"2.0","id":1,"method":"rules.remove","params":{"index":0}}"#
+                    .to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains("rules.remove refused: mcp_writes is none"),
+            "the gate has to name itself: {body}",
+        );
+    }
+
+    /// Milestone 9's exit test was that an MCP client can allow a Detected entry, and until now the
+    /// entry stayed on the list over MCP while the browser dismissed it.
+    #[test]
+    fn an_allow_over_mcp_dismisses_the_detected_entry() {
+        let server_state = writable_state();
+        let worker = WfpWorker::start();
+
+        let app = "\\device\\harddiskvolume3\\windows\\system32\\thing.exe";
+
+        server_state
+            .detector
+            .observe(&connection(app), &RuleFile::default());
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "rules.allow",
+                    "params": { "app": app },
+                })
+                .to_string()
+                .into_bytes(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains("structuredContent"),
+            "the tool answered: {body}",
+        );
+
+        let left = server_state
+            .detector
+            .snapshot()
+            .iter()
+            .any(|entry| entry.app.contains("thing.exe"));
+
+        assert_eq!(
+            left,
+            !tool_store_accepted(&body),
+            "a decided entry leaves the Detected list only when the store accepted the rule",
+        );
+    }
+
+    /// A share string is only half a feature while nothing can read it back, which is what an
+    /// agent pasting a rule from another machine needs.
+    #[test]
+    fn a_share_string_decodes_back_into_a_rule_without_writing() {
+        let server_state = writable_state();
+        let worker = WfpWorker::start();
+
+        let share = export::encode(&Rule::plain(
+            "shared",
+            crate::rules::Action::Deny,
+            "C:\\Tools\\shared.exe",
+        ))
+        .expect("encode a rule");
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                format!(
+                    r#"{{"jsonrpc":"2.0","id":1,"method":"rules.decode","params":{{"share":"{share}"}}}}"#,
+                )
+                .into_bytes(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains("shared.exe"),
+            "the decoded rule comes back: {body}",
+        );
+        assert!(
+            !std::fs::read_to_string(&server_state.paths.rules)
+                .unwrap_or_default()
+                .contains("shared.exe"),
+            "reading a share string must not write a file",
+        );
+    }
+
+    /// With `add` the same call becomes the import direction, and the rule already in the file has
+    /// to survive it: an import that replaces is a decision of its own (BACKLOG.md 3.3).
+    #[test]
+    fn a_share_string_can_be_added_to_the_rules() {
+        let server_state = writable_state();
+        let worker = WfpWorker::start();
+
+        let share = export::encode(&Rule::plain(
+            "shared",
+            crate::rules::Action::Deny,
+            "C:\\Tools\\shared.exe",
+        ))
+        .expect("encode a rule");
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                format!(
+                    r#"{{"jsonrpc":"2.0","id":1,"method":"rules.decode","params":{{"share":"{share}","add":true}}}}"#,
+                )
+                .into_bytes(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains("shared"), "the tool answered: {body}");
+
+        let written = std::fs::read_to_string(&server_state.paths.rules).expect("rules.toml");
+
+        assert!(
+            written.contains("shared.exe") && written.contains("browser.exe"),
+            "the shared rule is appended to what was there: {written}",
         );
     }
 

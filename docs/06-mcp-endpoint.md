@@ -16,8 +16,10 @@ client that asks for anything else is told so rather than silently ignored.
 | `status` | settings, rule count, store health, the state of the event feed, how much the endpoint may write | no |
 | `rules.list` | every rule, in file order | no |
 | `rules.share` | one rule as a Base64 string (takes `index`) | no |
-| `rules.allow` | add an allow rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`, `remote`) | yes |
-| `rules.deny` | add a deny rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`, `remote`) | yes |
+| `rules.decode` | read a Base64 share string back (takes `share`; with `add` the rule is appended) | no, yes with `add` |
+| `rules.allow` | add an allow rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`, `remote`), and dismiss the Detected entry it decides | yes |
+| `rules.deny` | add a deny rule, dismissing the Detected entry it decides (same arguments) | yes |
+| `rules.remove` | remove the rule at an index, write the file, rebuild the store (takes `index`) | yes |
 | `detected.list` | what learning mode collected | no |
 | `events.list` | recent connection events, each naming both endpoints, whether the traffic left the machine, and the deciding filter id and rule | no |
 | `export` | copy an area (`rules`, `config`, `detected`, `all`) into `export\` | yes |
@@ -25,6 +27,16 @@ client that asks for anything else is told so rather than silently ignored.
 | `profile.use` | switch the live profile (takes `name`) | yes |
 | `settings.set` | change `learn_mode` or `default_policy` (takes either, both optional) | yes |
 | `shutdown` | stop the process; the filters stay in the firewall | yes |
+
+`rules.share` and `rules.decode` are the two directions of one string, which is how a rule travels
+between machines without the browser: `share` on one host, `decode` with `add` on the other. Without
+`add` a decode writes nothing, so it stays usable under the default `mcp_writes = none`, and the
+pattern it carries is validated before anything is written — a share string is Base64 around JSON a
+human may have edited.
+
+`rules.allow` and `rules.deny` take an application an agent read from `detected.list` and take it
+off that list once the store accepted the rule, which is what the browser has always done. An entry
+the store refused stays visible, so a decision nothing acted on is not lost silently.
 
 ## Who may write
 

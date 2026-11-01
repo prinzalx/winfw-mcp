@@ -119,6 +119,10 @@ One rule can be turned into a Base64 string (`POST /api/rules/share`) and pasted
 `POST /api/rules/import` appends the rule such a string carries. This is the manual backup path for
 a single rule, next to the export of a whole area.
 
+An agent reads such a string back with the MCP `rules.decode` tool, which takes `share` and answers
+with the rule. Given `add` it writes as well, and then the pattern is validated first, because a
+share string an agent pastes is Base64 around JSON a human may have edited.
+
 ## Profiles
 
 A profile is a file, not a table. The active profile is a name in `config.toml`, and its rules are
