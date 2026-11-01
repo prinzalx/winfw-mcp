@@ -95,6 +95,12 @@ string of a rule. To change anything it must ask the human, who uses the page. T
 design: the read side is automatable, and the write side keeps a person in it until there is a reason
 to say otherwise about a specific group of services and targets.
 
+One consequence of **0.37.0** belongs here, because it is a fact about what an agent can see rather
+than about what it may do. The connection feed holds only traffic that left the machine, so an agent
+looking for itself in `events.list` will not find its own requests to this tool's web server: they
+were loopback, and they are gone before the log. The agent's connections are the ones it does not
+have to explain to the firewall.
+
 ---
 
 Previous: [9. Development](09-development.md) · Back to the [index](../README.md)

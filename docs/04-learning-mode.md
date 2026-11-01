@@ -38,10 +38,11 @@ A dismissed entry is only removed after the store accepted the write. A refused 
 entry on the list so the user can try again, which is why an unelevated run appears to ignore a
 decision rather than reporting it as broken.
 
-An agent deciding over MCP follows the same rule: `rules.allow` and `rules.deny` dismiss the entry
+An agent deciding over MCP followed the same rule: `rules.allow` and `rules.deny` dismissed the entry
 they turned into a rule, and only once the store took the rule. Before 0.29.0 the browser dismissed
-and the endpoint did not, so the same application came back on the next connection while a human
-was looking at the page.
+and the endpoint did not, so the same application came back on the next connection while a human was
+looking at the page. Since 0.36.0 an agent does not decide at all: it reads `detected.list`, and the
+decision is made on the page.
 
 ## Edit before deciding
 

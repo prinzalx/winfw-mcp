@@ -94,8 +94,9 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | `POST /api/profiles/create` | copy the live rules into a new profile and make it live; a name already taken is refused |
 | `POST /api/profiles/rename` | give a profile another name, taking its backup along; the live profile stays live |
 | `POST /api/profiles/delete` | remove a profile and its backup, falling back to `rules.toml` when it was the live one |
-| `GET /api/events` | the connection feed as a server-sent event stream |
+| `GET /api/events` | the connection feed as a server-sent event stream: the connections that left the machine |
 | `GET /api/health` | liveness, for a supervisor or the MCP transport |
+| `GET /favicon.ico` | the icon in the browser's tab, served from the binary so a request for it does not answer 404 |
 | `POST /mcp` | the Model Context Protocol endpoint (JSON-RPC 2.0) |
 
 ## Who may write
@@ -135,8 +136,9 @@ tell apart in a flat listing; a profiles directory that is still empty exports n
 directory behind. Import has two directions since **0.33.0**. A share string still appends the one
 rule it carries rather than replacing anything, so pasting cannot silently discard a rule set. A
 whole file replaces the list: `Restore` on the page reads the chosen file in the browser and posts
-its text, and the MCP `rules.import` tool takes the same text. What comes back is read by the same
-reader that reads `rules.toml` at startup, so a version this build does not know, a field name it
+its text. Until **0.36.0** the MCP endpoint offered the same thing as `rules.import`, which is gone
+like the other writing tools. What comes back is read by the same reader that reads `rules.toml` at
+startup, so a version this build does not know, a field name it
 does not recognise or a pattern it cannot hold is refused before the file on disk is touched — and
 the generation it replaces is kept as the backup either way. The read direction for a single rule is
 `POST /api/rules/share`, which answers with the Base64 string alone rather than with JSON; the MCP

@@ -52,6 +52,12 @@ the result is never more than two files.
 `RUST_LOG` overrides `log_level` from `config.toml` for a single run. Logging goes to stderr,
 because stdout belongs to the MCP stdio transport.
 
+A key the file does not mention is read as its default, and that has one consequence worth knowing:
+a config written before a key existed never gains it. The file is written on the first run and on a
+settings change, not at every start, so `debug_show_loopback` and `volatile_filters` — neither of
+which the page can write — are only in the file if a version that knew them wrote it. On an install
+that predates them, someone has to type the line to turn the switch on.
+
 ## Rules worth knowing
 
 - **Unknown keys are an error,** not a warning, in both files. A typo in `config.toml` fails loudly

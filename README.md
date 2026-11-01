@@ -28,12 +28,12 @@ The documentation is split into chapters, so that each question has one place to
 | [2. Data and configuration](docs/02-data-and-configuration.md) | the data directory, `config.toml`, log level, atomic writes |
 | [3. Rules and profiles](docs/03-rules-and-profiles.md) | rule order, deny over allow, wildcards, device paths, profiles |
 | [4. Learning mode](docs/04-learning-mode.md) | the Detected list and how an application becomes a rule |
-| [5. The web UI](docs/05-web-ui.md) | the page, what is on it, and every HTTP route |
+| [5. The web UI](docs/05-web-ui.md) | the page, what is on it, which connections it shows, and every HTTP route |
 | [6. The MCP endpoint](docs/06-mcp-endpoint.md) | JSON-RPC methods, the tool list, why the endpoint only reads |
-| [7. WFP internals](docs/07-wfp-internals.md) | elevation, our filters, applying, the event stream, filter attribution, threading |
+| [7. WFP internals](docs/07-wfp-internals.md) | elevation, our filters, applying, the event stream and what it keeps, filter attribution, threading |
 | [8. Lifecycle and tray](docs/08-lifecycle.md) | starting, the tray icon, stopping, what stays behind |
 | [9. Development](docs/09-development.md) | source layout, tests, the release process, version history |
-| [10. Security model](docs/10-security-model.md) | the session token, Host and Origin checks, what is protected and what is not |
+| [10. Security model](docs/10-security-model.md) | the session token, Host and Origin checks, what is protected, what an agent can see and what is not |
 
 Working documents next to this index: [PLAN.md](PLAN.md) is the plan and its rationale,
 [BACKLOG.md](BACKLOG.md) the collected follow-ups and audit findings.
@@ -43,7 +43,8 @@ Working documents next to this index: [PLAN.md](PLAN.md) is the plan and its rat
 Milestones 0 to 10 are all done, and each of them is released. The tool owns its data directory,
 reads its config and rules, reads the live WFP store, translates `rules.toml` into persistent WFP
 filters with deny ranked above allow, and serves a web UI that edits those rules. It follows live
-connections over SSE, and learning mode collects every application no rule speaks about yet in a
+connections over SSE — the ones that leave the machine — and learning mode collects every application
+no rule speaks about yet in a
 Detected list where each entry can be allowed, denied or dismissed from the browser. In a release
 build it runs without a console window and lives as a tray icon. Any area can be copied into
 `export\` on demand, one rule travels as a Base64 string, and an MCP agent talks JSON-RPC to
@@ -64,9 +65,17 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.37.0**, in which the connection views show only traffic that left the
-machine. A connection over a loopback address is now dropped in the monitor before it reaches the
-log, so the list, its counters, the Detected list and MCP cannot disagree about it, while a
+The current release is **0.38.0**, a documentation release: the handbook was walked through end to
+end and the parts the last two releases left behind were corrected. Chapter 3, chapter 4, chapter 5
+and chapter 8 still described MCP tools that were removed in **0.36.0** (`rules.decode`,
+`rules.allow`, `rules.deny`, `rules.import`, `shutdown`) as things an agent can call, which is the
+kind of sentence that makes someone look for a tool that answers `-32601`. Chapter 5's route table
+gained `/favicon.ico`, chapter 10 now says what an agent can and cannot see since **0.37.0**, and the
+index names what each chapter answers.
+
+Before that, **0.37.0** made the connection views show only traffic that left the machine. A
+connection over a loopback address is now dropped in the monitor before it reaches the log, so the
+list, its counters, the Detected list and MCP cannot disagree about it, while a
 destination on the local segment is shown and marked `local network` with a filter of its own
 ([the web UI](docs/05-web-ui.md#connections-worth-showing),
 [WFP internals](docs/07-wfp-internals.md#the-event-stream)).

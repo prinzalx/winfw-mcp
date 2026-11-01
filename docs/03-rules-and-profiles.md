@@ -119,9 +119,10 @@ One rule can be turned into a Base64 string (`POST /api/rules/share`) and pasted
 `POST /api/rules/import` appends the rule such a string carries. This is the manual backup path for
 a single rule, next to the export of a whole area.
 
-An agent reads such a string back with the MCP `rules.decode` tool, which takes `share` and answers
-with the rule. Given `add` it writes as well, and then the pattern is validated first, because a
-share string an agent pastes is Base64 around JSON a human may have edited.
+Reading such a string back is the page's job. Since 0.36.0 the MCP endpoint is read-only, so an agent
+can be handed a share string and can report what the page makes of it, but it cannot decode or append
+one itself. On import the pattern is validated first, because a share string is Base64 around JSON a
+human may have edited.
 
 ## Profiles
 
@@ -130,8 +131,8 @@ one file in `profiles\`. The unnamed default profile keeps using `rules.toml`, s
 earlier version needs no migration.
 
 Switching profiles writes the current rules back to the file they came from before the new one is
-read, so no rule is ever only in memory. Switching is available from the page and over MCP, and the
-choice survives a restart.
+read, so no rule is ever only in memory. Switching is available from the page, and the choice
+survives a restart.
 
 The page can also create, rename and delete a profile. **New** copies the rules on screen into the
 new file and switches to it, on the grounds that a profile started in a browser is meant to be a

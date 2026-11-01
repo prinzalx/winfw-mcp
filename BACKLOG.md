@@ -178,13 +178,17 @@ Kept as asked, with the two audits now folded in below.
   it for exactly that.
 - **The `mcp-template` structure was not carried over**: no contract document, no per-tool smoke
   tests, no skill file, no `tests/` directory.
-- **Doc drift**: `src/server.rs:14-27` route table omits the two profile routes, and `src/export.rs:3`
-  cites PLAN.md section 3 for export when it is section 2.
+- **Doc drift, still open**: the route table in the `src/server.rs` module comment omits
+  `/api/settings`, `/api/profiles`, `/api/profiles/switch` and `/favicon.ico`, all four of which the
+  router answers today. It is fixed together with the move in §28, not before, so the table is not
+  edited twice. The other half of this finding — `src/export.rs:3` citing PLAN.md section 3 for what
+  is section 2 — is closed.
 - **Doc drift, closed in 0.37.0**: chapter 7 still claimed the local endpoint and the loopback marker
   were "still only in the event and not in the log", which stopped being true in 0.25.0.
-- **Doc drift, new in 0.37.0**: chapter 4 describes `rules.allow` and `rules.deny` as things an agent
-  calls over MCP. Both were removed in 0.36.0; the section about deciding still reads correctly for
-  the browser, but the sentence is about an endpoint that can no longer do it.
+- **Doc drift, closed in 0.38.0**: chapter 4 described `rules.allow` and `rules.deny` as things an
+  agent calls over MCP although both were removed in 0.36.0, and chapter 3 still offered an agent
+  `rules.decode` and a profile switch over MCP. The two chapters now say that an agent reads
+  `detected.list` and that a human decides on the page.
 - **`edition = "2024"` is the newest stable edition, not an oversight.** Rust releases an edition every
   three years and each arrives with the toolchain that adopts it, so edition 2027 does not exist for
   `rustc` 1.99.1 yet (it accepts `2015|2018|2021|2024|future`). Migrate deliberately when it lands;
@@ -883,3 +887,37 @@ so the split lands on a clean tree rather than in the middle of a diff.
 - **Not protected by any of this**: the filter checkbox is presentation only and is not stored, so a
   reload shows the local network again. Persisting it in `config.toml` would need it to be a setting
   the page can write, which is the settings write path in §3.2.
+
+## 30. Handbook alignment round notes (2026-11-02)
+
+- **The audit was the handbook read against the code, not a proof-read.** Each claim about what the
+  endpoint answers was compared with `tool_list`, and the route table in chapter 5 with the match
+  arms of `Server::route`. The code was right everywhere; the prose was wrong in five places, and
+  all five were left behind by **0.36.0**, which is what a release that deletes nine tools owes.
+- **Corrected**: chapter 3 no longer hands an agent `rules.decode` or a profile switch, chapter 4
+  puts the Detected decision on the page, chapter 5's import paragraph is past tense about
+  `rules.import` and its route table lists `/favicon.ico` and says which connections
+  `GET /api/events` streams, chapter 8 drops `shutdown` from the MCP tool list, chapter 10 states
+  what an agent can see since **0.37.0**, and the README index rows name the question each chapter
+  answers.
+- **A tool name in the handbook is an API promise**, which is why prose gets its own release. Someone
+  who reads "an agent can call `rules.allow`" sends the request, receives `-32601 method not found`,
+  and cannot tell from the answer whether the endpoint is broken or the sentence is.
+- **New in this round, not drifted**: chapter 2 now says that a config written before a key existed
+  never gains it, because the file is written on the first run and on a settings change rather than
+  at every start. This closes the gap §29 noticed for `debug_show_loopback`; `volatile_filters` has
+  the same property and is named next to it. Verified against `SettingsEdit`, which accepts
+  `learn_mode`, `default_policy`, `theme` and `log_level` and nothing else, so neither key can be
+  written from the page.
+- **Left alone on purpose**: the route table in the `src/server.rs` module comment is still four
+  routes short of the router. It belongs to §28, and correcting it here would edit the same comment
+  twice for no information the reader gains in between.
+- **A flaky test found on the way, fixed in the helper.** `a_missing_file_is_created_with_the_defaults`
+  failed on a run where it had passed before, and the cause was not the config code: `scratch_dir`
+  names its directory after the process id, Windows recycles process ids, and the counter restarts at
+  zero every run, so a run can land on a directory an earlier run left behind — and the helper only
+  called `create_dir_all`, which accepts an existing directory. The directory it landed on held a
+  `config.toml` written by a build from before **0.36.0**, which still wrote `mcp_writes`, so the test
+  read that file instead of creating the defaults and compared `Some("none")` against `None`. The
+  helper now removes the directory first, which is what its own doc comment always claimed. Tests
+  still leave their directory behind to be inspected.

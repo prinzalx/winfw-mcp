@@ -82,7 +82,8 @@ Both routes end the process rather than only the tray thread:
 
 The flag is `AppState::running`. The accept loop waits on it, and after it is cleared the loop waits
 a short grace period so the client that asked for the stop receives its reply before the process
-ends. The MCP endpoint offers the same action as the `shutdown` tool, gated by `mcp_writes`.
+ends. The MCP endpoint no longer offers that action: `shutdown` was a writing tool and was removed
+in **0.36.0**, so an agent cannot stop the process and the page or the tray has to do it.
 
 **Stopping keeps the rules.** The filters we install are persistent and outlive the process, so the
 firewall still enforces what `rules.toml` says after the tool is gone. `--clear` is what takes our
