@@ -63,13 +63,14 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.18.0**, in which a connection event names the rule the firewall blamed
-for its verdict. An event carries the deciding filter's id, which the tool reads back through the
-table of the rebuild that is currently in the store: for one of our filters the page and the API
-report the rule name, and for an id we do not know they report "other" rather than guessing. See
-[WFP internals](docs/07-wfp-internals.md#naming-the-filter-that-decided-an-event).
+The current release is **0.19.0**, in which a connection event says where it went. The remote
+address is read out of the union arm the event's `ipVersion` selects and reported as `remote_addr`
+through the log, the API, the stream and `events.list`, so two connections from one application to
+two networks are no longer the same line. See
+[WFP internals](docs/07-wfp-internals.md#reading-the-destination-an-event-went-to).
 
-The release before, **0.17.0**, gave the tool its own logo: an icon generated into the
-executable, loaded by the tray, read by the shell as version information, and served to the browser
-as the favicon. What is known to be missing or fragile is listed in the
+The release before, **0.18.0**, made an event name the rule the firewall blamed for its verdict:
+the deciding filter's id is read back through the table of the rebuild currently in the store, so
+our filters report their rule name and an id we do not know reports "other" rather than guessing.
+What is known to be missing or fragile is listed in the
 [backlog](BACKLOG.md), ranked in its last section.

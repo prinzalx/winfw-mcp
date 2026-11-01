@@ -31,6 +31,11 @@ pub struct NetEvent {
     pub app: String,
     /// Remote port in host byte order, `0` when the event carried none.
     pub remote_port: u16,
+    /// The remote address in the text form a human reads, empty when the event carried none.
+    ///
+    /// This is what makes a destination visible: two connections from one application to two
+    /// networks are the same application twice in the log and two different destinations.
+    pub remote_addr: String,
     /// IP protocol number: 6 is TCP, 17 is UDP.
     pub protocol: u8,
     /// `false` when the firewall blocked the connection.
@@ -407,6 +412,7 @@ fn listen(
             time_ms: filetime_to_millis(&event.header.timeStamp),
             app: blob_to_string(&event.header.appId),
             remote_port: event.header.remotePort,
+            remote_addr: remote_address(&event.header),
             protocol: event.header.ipProtocol,
             allowed,
             kind: kind.to_string(),
@@ -484,6 +490,33 @@ fn listen(
     let _ = shutdown.recv();
 }
 
+/// The remote end of an event as text.
+///
+/// The address lives in a union selected by `ipVersion`, and the two arms are read differently:
+/// the v4 arm is one `u32` holding the octets in the order WFP stores a filter condition's address
+/// in, and the v6 arm is sixteen bytes in network order. A connectionless event names no version
+/// at all, and then there is no address to report.
+#[cfg(windows)]
+fn remote_address(
+    header: &windows::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_NET_EVENT_HEADER3,
+) -> String {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
+        FWP_IP_VERSION_V4, FWP_IP_VERSION_V6,
+    };
+
+    if header.ipVersion == FWP_IP_VERSION_V4 {
+        // The same conversion the store writes a filter condition with, so what the log shows and
+        // what a rule matches are the same number read the same way.
+        Ipv4Addr::from(unsafe { header.Anonymous2.remoteAddrV4 }).to_string()
+    } else if header.ipVersion == FWP_IP_VERSION_V6 {
+        Ipv6Addr::from(unsafe { header.Anonymous2.remoteAddrV6 }.byteArray16).to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// Milliseconds since the Unix epoch from a `FILETIME`, which counts 100 ns steps since 1601.
 #[cfg(windows)]
 fn filetime_to_millis(value: &windows::Win32::Foundation::FILETIME) -> u64 {
@@ -533,12 +566,37 @@ mod tests {
             time_ms: 0,
             app: app.to_owned(),
             remote_port: 443,
+            remote_addr: String::new(),
             protocol: 6,
             allowed: true,
             kind: "allowed".to_owned(),
             filter_id: 0,
             rule: None,
         }
+    }
+
+    /// The address lives in a union selected by the version, and reading the wrong arm would
+    /// print garbage instead of the destination.
+    #[cfg(windows)]
+    #[test]
+    fn the_remote_address_is_read_out_of_the_arm_the_version_selects() {
+        use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
+            FWP_BYTE_ARRAY16, FWP_IP_VERSION_V4, FWP_IP_VERSION_V6, FWPM_NET_EVENT_HEADER3,
+        };
+
+        let mut header = FWPM_NET_EVENT_HEADER3::default();
+
+        header.ipVersion = FWP_IP_VERSION_V4;
+        header.Anonymous2.remoteAddrV4 = u32::from_be_bytes([93, 184, 216, 34]);
+
+        assert_eq!(remote_address(&header), "93.184.216.34");
+
+        header.ipVersion = FWP_IP_VERSION_V6;
+        header.Anonymous2.remoteAddrV6 = FWP_BYTE_ARRAY16 {
+            byteArray16: [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        };
+
+        assert_eq!(remote_address(&header), "2001:db8::1");
     }
 
     /// The table answers for the ids it holds and for nothing else: a miss is how the monitor

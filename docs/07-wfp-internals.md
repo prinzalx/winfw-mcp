@@ -138,6 +138,19 @@ never collide with a real filter.
 This is the piece the reference gets from comparing the dropping filter's provider key against its
 own; we get the same answer from a table we own, which also covers the permit side of a verdict.
 
+## Reading the destination an event went to
+
+The address is not in the event's own fields but in a union selected by `ipVersion`: the v4 arm is a
+single `u32`, the v6 arm sixteen bytes. Reading the arm the version does *not* select yields garbage
+rather than an error, so the version decides and nothing else.
+
+The v4 number is read the same way the store writes an address condition (`u32::from_be_bytes` of the
+octets), which keeps the address in the log and the address a rule matches the same value read the
+same way. A connectionless event carries no version and reports no address.
+
+This is the first of the connection table's fields; local address and port, the user name and the
+loopback flag are still only in the event and not in the log.
+
 ## Threading
 
 The server is `std` only: one thread per connection, no async runtime. Every request that matters

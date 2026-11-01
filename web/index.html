@@ -599,11 +599,17 @@
             ? " by other"
             : "";
 
+        // The destination is what tells two connections from one application apart, so it is
+        // shown with the port rather than instead of it.
+        const target = event.remote_addr
+          ? event.remote_addr + ":" + event.remote_port
+          : "port " + event.remote_port;
+
         row.appendChild(
           element(
             "span",
             "meta",
-            event.kind + " " + when + " port " + event.remote_port + blame,
+            event.kind + " " + when + " " + target + blame,
           ),
         );
 

@@ -207,6 +207,7 @@ mod tests {
             time_ms: seq_time,
             app: app.to_owned(),
             remote_port: 443,
+            remote_addr: String::new(),
             protocol: 6,
             allowed: true,
             kind: "allowed".to_owned(),

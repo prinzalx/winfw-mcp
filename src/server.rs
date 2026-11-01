@@ -987,7 +987,7 @@ fn tool_list() -> Vec<serde_json::Value> {
         ),
         (
             "events.list",
-            "the connections the firewall reported recently",
+            "the connections the firewall reported recently, with their destination",
         ),
         ("export", "copy the data files into export\\; takes an area"),
         (
@@ -1741,6 +1741,7 @@ mod tests {
             time_ms: 0,
             app: app.to_owned(),
             remote_port: 443,
+            remote_addr: String::new(),
             protocol: 6,
             allowed: true,
             kind: "allowed".to_owned(),
@@ -2421,6 +2422,31 @@ mod tests {
 
         assert!(body.contains(r#""filter_id":42"#), "{body}");
         assert!(body.contains(r#""rule":"browser""#), "{body}");
+    }
+
+    /// The destination is what tells two connections from one application apart, so it has to
+    /// reach the browser rather than stop in the callback.
+    #[test]
+    fn the_state_endpoint_carries_the_address_an_event_went_to() {
+        let events = Arc::new(EventLog::new());
+
+        let mut event = connection("dialer.exe");
+        event.remote_addr = "93.184.216.34".to_owned();
+        events.push(event);
+
+        let server_state = state_with(Arc::clone(&events), Live::default());
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains(r#""remote_addr":"93.184.216.34""#), "{body}");
     }
 
     /// The stream is not a buffered response, so it is exercised over a socket.
