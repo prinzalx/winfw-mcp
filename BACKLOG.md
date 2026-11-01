@@ -148,19 +148,25 @@ Kept as asked, with the two audits now folded in below.
 
 ### 3.6 MCP
 
-- **The write gate is not in the core.** PLAN.md §10 wants it enforced below the transport. It lives
-  inside `mcp_tool` in `server.rs`, and a comment there claims the opposite of what the code does.
-- ~~**`mcp_writes = "rules"` promises add, edit, remove and reorder; only add exists.**~~ — remove
-  landed in 0.29.0 as `rules.remove`, which takes an index because an index is the only handle an
-  agent has on a rule it did not write. Edit and reorder are still open, and both need an argument
-  story: which fields an agent may widen is a policy question rather than a transport one.
-- **`mcp_writes = "all"` promises flipping settings and switching profiles; only profiles work**
-  (see §3.2).
-- ~~**An MCP `rules.allow` of a Detected entry leaves the entry in the list.**~~ — closed in 0.29.0.
-  Only the HTTP route dismissed, so milestone 9's exit test was met only from the browser; the two
-  tools now follow the same rule, dismissal after the store accepted the rule and not before.
+- ~~**The write gate is not in the core.**~~ — the gate itself is gone since **0.36.0**: the writing
+  tools were deleted rather than gated, so there is nothing left to enforce below the transport. The
+  finding was right that a check in `mcp_tool` could be walked around; the answer was to remove what
+  it checked.
+- ~~**`mcp_writes = "rules"` promises add, edit, remove and reorder; only add exists.**~~ — closed by
+  the removal rather than by implementing the promise. Edit and reorder remain open *as HTTP work*:
+  the page can replace the list but cannot reorder it, which is a user-facing gap rather than an
+  agent-facing one now.
+- ~~**`mcp_writes = "all"` promises flipping settings and switching profiles; only profiles work**
+  (see §3.2).~~ — moot in the same way. The setting is still read from an old `config.toml` so such a
+  file loads, and the next save drops the key.
 - **No protection against a write race.** No generation counter exists; every write is a full rebuild
-  and the last writer wins silently. PLAN.md §10 asked for this before the MCP endpoint shipped.
+  and the last writer wins silently. Since **0.36.0** a change to `rules.toml` made by someone else is
+  *noticed* — the fingerprint and the banner — but two clients writing at the same moment are still
+  resolved by whoever arrives last. PLAN.md §10 asked for this before the MCP endpoint shipped, and it
+  is still the open half of that request.
+- **An agent cannot stop the tool.** `shutdown` was a writing tool, so since **0.36.0** the endpoint
+  has no way to end the process. That is the intended reading of "read only", but a client written
+  against the old list will look for a method that is no longer there.
 
 ### 3.7 Architecture, and things the plan named but the build does not use
 
@@ -784,3 +790,67 @@ unmeasured state saying so instead of claiming a diff.
   the next start. That gap is the next bullet under §3.5, deliberately not folded in here.
 - The single-attempt `Engine::open` stays public for tests and for any caller that wants exactly
   one try; the long-running callers are the ones that moved to `open_retrying`.
+
+## 27. Read-only endpoint round notes (2026-11-02)
+
+- Deleting nine tools is a bigger API cut than any setting would have been, and the reason is worth
+  keeping in words: a firewall rule is the way out to the network, so an agent allowed to write a rule
+  is allowed to decide its own traffic is fine. Reading is a question; writing was the answer.
+- The removal is by deletion, not by a switch, on purpose. A setting that defaults to read-only can be
+  flipped by whoever edits `config.toml`, which is fine, but it also means the code carries a path
+  nobody tested in anger. There is no `mcp_writes` any more, and the config keeps the key only so that
+  an old file still loads.
+- The HTTP half needed more thought than the MCP half. The tool often runs elevated, so a `POST` from
+  this machine is a write done with rights the caller does not have. Hence the token, the `Host`
+  check on every route, the `Origin` check and the content type on writes.
+- The `Host` check applies to reads, and that is the DNS-rebinding defence rather than tidiness. A page
+  whose domain resolved to `127.0.0.1` after it loaded can read the whole state of the firewall if
+  nothing looks at the name it asked for.
+- The token is memory-only, which is a decision with a cost: a tab opened by typing the address has no
+  token in its URL and has to learn it from the first state body. That is why the state carries it, and
+  why a second instance opening the plain URL still works.
+- One claim worth not overselling: a process running as the same user can read the token from
+  `/api/state` and write anything. The guard defeats a page that is not ours, not an attacker with the
+  account. The fingerprint on `rules.toml` is what addresses the file being edited behind our back, and
+  it reports rather than prevents.
+- `rules.toml.stamp` follows the active rules file, so a profile switch re-fingerprints rather than
+  inheriting the previous profile's record. A profile with no stamp of its own is compared against the
+  file as it was found, which means the first notice after a switch can only be produced by a change
+  made after it.
+- The MCP endpoint is exempt from the guard's write checks and must stay that way: it is configured with
+  a URL, and a URL a human can copy is not a secret. Adding the token there would mean telling agents
+  about sessions, which is the complication this round was meant to avoid.
+- A UI bug surfaced on the way: `POST /api/rules/share` answers with a bare Base64 string, and the page
+  read every response as JSON, so the share string failed to parse on its padding character. The page now
+  answers according to the `content-type` it was given.
+
+## 28. Splitting `src/server.rs` (planned, to start after 0.38.0)
+
+Agreed 2026-11-02, deliberately *not* taken up while a feature round is open: the running work
+(read-only MCP, the guarded HTTP API, external traffic only) is finished, tested and released first,
+so the split lands on a clean tree rather than in the middle of a diff.
+
+- The finding is honest: `src/server.rs` is about 3800 lines and the module comment still calls it a
+  *transport*, which was true at milestone 2 and is not true now. HTTP transport, the guard, the shared
+  state, the WFP worker, every route with its body types, profile management, the settings logic and the
+  MCP dispatcher all live in one file, and roughly half the file is tests.
+- The target is a directory `src/server/` with one job per file: `mod.rs` (the socket loop), `http.rs`
+  (request, response, headers, body parsing), `guard.rs` (the guard and nothing else), `state.rs`,
+  `worker.rs`, `routes.rs`, `profiles.rs`, `settings.rs`, `mcp_tools.rs`.
+- Pure movement is the rule. No renames of routes, JSON fields, error texts, status codes or log
+  messages, and no improvements on the side, however small. The public paths under `crate::server::`
+  stay reachable through `pub use` in `mod.rs`, so no caller changes. Visibility is not widened beyond
+  what the move forces.
+- Two files are the point of the exercise. `guard.rs` must hold the guard and its helpers only, with no
+  dependency on routes or the worker, so it can be reviewed in minutes. `mcp_tools.rs` must hold no write
+  access to rules, settings, profiles or the store at all, which is checkable by grep and is the mechanical
+  form of "the endpoint reads".
+- Each `Server::route` match-arm becomes a function of its own, with `route` distributing only, and the
+  route table in the module comment gets the routes it is missing (`/api/settings`, `/api/profiles`,
+  `/api/profiles/switch`, `/favicon.ico`). That doc drift is the §3.7 finding this section closes.
+- Acceptance: the same number of tests, all green elevated and unelevated, no new clippy warnings, a
+  release build that starts, a page that loads, and an allow/deny from the Detected list that still
+  reaches the store. A patch release, because nothing a user can observe changes.
+- One note for whoever takes it: `writable_state()` in the tests was deleted in **0.36.0** (its last user
+  was the removed writing tools), so the shared test helpers to move are `state()`, `state_with()`,
+  `connection()` and `TEST_TOKEN`.

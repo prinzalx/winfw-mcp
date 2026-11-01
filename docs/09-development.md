@@ -6,15 +6,15 @@
 
 ```
 src/main.rs       argument parsing, startup, the one-shot store commands
-src/config.rs     settings, `mcp_writes`
+src/config.rs     settings
 src/paths.rs      the data directory and every path inside it
-src/rules.rs      rules.toml and the profile files
+src/rules.rs      rules.toml, the profile files, and the stamp that records who wrote them last
 src/store.rs      atomic file writes
 src/device.rs     device path <-> drive path
 src/learn.rs      the Detected list
 src/log.rs        the bounded log file, rolled at a megabyte
 src/monitor.rs    the net-event subscription and the event log
-src/server.rs     HTTP transport, routes, the accept loop, the WFP worker
+src/server.rs     HTTP transport, the request guard, routes, the accept loop, the WFP worker
 src/mcp.rs        the JSON-RPC grammar of the MCP endpoint
 src/export.rs     export, Base64 share and import
 src/tray.rs       the notification-area icon and its message window
@@ -68,6 +68,7 @@ their own.
 
 | Version | Milestone |
 |---|---|
+| 0.36.0 | The MCP endpoint is read-only and the HTTP API is guarded (§3.6, chapter 10). The nine writing MCP tools are gone from the code rather than gated: `mcp_writes` in `config.toml` retired with them, still accepted so an older file loads. Every route now checks `Host`, and every writing route additionally checks `Origin`, `content-type: application/json` and a session token that lives only in memory; `/mcp` gets no token and can reach no writing route. `rules.toml.stamp` records the fingerprint of the file the tool wrote last, so a hand edit made while the tool was closed is announced in a banner instead of adopted silently, and the same comparison while it runs notices an edit between two page loads |
 | 0.35.0 | The engine open waits for the Base Filtering Engine now (§3.5). PLAN.md §5 asked for the retry and the worker thread made exactly one attempt for the life of the process, so a run started before the service was ready served its whole session with a "store unavailable" banner. Five attempts over 3.7 seconds now, in `Engine::open_retrying`; the retry loop is generic over the attempt and over its sleep, so the wait policy is under test without an engine, and the comment claiming a retry was pointless "until there are writes to protect" — untrue since milestone 3 — is gone |
 | 0.34.0 | A body the server cannot read is the client's fault now (§3.2). An unreadable theme, a misspelled field or a JSON syntax error in a POST answered `500 Internal Server Error`, which told the user the server had broken; the body-parsing half of every route answers `400 Bad Request` now, and the refusal text carries the parse error along. A failure that is not about the body — a refused store, a rule index past the end — stays `500`, because the mapping now runs through one helper instead of one call site per shape of failure |
 | 0.33.0 | Export got its second half (§3.3). `POST /api/rules/replace` and the MCP `rules.import` tool take the text of a whole rules file and replace the live list with it, read by the same reader that reads `rules.toml` at startup, so a version, a field name or a pattern this build cannot read is refused before the file on disk is touched, and the generation that is replaced is kept as the backup. The page gained a `Restore` button with a file chooser and a confirmation, because this is the one action that can take rules away rather than only fail to add them |
@@ -114,4 +115,4 @@ their own.
 
 ---
 
-Previous: [8. Lifecycle and tray](08-lifecycle.md) · Back to the [index](../README.md)
+Previous: [8. Lifecycle and tray](08-lifecycle.md) · Next: [10. Security model](10-security-model.md)

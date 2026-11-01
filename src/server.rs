@@ -31,6 +31,11 @@
 //! | POST | `/api/profiles/delete` | remove a profile, falling back to the default rules |
 //! | POST | `/mcp` | JSON-RPC 2.0 for an MCP client: see `crate::mcp` |
 //!
+//! Every route answers to a loopback `Host` header, and every writing one to the session token as
+//! well, which is what keeps a web page that is not ours from editing the firewall. The MCP
+//! endpoint is the exception on purpose: it has no token and no writing tools. See
+//! `docs/10-security-model.md`.
+//!
 //! ## Threading
 //!
 //! A WFP transaction belongs to a thread rather than to a handle (see `wfp::Engine::transaction`),
@@ -39,7 +44,7 @@
 //! merely convenient.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
@@ -51,15 +56,13 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::config::{Policy, Settings, Theme, Writes};
+use crate::config::{Policy, Settings, Theme};
 use crate::export::{self, Area};
 use crate::learn::{Detected, Detector};
 use crate::mcp;
 use crate::monitor::{EventLog, MonitorStatus, NetEvent};
 use crate::paths::DataPaths;
-use crate::rules::{
-    Action, Cidr, Direction, PortRange, Protocol, Rule, RuleFile, validate_pattern,
-};
+use crate::rules::{Action, Cidr, Fingerprint, Rule, RuleFile, validate_pattern, write_stamp};
 
 /// The page served at `/`, embedded so the binary stays a single file.
 const INDEX_HTML: &str = include_str!("../web/index.html");
@@ -119,6 +122,18 @@ pub struct AppState {
     /// What the rebuild at startup made of the store. Never changes afterwards: it is the record of
     /// the difference the process found between the store and the rules file.
     startup: Startup,
+    /// The session token a writing request has to carry (PLAN.md section 11).
+    ///
+    /// It lives here and nowhere else: no file, no log, no answer on `/mcp`. The browser learns it
+    /// from the URL the tray opened, or from the state body when a human typed the address.
+    token: String,
+    /// The contents of the rules file the tool wrote last, as a fingerprint.
+    ///
+    /// At startup this is the stamp the previous run left behind rather than the file on disk,
+    /// which is exactly what makes a hand edit made while the tool was closed show up as a
+    /// difference. Writing the file replaces the record, so the notice disappears with the edit
+    /// that caused it and needs no bookkeeping of its own.
+    rules_written: Mutex<Option<Fingerprint>>,
 }
 
 impl AppState {
@@ -133,6 +148,8 @@ impl AppState {
         active_file: PathBuf,
         active_name: String,
         startup: Startup,
+        token: String,
+        rules_written: Option<Fingerprint>,
     ) -> Self {
         Self {
             paths,
@@ -145,6 +162,8 @@ impl AppState {
             active_name: Mutex::new(active_name),
             running: Arc::new(AtomicBool::new(true)),
             startup,
+            token,
+            rules_written: Mutex::new(rules_written),
         }
     }
 
@@ -190,7 +209,43 @@ impl AppState {
         self.live.policy()
     }
 
-    /// What the event subscription reported, with the count the log holds.
+    /// Record that the rules file on disk is now the tool's own work.
+    ///
+    /// Called after every write the tool does, so the next comparison measures the difference
+    /// against what we wrote rather than against whatever a reader left behind. Writing the stamp
+    /// is best effort: a stamp that cannot be written costs a lost notice, not a lost rule.
+    fn note_rules_written(&self) {
+        let file = self.rules_path();
+
+        match Fingerprint::of_file(&file) {
+            Ok(fingerprint) => {
+                *self
+                    .rules_written
+                    .lock()
+                    .expect("rules fingerprint lock poisoned") = fingerprint;
+                write_stamp(&file, fingerprint);
+            }
+            Err(error) => {
+                warn!(reason = %format!("{error:#}"), "could not fingerprint the rules file")
+            }
+        }
+    }
+
+    /// Whether the rules file on disk is not the one the tool wrote.
+    ///
+    /// A file that has gone away counts as changed, because the rules the page shows are the ones in
+    /// memory while the file that describes them is missing.
+    fn rules_changed_outside(&self) -> bool {
+        let current = Fingerprint::of_file(&self.rules_path()).unwrap_or(None);
+        let written = self
+            .rules_written
+            .lock()
+            .expect("rules fingerprint lock poisoned");
+
+        current != *written
+    }
+
+    /// What the event subscription did about being asked to listen.
     ///
     /// Both reports that answer "why is the connection list empty?" take it from here, so the
     /// page and an MCP client cannot be told different things about the same feed.
@@ -295,20 +350,71 @@ impl Default for Live {
     }
 }
 
+/// The request headers the guards read.
+///
+/// Only these four matter to this server, and they are matched case-insensitively because a guard
+/// that is not would be a guard a client could confuse by capitalising differently.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Headers {
+    host: Option<String>,
+    origin: Option<String>,
+    content_type: Option<String>,
+    token: Option<String>,
+}
+
+impl Headers {
+    /// Pick the four interesting fields out of the lines the transport read, in order.
+    ///
+    /// A field sent twice keeps the first value: that is what a browser sends, and it is the
+    /// reading least likely to turn a confused proxy into a surprise.
+    fn from_pairs(pairs: &[(String, String)]) -> Self {
+        let mut headers = Self::default();
+
+        for (name, value) in pairs {
+            let value = value.trim().to_owned();
+
+            match name.to_ascii_lowercase().as_str() {
+                "host" if headers.host.is_none() => headers.host = Some(value),
+                "origin" if headers.origin.is_none() => headers.origin = Some(value),
+                "content-type" if headers.content_type.is_none() => {
+                    headers.content_type = Some(value);
+                }
+                "x-winfw-token" if headers.token.is_none() => headers.token = Some(value),
+                _ => {}
+            }
+        }
+
+        headers
+    }
+}
+
 /// A parsed request. Only the parts a local, single-user server needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     method: String,
     path: String,
     body: Vec<u8>,
+    headers: Headers,
 }
 
 impl Request {
+    #[allow(dead_code)] // the tests route a request directly; the socket path uses `from_parts`
     pub fn new(method: &str, path: &str, body: Vec<u8>) -> Self {
         Self {
             method: method.to_owned(),
             path: path.to_owned(),
             body,
+            headers: Headers::default(),
+        }
+    }
+
+    /// A request as the transport read it, headers included.
+    pub fn with_headers(method: &str, path: &str, body: Vec<u8>, headers: Headers) -> Self {
+        Self {
+            method: method.to_owned(),
+            path: path.to_owned(),
+            body,
+            headers,
         }
     }
 }
@@ -893,6 +999,10 @@ impl Server {
                     .save(&state.rules_path())
                     .context("write the rules file")?;
 
+                // The file on disk is the tool's own work again, which is what the notice on the
+                // page compares against.
+                state.note_rules_written();
+
                 let outcome = worker.ask(StoreWork::Apply {
                     rules,
                     known: state.detector.apps(),
@@ -944,6 +1054,7 @@ impl Server {
                     current
                         .save(&state.rules_path())
                         .context("write the rules file")?;
+                    state.note_rules_written();
                     current.clone()
                 };
 
@@ -1019,6 +1130,7 @@ impl Server {
                     current
                         .save(&state.rules_path())
                         .context("write the rules file")?;
+                    state.note_rules_written();
                     current.clone()
                 };
 
@@ -1048,6 +1160,7 @@ impl Server {
                     incoming
                         .save(&state.rules_path())
                         .context("write the rules file")?;
+                    state.note_rules_written();
                     *current = incoming;
                     current.clone()
                 };
@@ -1072,11 +1185,19 @@ impl Server {
                 let body: ProfileSwitch = parse_or_default(&request.body)?;
                 let outcome = create_profile(state, worker, &body.name)?;
 
+                // A profile operation can move which file is the active one, and the notice on the
+                // page has to compare against the file that is active afterwards.
+                state.note_rules_written();
+
                 Response::json(200, &StateJson::new(state, &outcome))
             }
             ("POST", "/api/profiles/delete") => {
                 let body: ProfileSwitch = parse_or_default(&request.body)?;
                 let outcome = delete_profile(state, worker, &body.name)?;
+
+                // A profile operation can move which file is the active one, and the notice on the
+                // page has to compare against the file that is active afterwards.
+                state.note_rules_written();
 
                 Response::json(200, &StateJson::new(state, &outcome))
             }
@@ -1084,11 +1205,19 @@ impl Server {
                 let body: ProfileRename = parse_or_default(&request.body)?;
                 let outcome = rename_profile(state, worker, &body.name, &body.new_name)?;
 
+                // A profile operation can move which file is the active one, and the notice on the
+                // page has to compare against the file that is active afterwards.
+                state.note_rules_written();
+
                 Response::json(200, &StateJson::new(state, &outcome))
             }
             ("POST", "/api/profiles/switch") => {
                 let body: ProfileSwitch = parse_or_default(&request.body)?;
                 let outcome = switch_profile(state, worker, &body.name)?;
+
+                // A profile operation can move which file is the active one, and the notice on the
+                // page has to compare against the file that is active afterwards.
+                state.note_rules_written();
 
                 Response::json(200, &StateJson::new(state, &outcome))
             }
@@ -1163,110 +1292,192 @@ fn is_tool(name: &str) -> bool {
 
 /// The tools the endpoint offers, in the shape `tools/list` wants.
 ///
-/// The schema is deliberately loose: every argument is optional, and a tool that needs one says so
-/// in its refusal rather than letting the transport reject a call it could have answered.
+/// Every one of them reads (PLAN.md section 10). A tool that would change a file or the store is
+/// not offered at all rather than refused at call time, so an agent cannot be tempted to write
+/// something it has no business writing, and the page keeps the editing to itself.
+/// The six tools the endpoint offers, and nothing else. Every one of them reads. Writing was
+/// removed with `0.36.0`: an agent that can write can hand itself a rule, and a rule is the way
+/// out to the network, so a tool that reaches the internet could open its own gate.
 fn tool_list() -> Vec<serde_json::Value> {
-    [
+    /// The schema of a tool that takes no arguments at all.
+    fn no_arguments() -> serde_json::Value {
+        serde_json::json!({ "type": "object", "properties": {} })
+    }
+
+    let index = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "index": { "type": "integer", "description": "the rule `rules.share` should encode, counted as rules.list orders them" }
+        }
+    });
+
+    let tools = [
         (
             "status",
-            "settings, the rule count, the store, and how much the endpoint may write",
+            "settings, the rule count, the store, and the monitor",
+            no_arguments(),
         ),
         (
             "rules.list",
             "every rule, in the order the firewall reads it",
-        ),
-        ("rules.share", "one rule as a Base64 string; takes an index"),
-        (
-            "rules.decode",
-            "read a Base64 share string back; takes share, and add to append the rule",
+            no_arguments(),
         ),
         (
-            "rules.allow",
-            "append an allow rule; takes app, pattern, name, protocol, direction, port, remote",
-        ),
-        (
-            "rules.deny",
-            "append a deny rule; takes app, pattern, name, protocol, direction, port, remote",
-        ),
-        (
-            "rules.remove",
-            "remove the rule at an index, write the file, rebuild the store",
-        ),
-        (
-            "rules.import",
-            "replace the whole rule list with the text of a rules file; takes text",
+            "rules.share",
+            "one rule as a Base64 string; takes an index",
+            index,
         ),
         (
             "detected.list",
             "the applications learning mode collected, newest first",
+            no_arguments(),
         ),
         (
             "events.list",
             "the connections the firewall reported recently, with their destination",
+            no_arguments(),
         ),
-        ("export", "copy the data files into export\\; takes an area"),
         (
             "profiles.list",
             "the active profile and the names of the stored profiles",
+            no_arguments(),
         ),
-        (
-            "profile.use",
-            "switch the live profile; takes a name (empty selects rules.toml)",
-        ),
-        (
-            "settings.set",
-            "change learn_mode, default_policy or theme; takes learn_mode, default_policy, theme",
-        ),
-        (
-            "shutdown",
-            "stop the process; the filters stay in the firewall",
-        ),
-    ]
-    .into_iter()
-    .map(|(name, description)| {
-        serde_json::json!({
-            "name": name,
-            "description": description,
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "index": { "type": "integer" },
-                    "text": { "type": "string" },
-                    "share": { "type": "string" },
-                    "add": { "type": "boolean" },
-                    "app": { "type": "string" },
-                    "pattern": { "type": "string" },
-                    "name": { "type": "string" },
-                    "area": {
-                        "type": "string",
-                        "enum": ["rules", "config", "detected", "profiles", "all"],
-                    },
-                    "protocol": {
-                        "type": "string",
-                        "enum": ["tcp", "udp"],
-                    },
-                    "direction": {
-                        "type": "string",
-                        "enum": ["in", "out"],
-                    },
-                    "port": {
-                        "type": ["integer", "string"],
-                        "description": "a port such as 443 or a range such as 1024-2048",
-                    },
-                    "remote": {
-                        "type": "string",
-                        "description": "a remote address or network such as 10.0.0.5 or 192.168.1.0/24",
-                    },
-                    "learn_mode": { "type": "boolean" },
-                    "default_policy": {
-                        "type": "string",
-                        "enum": ["allow", "deny"],
-                    },
-                },
-            },
+    ];
+
+    tools
+        .into_iter()
+        .map(|(name, description, schema)| {
+            serde_json::json!({ "name": name, "description": description, "inputSchema": schema })
         })
-    })
-    .collect()
+        .collect()
+}
+
+/// The secret a writing request has to carry, made once when the server starts.
+///
+/// Sixteen bytes from the operating system, printed as hex so the tray can put it in a URL without
+/// escaping. A process that cannot read random bytes has no business handing out a secret, but it
+/// serves anyway with a value that is merely guessable, and says so in the log. The token itself is
+/// never logged.
+pub fn session_token() -> String {
+    let mut bytes = [0u8; 16];
+
+    match getrandom::fill(&mut bytes) {
+        Ok(()) => bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
+        Err(error) => {
+            warn!(reason = %error, "could not read random bytes for the session token");
+
+            "loopback-session".to_owned()
+        }
+    }
+}
+
+/// Reject a request the wire says should not reach a route (PLAN.md section 11).
+///
+/// The three checks answer three different mistakes, so they answer with three different codes:
+///
+/// * a `Host` that is not loopback is DNS rebinding — a page under another name talked to us
+///   because the name resolved here, and it may read nothing but it certainly may not write;
+/// * an `Origin` that is not ours is a cross-site request: the page is somewhere else and the
+///   browser sent the request anyway;
+/// * a missing or wrong token is a page that does not know the secret the tray handed out.
+///
+/// `GET` is held to the `Host` check only, which is what lets the page, the event stream and an
+/// MCP client ask questions without carrying anything. `/mcp` is exempt from the rest of it: the
+/// endpoint has no token, and since 0.36.0 it has no writing tools either, so it cannot reach a
+/// route that changes a file.
+fn guard(request: &Request, token: &str) -> Option<Response> {
+    let headers = &request.headers;
+
+    if let Some(host) = &headers.host
+        && !is_loopback_host(host)
+    {
+        return Some(Response::text(
+            403,
+            format!("host '{host}' is not 127.0.0.1 or localhost"),
+        ));
+    }
+
+    // A missing Host header is left alone on purpose. HTTP/1.1 asks every request for one and a
+    // browser always sends it, so the check can only ever catch a name that is wrong, which is the
+    // rebinding case, rather than a command line client that omitted it.
+    if request.method == "GET" || request.method == "HEAD" || request.path == "/mcp" {
+        return None;
+    }
+
+    if let Some(origin) = &headers.origin
+        && !is_loopback_origin(origin)
+    {
+        return Some(Response::text(
+            403,
+            format!("origin '{origin}' is not this page"),
+        ));
+    }
+
+    match &headers.content_type {
+        Some(text)
+            if text
+                .trim()
+                .to_ascii_lowercase()
+                .starts_with("application/json") => {}
+        Some(text) => {
+            return Some(Response::text(
+                415,
+                format!("content-type '{text}' is not application/json"),
+            ));
+        }
+        None => {
+            return Some(Response::text(
+                415,
+                "a writing request needs content-type: application/json",
+            ));
+        }
+    }
+
+    match &headers.token {
+        Some(given) if given == token => None,
+        Some(_) => Some(Response::text(
+            401,
+            "the session token is not the one issued",
+        )),
+        None => Some(Response::text(
+            401,
+            "a writing request needs the session token",
+        )),
+    }
+}
+
+/// Whether a `Host` header names this machine on the loopback interface.
+///
+/// The port is not checked: a request only reaches the process on the port it listens on, so a
+/// page that got the port wrong never arrived in the first place, and a DNS-rebinding page arrives
+/// with a name rather than with a port we could usefully have compared.
+fn is_loopback_host(host: &str) -> bool {
+    let name = host
+        .rsplit_once(']')
+        .map_or(host, |(_, rest)| rest)
+        .trim_start_matches(['[', ':']);
+
+    let name = name.split(':').next().unwrap_or(name);
+
+    name.eq_ignore_ascii_case("localhost")
+        || name.parse::<Ipv4Addr>().is_ok_and(|a| a.is_loopback())
+        || name == "::1"
+}
+
+/// Whether an `Origin` header is the page this server serves.
+///
+/// `null` is refused: it is what a sandboxed frame or a `file://` page sends, and neither is the
+/// page the tray opened.
+fn is_loopback_origin(origin: &str) -> bool {
+    let Some(rest) = origin
+        .trim()
+        .strip_prefix("http://")
+        .or_else(|| origin.trim().strip_prefix("https://"))
+    else {
+        return false;
+    };
+
+    is_loopback_host(rest.trim_end_matches('/'))
 }
 
 /// The method behind a `tools/call`, with the code and message of a protocol error.
@@ -1274,9 +1485,9 @@ type ToolError = (i32, String);
 
 /// Run one MCP tool.
 ///
-/// Reads are always allowed. A write depends on `Settings.mcp_writes`, which is checked here rather
-/// than in the transport, so a second transport cannot talk its way past the policy (PLAN.md
-/// section 10).
+/// Every tool here reads. What a client cannot find is no longer a tool that refused a write but a
+/// tool that never existed: an endpoint that offers only questions cannot grant itself a firewall
+/// change it then has to explain (PLAN.md section 10).
 fn mcp_tool(
     state: &AppState,
     worker: &WfpWorker,
@@ -1295,7 +1506,6 @@ fn mcp_tool(
                 "learn_mode": state.learn_mode(),
                 "default_policy": state.settings.default_policy.name(),
                 "theme": state.live.theme().name(),
-                "mcp_writes": state.settings.mcp_writes,
                 "profile": state.active_name(),
                 "rules": rules,
                 "detected": detected,
@@ -1335,298 +1545,6 @@ fn mcp_tool(
                 )),
             }
         }
-        name @ ("rules.allow" | "rules.deny") => {
-            let action = if name == "rules.deny" {
-                Action::Deny
-            } else {
-                Action::Allow
-            };
-
-            if state.settings.mcp_writes == Writes::None {
-                return Ok(mcp::tool_refusal(format!(
-                    "{name} refused: mcp_writes is none"
-                )));
-            }
-
-            let app = call
-                .string_arg("app")
-                .or_else(|| call.string_arg("pattern"))
-                .ok_or((mcp::INVALID_PARAMS, format!("{name} needs an app")))?;
-
-            // The pattern defaults to the application itself, which is the narrowest rule an agent
-            // can ask for; widening it to a wildcard stays a human decision in the browser.
-            let pattern = call.string_arg("pattern").unwrap_or_else(|| app.clone());
-
-            validate_pattern(&pattern)
-                .map_err(|error| (mcp::INVALID_PARAMS, format!("{error:#}")))?;
-
-            let name = call
-                .string_arg("name")
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| app.rsplit(['\\', '/']).next().unwrap_or("agent").to_owned());
-
-            // The three narrowing arguments are optional, and an agent may pass a port as a number
-            // or as the range text the file uses.
-            let protocol = match call.arg("protocol") {
-                Some(value) => Some(serde_json::from_value::<Protocol>(value).map_err(|_| {
-                    (
-                        mcp::INVALID_PARAMS,
-                        "protocol must be tcp or udp".to_owned(),
-                    )
-                })?),
-                None => None,
-            };
-
-            let direction = match call.arg("direction") {
-                Some(value) => Some(serde_json::from_value::<Direction>(value).map_err(|_| {
-                    (
-                        mcp::INVALID_PARAMS,
-                        "direction must be in or out".to_owned(),
-                    )
-                })?),
-                None => None,
-            };
-
-            // A port of a type neither form has is refused rather than read as absent.
-            let port = match call.arg("port") {
-                Some(serde_json::Value::Number(number)) => Some(
-                    number
-                        .to_string()
-                        .parse::<PortRange>()
-                        .map_err(|error| (mcp::INVALID_PARAMS, error))?,
-                ),
-                Some(serde_json::Value::String(text)) => Some(
-                    text.parse::<PortRange>()
-                        .map_err(|error| (mcp::INVALID_PARAMS, error))?,
-                ),
-                Some(_) => {
-                    return Err((
-                        mcp::INVALID_PARAMS,
-                        "port must be a number or a range string".to_owned(),
-                    ));
-                }
-                None => None,
-            };
-
-            // A remote address is written the way the file writes it, and only as text: a number
-            // has no prefix to tell v4 from v6. The text is kept as it was given, because that is
-            // what a Detected entry carries and dismissal compares against exactly that.
-            let remote_text = call.string_arg("remote");
-
-            let remote = match call.arg("remote") {
-                Some(serde_json::Value::String(text)) => Some(
-                    text.parse::<Cidr>()
-                        .map_err(|error| (mcp::INVALID_PARAMS, error))?,
-                ),
-                Some(_) => {
-                    return Err((
-                        mcp::INVALID_PARAMS,
-                        "remote must be an address such as 192.168.1.0/24".to_owned(),
-                    ));
-                }
-                None => None,
-            };
-
-            let applied = {
-                let mut current = state.rules.lock().expect("rules lock poisoned");
-
-                current.rule.push(Rule {
-                    protocol,
-                    direction,
-                    port,
-                    remote,
-                    ..Rule::plain(name.clone(), action, pattern)
-                });
-                current
-                    .save(&state.rules_path())
-                    .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-                current.clone()
-            };
-
-            let outcome = worker
-                .ask(StoreWork::Apply {
-                    rules: applied,
-                    known: state.detector.apps(),
-                    policy: state.policy(),
-                })
-                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-
-            // The entry the agent decided on leaves the Detected list with the rule, which is what
-            // makes `rules.allow` over MCP the same decision the page makes rather than a rule on
-            // top of a list nobody clears. The same rule the browser's route follows: only a store
-            // that took the rule takes the entry off, so a refused write leaves the decision
-            // visible. The remote text is compared as it was given, because that is the form a
-            // Detected entry carries.
-            let dismissed = outcome.ok
-                && state
-                    .detector
-                    .dismiss(&app, remote_text.as_deref())
-                    .unwrap_or(false);
-
-            Ok(mcp::tool_json(serde_json::json!({
-                "added": { "name": name, "action": action, "app": app },
-                "dismissed": dismissed,
-                "installed": outcome.installed,
-                "store": outcome.ok,
-            })))
-        }
-        "rules.remove" => {
-            if state.settings.mcp_writes == Writes::None {
-                return Ok(mcp::tool_refusal(
-                    "rules.remove refused: mcp_writes is none",
-                ));
-            }
-
-            let index = call.arg("index").and_then(|value| value.as_u64()).ok_or((
-                mcp::INVALID_PARAMS,
-                "rules.remove needs an index".to_owned(),
-            ))? as usize;
-
-            let (applied, removed) = {
-                let mut current = state.rules.lock().expect("rules lock poisoned");
-
-                if index >= current.rule.len() {
-                    return Err((
-                        mcp::INVALID_PARAMS,
-                        format!("there is no rule at index {index}"),
-                    ));
-                }
-
-                let removed = current.rule.remove(index).name;
-
-                current
-                    .save(&state.rules_path())
-                    .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-
-                (current.clone(), removed)
-            };
-
-            let outcome = worker
-                .ask(StoreWork::Apply {
-                    rules: applied,
-                    known: state.detector.apps(),
-                    policy: state.policy(),
-                })
-                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-
-            Ok(mcp::tool_json(serde_json::json!({
-                "removed": removed,
-                "installed": outcome.installed,
-                "store": outcome.ok,
-            })))
-        }
-        "rules.import" => {
-            // The same permission as a rule edit. Replacing the list is the more frightening of
-            // the two over a transport that shows no diff, but it writes what the caller named
-            // rather than something it guessed, and the previous generation is kept on disk.
-            if state.settings.mcp_writes == Writes::None {
-                return Ok(mcp::tool_refusal(
-                    "rules.import refused: mcp_writes is none",
-                ));
-            }
-
-            let text = call.string_arg("text").ok_or((
-                mcp::INVALID_PARAMS,
-                "rules.import needs the text of a rules file".to_owned(),
-            ))?;
-
-            let incoming = RuleFile::from_text(&text)
-                .map_err(|error| (mcp::INVALID_PARAMS, format!("{error:#}")))?;
-
-            for rule in &incoming.rule {
-                validate_pattern(&rule.pattern)
-                    .map_err(|error| (mcp::INVALID_PARAMS, format!("{error:#}")))?;
-            }
-
-            let count = incoming.rule.len();
-
-            let applied = {
-                let mut current = state.rules.lock().expect("rules lock poisoned");
-
-                incoming
-                    .save(&state.rules_path())
-                    .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-                *current = incoming;
-                current.clone()
-            };
-
-            let outcome = worker
-                .ask(StoreWork::Apply {
-                    rules: applied,
-                    known: state.detector.apps(),
-                    policy: state.policy(),
-                })
-                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-
-            Ok(mcp::tool_json(serde_json::json!({
-                "rules": count,
-                "installed": outcome.installed,
-                "store": outcome.ok,
-            })))
-        }
-        "rules.decode" => {
-            let share = call
-                .string_arg("share")
-                .filter(|text| !text.trim().is_empty())
-                .ok_or((
-                    mcp::INVALID_PARAMS,
-                    "rules.decode needs a share string".to_owned(),
-                ))?;
-
-            let rule = export::decode(&share)
-                .map_err(|error| (mcp::INVALID_PARAMS, format!("{error:#}")))?;
-
-            // Validated before anything is written. A share string is Base64 around JSON a human
-            // may have edited, and a pattern the file cannot hold must not reach the store.
-            validate_pattern(&rule.pattern)
-                .map_err(|error| (mcp::INVALID_PARAMS, format!("{error:#}")))?;
-
-            if !call
-                .arg("add")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            {
-                return Ok(mcp::tool_json(
-                    serde_json::to_value(rule)
-                        .map_err(|error| (mcp::REFUSED, error.to_string()))?,
-                ));
-            }
-
-            if state.settings.mcp_writes == Writes::None {
-                return Ok(mcp::tool_refusal(
-                    "rules.decode refused: mcp_writes is none",
-                ));
-            }
-
-            let name = rule.name.clone();
-            let action = rule.action;
-
-            let applied = {
-                let mut current = state.rules.lock().expect("rules lock poisoned");
-
-                current.rule.push(rule);
-
-                current
-                    .save(&state.rules_path())
-                    .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-
-                current.clone()
-            };
-
-            let outcome = worker
-                .ask(StoreWork::Apply {
-                    rules: applied,
-                    known: state.detector.apps(),
-                    policy: state.policy(),
-                })
-                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-
-            Ok(mcp::tool_json(serde_json::json!({
-                "added": { "name": name, "action": action },
-                "installed": outcome.installed,
-                "store": outcome.ok,
-            })))
-        }
         "detected.list" => Ok(mcp::tool_json(
             serde_json::to_value(state.detector.snapshot())
                 .map_err(|error| (mcp::REFUSED, error.to_string()))?,
@@ -1645,104 +1563,6 @@ fn mcp_tool(
             "active": state.active_name(),
             "names": crate::rules::list_names(&state.paths.profiles),
         }))),
-        "profile.use" => {
-            // A profile switch rewrites the settings as well as the rules, so it needs the widest
-            // write permission rather than the `rules` one.
-            if state.settings.mcp_writes != Writes::All {
-                return Ok(mcp::tool_refusal(
-                    "profile.use refused: mcp_writes is not all",
-                ));
-            }
-
-            let name = call.string_arg("name").unwrap_or_default();
-            let outcome = switch_profile(state, worker, &name)
-                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-
-            Ok(mcp::tool_json(serde_json::json!({
-                "active": state.active_name(),
-                "installed": outcome.installed,
-                "store": outcome.ok,
-            })))
-        }
-        "settings.set" => {
-            // Same gate as a profile switch: this rewrites `config.toml`.
-            if state.settings.mcp_writes != Writes::All {
-                return Ok(mcp::tool_refusal(
-                    "settings.set refused: mcp_writes is not all",
-                ));
-            }
-
-            let learn_mode = match call.arg("learn_mode") {
-                Some(value) => Some(value.as_bool().ok_or((
-                    mcp::INVALID_PARAMS,
-                    "learn_mode must be a boolean".to_owned(),
-                ))?),
-                None => None,
-            };
-
-            let default_policy = match call.string_arg("default_policy") {
-                Some(text) => Some(Policy::parse(&text).ok_or((
-                    mcp::INVALID_PARAMS,
-                    format!("'{text}' is not a policy, expected allow or deny"),
-                ))?),
-                None => None,
-            };
-
-            // Read the same way the policy is: a name an agent guesses wrong is a protocol error
-            // naming what it should have sent, not a theme written to the file unseen.
-            let theme = match call.string_arg("theme") {
-                Some(text) => Some(Theme::parse(&text).ok_or((
-                    mcp::INVALID_PARAMS,
-                    format!("'{text}' is not a theme, expected light, dark or auto"),
-                ))?),
-                None => None,
-            };
-
-            let outcome = apply_settings(
-                state,
-                worker,
-                SettingsEdit {
-                    learn_mode,
-                    default_policy,
-                    theme,
-                    log_level: call.string_arg("log_level"),
-                },
-            )
-            .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-
-            Ok(mcp::tool_json(serde_json::json!({
-                "learn_mode": state.learn_mode(),
-                "default_policy": state.policy().name(),
-                "theme": state.live.theme().name(),
-                "installed": outcome.installed,
-                "store": outcome.ok,
-            })))
-        }
-        "export" => {
-            let area = match call.string_arg("area") {
-                Some(text) => serde_json::from_value::<Area>(serde_json::Value::String(text))
-                    .map_err(|error| (mcp::INVALID_PARAMS, format!("bad area: {error}")))?,
-                None => Area::All,
-            };
-
-            let report = export::run(&state.paths, area)
-                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
-
-            Ok(mcp::tool_json(
-                serde_json::to_value(report).map_err(|error| (mcp::REFUSED, error.to_string()))?,
-            ))
-        }
-        "shutdown" => {
-            // Stopping is gated as a write, because a process that ends at the wrong moment
-            // surprises an agent more than a rule it has to redo does.
-            if state.settings.mcp_writes == Writes::None {
-                return Ok(mcp::tool_refusal("shutdown refused: mcp_writes is none"));
-            }
-
-            Ok(mcp::tool_json(serde_json::json!({
-                "stopping": state.request_stop(),
-            })))
-        }
         other => Err((
             mcp::METHOD_NOT_FOUND,
             format!("this endpoint has no tool named {other}"),
@@ -1775,6 +1595,17 @@ struct StateJson {
     monitor: MonitorJson,
     /// What the rebuild at startup found, so the page can say what changed while it was closed.
     startup: Startup,
+    /// The secret a writing request has to carry, so that the page the tray opened can post.
+    ///
+    /// It is in the answer of a route every page load makes, which is what lets a tab the human
+    /// typed the address into learn it without the tray. A page that reached us under another name
+    /// is refused by the `Host` check before it could read this.
+    token: String,
+    /// Whether `rules.toml` on disk is not the file this process wrote.
+    ///
+    /// True for a hand edit made while the tool was closed as well as for one made a moment ago,
+    /// and it clears when the tool writes the file again.
+    rules_changed: bool,
 }
 
 /// The monitor's state together with the count the log holds, so an empty list can be told apart
@@ -1815,6 +1646,8 @@ impl StateJson {
             detected,
             monitor: state.monitor(),
             startup: state.startup.clone(),
+            token: state.token.clone(),
+            rules_changed: state.rules_changed_outside(),
         }
     }
 }
@@ -2258,9 +2091,10 @@ fn handle_connection(
         return write_response(stream, &response);
     };
 
-    // Headers are read to the blank line; only content-length matters, and it is read here so a
-    // POST body does not stay in the socket buffer.
+    // Headers are read to the blank line. Content-length is read here because a POST body must not
+    // stay in the socket buffer, and the fields `guard` reads are collected on the way past.
     let mut content_length = 0usize;
+    let mut fields = Vec::new();
 
     loop {
         let mut line = String::new();
@@ -2281,6 +2115,10 @@ fn handle_connection(
         {
             content_length = value.trim().parse().unwrap_or(0);
         }
+
+        if let Some((name, value)) = trimmed.split_once(':') {
+            fields.push((name.to_owned(), value.to_owned()));
+        }
     }
 
     let mut body = vec![0u8; content_length];
@@ -2290,9 +2128,15 @@ fn handle_connection(
     }
 
     let path = target.split('?').next().unwrap_or(target).to_owned();
-    let request = Request::new(method, &path, body);
+    let request = Request::with_headers(method, &path, body, Headers::from_pairs(&fields));
 
     debug!(method = %request.method, path = %request.path, "request");
+
+    // Refused before the event stream is opened: a response that never ends is the worst way to
+    // answer a page that is not allowed to ask.
+    if let Some(refused) = guard(&request, &state.token) {
+        return write_response(stream, &refused);
+    }
 
     if request.path == "/api/events" {
         return stream_events(&mut stream, &state.events);
@@ -2320,8 +2164,11 @@ fn status_text(status: u16) -> &'static str {
     match status {
         200 => "200 OK",
         400 => "400 Bad Request",
+        401 => "401 Unauthorized",
+        403 => "403 Forbidden",
         404 => "404 Not Found",
         405 => "405 Method Not Allowed",
+        415 => "415 Unsupported Media Type",
         _ => "500 Internal Server Error",
     }
 }
@@ -2335,6 +2182,173 @@ mod tests {
         state_with(Arc::new(EventLog::new()), Live::default())
     }
 
+    /// The token is the whole defence a writing request has, so it is worth pinning down that what
+    /// the operating system hands out is long enough to guess nothing and different every run.
+    #[test]
+    fn a_session_token_is_long_and_different_every_time() {
+        let first = session_token();
+        let second = session_token();
+
+        assert_eq!(first.len(), 32, "sixteen bytes as hex is 128 bits of token");
+        assert!(
+            first.chars().all(|c| c.is_ascii_hexdigit()),
+            "the token has to survive a URL query: {first}"
+        );
+        assert_ne!(first, second, "two starts must not share a token");
+    }
+    /// The guard is what stands between a page on another machine and a rule written to disk, so
+    /// each of its checks gets a test of its own rather than one test that happens to pass.
+    fn guarded(
+        method: &str,
+        host: Option<&str>,
+        origin: Option<&str>,
+        ctype: Option<&str>,
+        token: Option<&str>,
+    ) -> Response {
+        let pairs: Vec<(String, String)> = [
+            host.map(|value| ("host".to_owned(), value.to_owned())),
+            origin.map(|value| ("origin".to_owned(), value.to_owned())),
+            ctype.map(|value| ("content-type".to_owned(), value.to_owned())),
+            token.map(|value| ("x-winfw-token".to_owned(), value.to_owned())),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        let request = Request::with_headers(
+            method,
+            "/api/rules",
+            br#"{"rule":[]}"#.to_vec(),
+            Headers::from_pairs(&pairs),
+        );
+
+        guard(&request, TEST_TOKEN).unwrap_or_else(|| Response::text(200, "allowed"))
+    }
+
+    #[test]
+    fn a_writing_request_without_a_token_is_refused() {
+        let response = guarded(
+            "POST",
+            Some("127.0.0.1:8788"),
+            Some("http://127.0.0.1:8788"),
+            Some("application/json"),
+            None,
+        );
+
+        assert_eq!(
+            response.status, 401,
+            "the token is what identifies the page"
+        );
+    }
+
+    #[test]
+    fn a_writing_request_with_the_wrong_token_is_refused() {
+        let response = guarded(
+            "POST",
+            Some("127.0.0.1:8788"),
+            Some("http://127.0.0.1:8788"),
+            Some("application/json"),
+            Some("some-other-token"),
+        );
+
+        assert_eq!(response.status, 401);
+    }
+
+    /// A page on another host can still reach the socket; what it may not do is write.
+    #[test]
+    fn a_writing_request_from_another_origin_is_refused() {
+        let response = guarded(
+            "POST",
+            Some("127.0.0.1:8788"),
+            Some("http://example.com"),
+            Some("application/json"),
+            Some(TEST_TOKEN),
+        );
+
+        assert_eq!(response.status, 403, "a wrong origin is the CSRF case");
+    }
+
+    /// DNS rebinding makes `example.com` resolve to `127.0.0.1` *after* the page loaded, so the
+    /// `Host` header of the requests that follow is the only thing that names the name in use.
+    #[test]
+    fn a_request_for_another_host_is_refused() {
+        let response = guarded("GET", Some("example.com"), None, None, None);
+
+        assert_eq!(
+            response.status, 403,
+            "a read is guarded against rebinding too"
+        );
+    }
+
+    #[test]
+    fn a_writing_request_without_a_json_body_is_refused() {
+        let response = guarded(
+            "POST",
+            Some("localhost:8788"),
+            Some("http://localhost:8788"),
+            Some("text/plain"),
+            Some(TEST_TOKEN),
+        );
+
+        assert_eq!(response.status, 415);
+    }
+
+    /// The browser learns the token from the URL the tray opens, and a `GET` is what reads it
+    /// back, so a read must never be refused for not carrying it.
+    #[test]
+    fn a_reading_request_is_allowed_without_token_or_content_type() {
+        let response = guarded("GET", Some("127.0.0.1:8788"), None, None, None);
+
+        assert_eq!(response.status, 200);
+    }
+
+    /// The MCP endpoint is deliberately outside the token: an agent is configured with a URL
+    /// rather than with a session, and it only reads.
+    #[test]
+    fn the_mcp_endpoint_is_allowed_without_a_token() {
+        let request = Request::with_headers(
+            "POST",
+            "/mcp",
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call"}"#.to_vec(),
+            Headers::from_pairs(&[]),
+        );
+
+        assert!(guard(&request, TEST_TOKEN).is_none());
+    }
+
+    /// The writing tools are gone from the endpoint, so a client that still calls one hears
+    /// `method not found` rather than watching a file change behind its back.
+    #[test]
+    fn calling_a_removed_tool_is_a_method_not_found() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+        let rules_path = server_state.rules_path();
+
+        let before = std::fs::read_to_string(&rules_path).ok();
+
+        let response = Server::route(
+                &server_state,
+                &worker,
+                &Request::new(
+                    "POST",
+                    "/mcp",
+                    br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rules.allow","arguments":{"app":"notepad.exe"}}}"#.to_vec(),
+                ),
+            )
+            .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains("-32601"),
+            "a removed tool is not a tool any more: {body}",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&rules_path).ok(),
+            before,
+            "an MCP call must not write a rule file",
+        );
+    }
     /// The tray's pause flips the flag and reports the new value, leaving the policy alone.
     #[test]
     fn toggling_learning_reports_what_it_became_and_keeps_the_policy() {
@@ -2344,6 +2358,9 @@ mod tests {
         assert_eq!(live.policy(), Policy::Deny);
         assert!(live.toggle_learning());
     }
+
+    /// The token the test states hand out, so a test can write the header a browser would write.
+    const TEST_TOKEN: &str = "test-token";
 
     fn state_with(events: Arc<EventLog>, live: Live) -> AppState {
         let scratch = crate::testutil::scratch_dir("server");
@@ -2371,61 +2388,9 @@ mod tests {
             active_file,
             String::new(),
             Startup::unmeasured(),
+            TEST_TOKEN.to_owned(),
+            None,
         )
-    }
-
-    /// The same rules a page holds, but with the write permission the rule tools ask for, which
-    /// the default does not give them.
-    fn writable_state() -> AppState {
-        let scratch = crate::testutil::scratch_dir("server-write");
-        let paths = DataPaths::under(scratch.join("data"));
-
-        paths.ensure().expect("create the data directories");
-
-        let detector = Detector::load(&paths.learn).expect("load the detected list");
-
-        let active_file = paths.rules.clone();
-
-        AppState::new(
-            paths,
-            Settings {
-                mcp_writes: Writes::Rules,
-                ..Settings::default()
-            },
-            Arc::new(Mutex::new(RuleFile {
-                rule: vec![Rule::plain(
-                    "browser",
-                    crate::rules::Action::Allow,
-                    "C:\\Program Files\\*\\browser.exe",
-                )],
-            })),
-            Arc::new(detector),
-            Arc::new(EventLog::new()),
-            Arc::new(Live::default()),
-            active_file,
-            String::new(),
-            Startup::unmeasured(),
-        )
-    }
-
-    /// The same rules again with `mcp_writes = all`, which is what the settings tool asks for.
-    ///
-    /// `writable_state` stops at `rules`, so a settings call there is refused by the permission
-    /// gate before the body is ever read.
-    fn all_writes_state() -> AppState {
-        let mut server_state = writable_state();
-        server_state.settings.mcp_writes = Writes::All;
-        server_state
-    }
-
-    /// Whether the store accepted what a tool just wrote. A tool nests its own answer under
-    /// `structuredContent`, so the flag sits one level deeper than it does in a state body.
-    fn tool_store_accepted(body: &str) -> bool {
-        serde_json::from_str::<serde_json::Value>(body)
-            .expect("a tool body is JSON")
-            .pointer("/structuredContent/store")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
     }
 
     /// Whether the store accepted the work a route just did. Only an accepted write takes an entry
@@ -2773,10 +2738,10 @@ mod tests {
         );
     }
 
-    /// `tools/list` is what an agent reads before it acts, so a tool that exists must be in it:
-    /// `shutdown` is reachable as a method only because `is_tool` finds it in this list.
+    /// `tools/list` is what an agent reads before it acts, so the list *is* the surface: a writing
+    /// tool that is not listed cannot be called, and `shutdown` is proof that it is really gone.
     #[test]
-    fn the_tool_list_offers_shutdown() {
+    fn the_tool_list_offers_only_reading_tools() {
         let server_state = state();
         let worker = WfpWorker::start();
 
@@ -2793,14 +2758,26 @@ mod tests {
 
         let body = String::from_utf8_lossy(&response.body).into_owned();
 
-        assert!(
-            body.contains(r#""name":"shutdown""#),
-            "a tool that is not listed cannot be discovered: {body}",
-        );
-        assert!(
-            body.contains(r#""name":"settings.set""#),
-            "a tool that exists must be in the list: {body}",
-        );
+        for name in [
+            "status",
+            "rules.list",
+            "rules.share",
+            "detected.list",
+            "events.list",
+            "profiles.list",
+        ] {
+            assert!(
+                body.contains(&format!(r#""name":"{name}""#)),
+                "{name} is a tool an agent can discover: {body}",
+            );
+        }
+
+        for name in ["shutdown", "settings.set", "rules.allow", "rules.decode"] {
+            assert!(
+                !body.contains(&format!(r#""name":"{name}""#)),
+                "{name} wrote to a file or the store, so it is not offered any more: {body}",
+            );
+        }
     }
 
     /// A settings change is written to `config.toml`, published to the atomics the monitor reads,
@@ -2840,6 +2817,99 @@ mod tests {
         );
     }
 
+    /// The page can only send the token back if the state carries it, which is how a second tab
+    /// that was opened without `?token=` still learns how it may write.
+    #[test]
+    fn the_state_endpoint_carries_the_session_token() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains(r#""token":"test-token""#),
+            "the page reads the token out of the state: {body}",
+        );
+    }
+
+    /// A save by the tool is not a change from outside, so the page must not be told otherwise.
+    #[test]
+    fn a_save_by_the_tool_leaves_no_notice() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"C:\\Tools\\ssh.exe","enabled":true}]}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains(r#""rules_changed":false"#),
+            "the file on disk is our own work: {body}",
+        );
+    }
+
+    /// Someone edited `rules.toml` while we were not looking — or while we were running — and the
+    /// page has to say so rather than quietly keep showing the rules in memory.
+    #[test]
+    fn a_change_to_the_rules_file_is_noticed() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"C:\\Tools\\ssh.exe","enabled":true}]}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let file = server_state.rules_path();
+        let edited = format!(
+            "{}\n",
+            std::fs::read_to_string(&file).expect("read the rules file we just wrote")
+        );
+        std::fs::write(&file, edited).expect("write the edited rules file");
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains(r#""rules_changed":true"#),
+            "a file edited by hand is a file the page must mention: {body}",
+        );
+    }
     /// The theme is the one setting the page renders, so it has to arrive with the state rather
     /// than live only in the file the page cannot read.
     #[test]
@@ -2931,37 +3001,6 @@ mod tests {
         );
     }
 
-    /// The MCP route reads the theme the same way the browser does, so an agent that guesses a name
-    /// hears the range rather than watching the setting stay as it was.
-    #[test]
-    fn the_mcp_settings_tool_refuses_a_theme_it_cannot_read() {
-        let server_state = all_writes_state();
-        let worker = WfpWorker::start();
-
-        let response = Server::route(
-            &server_state,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"settings.set","arguments":{"theme":"neon"}}}"#
-                    .to_vec(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(
-            body.contains("light, dark or auto"),
-            "the refusal names what to send: {body}",
-        );
-        assert!(
-            body.contains("-32602"),
-            "a name the tool cannot use is a protocol error: {body}",
-        );
-    }
-
     /// An unknown field in a settings body is refused rather than ignored, so a client that
     /// misspells a setting learns about it instead of watching nothing happen.
     #[test]
@@ -3015,32 +3054,6 @@ mod tests {
         ));
 
         assert_eq!(response.status, 500, "a refusal is not a parse error");
-    }
-
-    /// The MCP gate is the same one a profile switch runs into: settings belong to `all`.
-    #[test]
-    fn the_mcp_settings_tool_refuses_without_write_permission() {
-        let server_state = state();
-        let worker = WfpWorker::start();
-
-        let response = Server::route(
-            &server_state,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"settings.set","arguments":{"default_policy":"deny"}}}"#.to_vec(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(body.contains("settings.set refused"), "{body}");
-        assert!(
-            server_state.live.policy() == Policy::Allow,
-            "a refused call must change nothing",
-        );
     }
 
     /// A rule narrowed by protocol, direction, port and remote address travels through the API,
@@ -3135,71 +3148,6 @@ mod tests {
         assert!(response.is_err(), "a port must be a port");
     }
 
-    /// An agent may name a port as a number or as the range text the file uses, and a value that
-    /// is neither is refused. `rules` write permission is enough here: naming a port narrows a
-    /// rule, it does not widen what an agent may ask for.
-    #[test]
-    fn the_mcp_rule_tools_read_a_port_in_both_forms() {
-        let scratch = crate::testutil::scratch_dir("mcp-port");
-        let paths = DataPaths::under(scratch.join("data"));
-
-        paths.ensure().expect("create the data directories");
-
-        let detector = Detector::load(&paths.learn).expect("load the detected list");
-
-        let settings = Settings {
-            mcp_writes: Writes::Rules,
-            ..Settings::default()
-        };
-
-        let server_state = AppState::new(
-            paths,
-            settings,
-            Arc::new(Mutex::new(RuleFile::default())),
-            Arc::new(detector),
-            Arc::new(EventLog::new()),
-            Arc::new(Live::default()),
-            scratch.join("data").join("rules.toml"),
-            String::new(),
-            Startup::unmeasured(),
-        );
-        let worker = WfpWorker::start();
-
-        for port in [r#"443"#, r#""1024-2048""#] {
-            let response = Server::route(
-                &server_state,
-                &worker,
-                &Request::new(
-                    "POST",
-                    "/mcp",
-                    format!(
-                        r#"{{"jsonrpc":"2.0","id":1,"method":"rules.deny","params":{{"app":"C:\\a.exe","port":{port}}}}}"#,
-                    )
-                    .into_bytes(),
-                ),
-            )
-            .expect("route");
-
-            let body = String::from_utf8_lossy(&response.body).into_owned();
-
-            assert!(
-                body.contains("structuredContent"),
-                "port {port} must be accepted: {body}",
-            );
-            assert!(
-                body.contains(r#""isError":false"#),
-                "port {port} must be accepted: {body}",
-            );
-        }
-
-        let written = std::fs::read_to_string(server_state.rules_path()).expect("read the rules");
-
-        assert!(
-            written.contains(r#"port = "443""#) && written.contains(r#"port = "1024-2048""#),
-            "both forms have to reach the file: {written}",
-        );
-    }
-
     /// An agent may name a tool directly rather than wrapping it in `tools/call`, which is the
     /// shortest form it can send and therefore the one it is most likely to guess.
     #[test]
@@ -3229,227 +3177,6 @@ mod tests {
         assert!(
             body.contains("structuredContent"),
             "the tool itself answered: {body}",
-        );
-    }
-
-    /// An index is the only handle an agent has on an existing rule, so removing by index has to
-    /// reach the file: cleanup over MCP is otherwise impossible.
-    #[test]
-    fn a_rule_is_removed_by_index_over_mcp() {
-        let server_state = writable_state();
-        let worker = WfpWorker::start();
-
-        let response = Server::route(
-            &server_state,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                br#"{"jsonrpc":"2.0","id":1,"method":"rules.remove","params":{"index":0}}"#
-                    .to_vec(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(
-            body.contains("\"removed\":\"browser\""),
-            "the tool names what it removed: {body}",
-        );
-
-        let written = std::fs::read_to_string(&server_state.paths.rules).expect("rules.toml");
-
-        assert!(
-            !written.contains("browser.exe"),
-            "the removed rule is gone from the file: {written}",
-        );
-    }
-
-    /// An index past the end is a wrong argument rather than a silent no-op, because an agent that
-    /// counted rules from an older `rules.list` needs to hear that its picture was stale.
-    #[test]
-    fn removing_a_rule_that_is_not_there_names_the_index() {
-        let server_state = writable_state();
-        let worker = WfpWorker::start();
-
-        let response = Server::route(
-            &server_state,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                br#"{"jsonrpc":"2.0","id":1,"method":"rules.remove","params":{"index":5}}"#
-                    .to_vec(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(
-            body.contains("there is no rule at index 5"),
-            "a stale index is refused by name: {body}",
-        );
-    }
-
-    /// The write gate covers the new verbs as much as the old ones, and by default an agent may
-    /// read everything and write nothing.
-    #[test]
-    fn an_mcp_rule_write_is_refused_when_the_gate_is_none() {
-        let server_state = state();
-        let worker = WfpWorker::start();
-
-        let response = Server::route(
-            &server_state,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                br#"{"jsonrpc":"2.0","id":1,"method":"rules.remove","params":{"index":0}}"#
-                    .to_vec(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(
-            body.contains("rules.remove refused: mcp_writes is none"),
-            "the gate has to name itself: {body}",
-        );
-    }
-
-    /// Milestone 9's exit test was that an MCP client can allow a Detected entry, and until now the
-    /// entry stayed on the list over MCP while the browser dismissed it.
-    #[test]
-    fn an_allow_over_mcp_dismisses_the_detected_entry() {
-        let server_state = writable_state();
-        let worker = WfpWorker::start();
-
-        let app = "\\device\\harddiskvolume3\\windows\\system32\\thing.exe";
-
-        server_state
-            .detector
-            .observe(&connection(app), &RuleFile::default());
-
-        let response = Server::route(
-            &server_state,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "rules.allow",
-                    "params": { "app": app },
-                })
-                .to_string()
-                .into_bytes(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(
-            body.contains("structuredContent"),
-            "the tool answered: {body}",
-        );
-
-        let left = server_state
-            .detector
-            .snapshot()
-            .iter()
-            .any(|entry| entry.app.contains("thing.exe"));
-
-        assert_eq!(
-            left,
-            !tool_store_accepted(&body),
-            "a decided entry leaves the Detected list only when the store accepted the rule",
-        );
-    }
-
-    /// A share string is only half a feature while nothing can read it back, which is what an
-    /// agent pasting a rule from another machine needs.
-    #[test]
-    fn a_share_string_decodes_back_into_a_rule_without_writing() {
-        let server_state = writable_state();
-        let worker = WfpWorker::start();
-
-        let share = export::encode(&Rule::plain(
-            "shared",
-            crate::rules::Action::Deny,
-            "C:\\Tools\\shared.exe",
-        ))
-        .expect("encode a rule");
-
-        let response = Server::route(
-            &server_state,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                format!(
-                    r#"{{"jsonrpc":"2.0","id":1,"method":"rules.decode","params":{{"share":"{share}"}}}}"#,
-                )
-                .into_bytes(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(
-            body.contains("shared.exe"),
-            "the decoded rule comes back: {body}",
-        );
-        assert!(
-            !std::fs::read_to_string(&server_state.paths.rules)
-                .unwrap_or_default()
-                .contains("shared.exe"),
-            "reading a share string must not write a file",
-        );
-    }
-
-    /// With `add` the same call becomes the import direction, and the rule already in the file has
-    /// to survive it: an import that replaces is a decision of its own (BACKLOG.md 3.3).
-    #[test]
-    fn a_share_string_can_be_added_to_the_rules() {
-        let server_state = writable_state();
-        let worker = WfpWorker::start();
-
-        let share = export::encode(&Rule::plain(
-            "shared",
-            crate::rules::Action::Deny,
-            "C:\\Tools\\shared.exe",
-        ))
-        .expect("encode a rule");
-
-        let response = Server::route(
-            &server_state,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                format!(
-                    r#"{{"jsonrpc":"2.0","id":1,"method":"rules.decode","params":{{"share":"{share}","add":true}}}}"#,
-                )
-                .into_bytes(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(body.contains("shared"), "the tool answered: {body}");
-
-        let written = std::fs::read_to_string(&server_state.paths.rules).expect("rules.toml");
-
-        assert!(
-            written.contains("shared.exe") && written.contains("browser.exe"),
-            "the shared rule is appended to what was there: {written}",
         );
     }
 
@@ -3501,57 +3228,6 @@ mod tests {
             serde_json::from_slice(&repeated.body).expect("the shutdown answer is json");
 
         assert_eq!(body["stopping"], false, "only the first request stops");
-    }
-
-    /// The endpoint can be asked to stop as well, but only at a write level that permits it:
-    /// `mcp_writes = none` is what keeps an agent from switching the tool off.
-    #[test]
-    fn the_mcp_shutdown_tool_stops_the_process() {
-        let worker = WfpWorker::start();
-
-        let mut allowed = state();
-        allowed.settings.mcp_writes = Writes::All;
-
-        let response = Server::route(
-            &allowed,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                br#"{"jsonrpc":"2.0","id":1,"method":"shutdown"}"#.to_vec(),
-            ),
-        )
-        .expect("route");
-
-        assert_eq!(response.status, 200);
-        assert!(
-            !allowed.running.load(Ordering::SeqCst),
-            "the tool must clear the flag the accept loop waits on",
-        );
-
-        let refused = state();
-
-        let response = Server::route(
-            &refused,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                br#"{"jsonrpc":"2.0","id":2,"method":"shutdown"}"#.to_vec(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(
-            body.contains("mcp_writes is none"),
-            "the refusal must say why: {body}"
-        );
-        assert!(
-            refused.running.load(Ordering::SeqCst),
-            "a refused shutdown must leave the process running",
-        );
     }
 
     #[test]
@@ -3736,86 +3412,6 @@ pattern = "C:\\Windows\\two.exe"
             1,
             "a refused import changes nothing",
         );
-    }
-
-    /// The MCP route replaces the list with the same text the page posts, so an agent can put a
-    /// file back without the browser.
-    #[test]
-    fn the_mcp_import_tool_replaces_the_rule_list() {
-        let server_state = writable_state();
-        let worker = WfpWorker::start();
-
-        let text = "version = 1\n\n[[rule]]\nname = \"one\"\naction = \"allow\"\npattern = \"C:\\\\Windows\\\\one.exe\"\n";
-
-        let response = Server::route(
-            &server_state,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "rules.import",
-                        "arguments": { "text": text },
-                    },
-                })
-                .to_string()
-                .into_bytes(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(
-            body.contains(r#""rules":1"#),
-            "the tool answers with what the file held: {body}",
-        );
-        assert!(
-            !server_state
-                .rules
-                .lock()
-                .expect("rules lock")
-                .rule
-                .iter()
-                .any(|rule| rule.name == "browser"),
-            "the rule the page held is gone, because this replaces: {body}",
-        );
-    }
-
-    /// Without the write permission the tool refuses rather than parsing a body it will not use.
-    #[test]
-    fn the_mcp_import_tool_refuses_without_write_permission() {
-        let server_state = state();
-        let worker = WfpWorker::start();
-
-        let response = Server::route(
-            &server_state,
-            &worker,
-            &Request::new(
-                "POST",
-                "/mcp",
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "rules.import",
-                        "arguments": { "text": "version = 1\n" },
-                    },
-                })
-                .to_string()
-                .into_bytes(),
-            ),
-        )
-        .expect("route");
-
-        let body = String::from_utf8_lossy(&response.body).into_owned();
-
-        assert!(body.contains("rules.import refused"), "{body}");
     }
 
     #[test]

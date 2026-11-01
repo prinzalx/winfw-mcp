@@ -29,10 +29,11 @@ The documentation is split into chapters, so that each question has one place to
 | [3. Rules and profiles](docs/03-rules-and-profiles.md) | rule order, deny over allow, wildcards, device paths, profiles |
 | [4. Learning mode](docs/04-learning-mode.md) | the Detected list and how an application becomes a rule |
 | [5. The web UI](docs/05-web-ui.md) | the page, what is on it, and every HTTP route |
-| [6. The MCP endpoint](docs/06-mcp-endpoint.md) | JSON-RPC methods, the tool list, who may write |
+| [6. The MCP endpoint](docs/06-mcp-endpoint.md) | JSON-RPC methods, the tool list, why the endpoint only reads |
 | [7. WFP internals](docs/07-wfp-internals.md) | elevation, our filters, applying, the event stream, filter attribution, threading |
 | [8. Lifecycle and tray](docs/08-lifecycle.md) | starting, the tray icon, stopping, what stays behind |
 | [9. Development](docs/09-development.md) | source layout, tests, the release process, version history |
+| [10. Security model](docs/10-security-model.md) | the session token, Host and Origin checks, what is protected and what is not |
 
 Working documents next to this index: [PLAN.md](PLAN.md) is the plan and its rationale,
 [BACKLOG.md](BACKLOG.md) the collected follow-ups and audit findings.
@@ -63,12 +64,18 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.35.0**, in which a boot-time start no longer outruns the Base Filtering
-Engine: the engine open retries five times over 3.7 seconds, because the server's worker thread
-opens the engine once for the life of the process and a miss used to stand for the whole session
-([WFP internals](docs/07-wfp-internals.md#opening-the-engine-waits-for-the-service)).
+The current release is **0.36.0**, in which the MCP endpoint reads only. The nine writing tools are
+gone from the code rather than switched off by a setting, because an agent that can write a rule can
+open its own gate; `status`, `rules.list`, `rules.share`, `detected.list`, `events.list` and
+`profiles.list` are what an agent may call. In the same release the writing HTTP routes ask for a
+session token that never reaches a file, and every route checks the `Host` header
+([the web UI](docs/05-web-ui.md#who-may-write), [security model](docs/10-security-model.md)).
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
+a boot-time start stopped outrunning the Base Filtering Engine in **0.35.0**, where the engine open
+retries five times over 3.7 seconds because the worker thread opens the engine once for the life of
+the process and a miss used to stand for the whole session
+([WFP internals](docs/07-wfp-internals.md#opening-the-engine-waits-for-the-service));
 the `theme` setting reached the page in **0.32.0**, where the header cycles `light -> dark -> auto`
 with a click and the choice is applied and survives a reload
 ([the web UI](docs/05-web-ui.md));

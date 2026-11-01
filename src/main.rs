@@ -149,6 +149,10 @@ fn serve(
     let port = settings.port;
     let active_name = settings.active_profile.clone();
 
+    // The secret a writing request has to carry. Generated here rather than read from a file, so a
+    // page that is not ours cannot guess it (PLAN.md section 11).
+    let token = server::session_token();
+
     // A second double-click must not mean a second server: two listeners, two tray icons and two
     // processes rebuilding the one live store. Whoever loses the name opens the browser on the
     // winner and is done, which is why this happens before a port is bound or the store is touched.
@@ -218,6 +222,11 @@ fn serve(
         }
     };
 
+    // What the file held when the tool last wrote it, which is the comparison the banner on the
+    // page is drawn from. A missing stamp is a first run and has nothing to compare against.
+    let rules_written =
+        rules::read_stamp(&active_rules).or(rules::Fingerprint::of_file(&active_rules)?);
+
     let state = server::AppState::new(
         paths,
         settings,
@@ -228,6 +237,8 @@ fn serve(
         active_rules,
         active_name,
         startup,
+        token.clone(),
+        rules_written,
     );
     // Taken before `state` moves into the server, because `Quit` on the tray has to reach the same
     // flag the routes set.
@@ -235,7 +246,11 @@ fn serve(
 
     let server = server::Server::bind(port, state, Arc::clone(&worker))?;
 
+    // The token rides in the URL the tray opens, which is the only way it reaches the browser
+    // without ever being written to a file. A second instance opens the plain URL and the page
+    // reads the token out of the first state body instead.
     let url = format!("http://{}", server.addr());
+    let tray_url = format!("{url}/?token={token}");
 
     info!(url = %url, version = %env!("CARGO_PKG_VERSION"), "web UI ready");
 
@@ -245,7 +260,7 @@ fn serve(
 
     // Held by this scope for as long as the server runs, which is what takes the icon out of the
     // notification area again when the process is asked to stop.
-    let _tray = tray::Tray::start(url.clone(), running, Arc::clone(&live));
+    let _tray = tray::Tray::start(tray_url, running, Arc::clone(&live));
 
     if _tray.added() {
         info!("tray icon added");

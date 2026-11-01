@@ -24,11 +24,13 @@ pub struct Settings {
     /// setting that names one theme while the page shows another is the confusion this field exists
     /// to avoid.
     pub theme: Theme,
-    /// How much the MCP endpoint may change (PLAN.md section 10).
+    /// Removed in 0.36.0: the MCP endpoint is read-only now, so there is nothing left to configure
+    /// about it.
     ///
-    /// `none` is the default on purpose: an agent talking to a firewall it did not configure should
-    /// be able to ask questions before it is allowed to answer them.
-    pub mcp_writes: Writes,
+    /// The key is still accepted so a `config.toml` written by an older version loads, but it is
+    /// never read, and the next save drops it.
+    #[serde(default, skip_serializing)]
+    mcp_writes: Option<String>,
     /// The named profile whose rules are live, or empty for `rules.toml` itself.
     ///
     /// A profile is a rule file under `profiles\<name>.toml`; naming it here is what makes the
@@ -72,6 +74,7 @@ impl Policy {
 
     /// Read a name back. A client that sends anything else gets an error rather than a policy it
     /// did not ask for, which is what the settings route reports to the browser.
+    #[allow(dead_code)] // the writing MCP tools were the last user; the name form is still tested
     pub fn parse(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "allow" => Some(Self::Allow),
@@ -110,6 +113,7 @@ impl Theme {
 
     /// Read a name back, the way [`Policy::parse`] does it. A page or an agent that sends anything
     /// else hears what the values are rather than watching nothing change.
+    #[allow(dead_code)] // the writing MCP tools were the last user; the name form is still tested
     pub fn parse(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "auto" => Some(Self::Auto),
@@ -141,19 +145,6 @@ impl Theme {
     }
 }
 
-/// What the MCP endpoint is allowed to modify.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Writes {
-    /// Read-only. Every write answers "refused" rather than touching the store.
-    #[default]
-    None,
-    /// The rules may change; the profile and the settings may not.
-    Rules,
-    /// Everything an MCP client can see, it can change.
-    All,
-}
-
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -161,7 +152,7 @@ impl Default for Settings {
             log_level: "info".to_owned(),
             learn_mode: true,
             theme: Theme::Dark,
-            mcp_writes: Writes::None,
+            mcp_writes: None,
             active_profile: String::new(),
             volatile_filters: false,
             default_policy: Policy::default(),
@@ -225,7 +216,7 @@ mod tests {
             log_level: "debug".to_owned(),
             learn_mode: false,
             theme: Theme::Light,
-            mcp_writes: Writes::Rules,
+            mcp_writes: None,
             active_profile: "work".to_owned(),
             volatile_filters: true,
             default_policy: Policy::Deny,
@@ -258,8 +249,9 @@ mod tests {
         assert!(format!("{error:#}").contains("unknown field"), "{error:#}");
     }
 
-    /// A `config.toml` written by an earlier version has no `mcp_writes`. Upgrading must not fail
-    /// the whole start over one missing key, so the field falls back to the read-only default.
+    /// A `config.toml` written by an earlier version has no `mcp_writes`, and one written by 0.35
+    /// has a key the tool no longer reads. Neither may fail the start over a key: the first would
+    /// break every existing install, the second every downgrade.
     #[test]
     fn a_config_from_an_older_version_still_loads() {
         let path = crate::testutil::scratch_dir("config-upgrade").join("config.toml");
@@ -273,13 +265,29 @@ mod tests {
 
         assert_eq!(settings.port, 9999);
         assert_eq!(
-            settings.mcp_writes,
-            Writes::None,
-            "a missing key must not silently enable writes"
-        );
-        assert_eq!(
             settings.active_profile, "",
             "a missing profile must mean the default rules.toml"
+        );
+    }
+
+    /// The removed `mcp_writes` key is tolerated rather than rejected, and the save that follows
+    /// drops it, which is how a setting retires without a migration step.
+    #[test]
+    fn the_removed_mcp_writes_key_is_accepted_and_dropped() {
+        let path = crate::testutil::scratch_dir("config-mcp-writes").join("config.toml");
+        std::fs::write(&path, "port = 9777\nmcp_writes = \"all\"\n").expect("write");
+
+        let settings = Settings::load_or_create(&path).expect("load");
+
+        assert_eq!(settings.port, 9777, "the file must still be read");
+
+        settings.save(&path).expect("save");
+
+        let text = std::fs::read_to_string(&path).expect("read");
+
+        assert!(
+            !text.contains("mcp_writes"),
+            "the retired key should not come back: {text}",
         );
     }
 }

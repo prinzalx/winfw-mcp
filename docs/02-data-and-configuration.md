@@ -14,6 +14,7 @@ On the first run the binary creates its data directory and the files inside it:
     config.toml          settings, written with defaults on first run
     rules.toml           user rules, order significant: the first match wins
     rules.toml.bak       the previous generation of the rules, kept from the second save on
+    rules.toml.stamp     the fingerprint of the file the tool wrote last, so an outside edit is noticed
     server.port          written while a serving instance runs, removed when it stops
     profiles\            named profiles, one file each
     learn.json           collected Detected entries (learning mode)
@@ -44,7 +45,7 @@ the result is never more than two files.
 | `default_policy` | `allow` (default) or `deny`. `deny` puts an unconditional block at the bottom of the four authorization layers, so an application no rule mentions is denied rather than allowed; see [WFP internals](07-wfp-internals.md#the-default-deny-base) |
 | `volatile_filters` | `false` by default. `true` makes the server take our filters out of the store when it stops, so the tool is a firewall only while it runs; `false` keeps them installed after a quit (see [lifecycle](08-lifecycle.md#stopping)). Read at startup, so changing it takes a restart |
 | `theme` | `light`, `dark` or `auto`, where `auto` follows the operating system; the page applies it live |
-| `mcp_writes` | how much the MCP endpoint may write: `none`, `rules` or `all` |
+| `mcp_writes` | retired in 0.36.0: the MCP endpoint is read-only. The key is still accepted so an older file loads, and the next save drops it |
 | `active_profile` | the live profile name; empty selects `rules.toml` itself |
 
 `RUST_LOG` overrides `log_level` from `config.toml` for a single run. Logging goes to stderr,

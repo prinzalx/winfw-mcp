@@ -411,6 +411,22 @@
         );
       }
 
+      /* `rules.toml` is not ours any more: someone edited it, restored a backup, or the tool did not
+         write it. Saying so beats showing the rules from memory as if they were the file. */
+      function renderRulesChanged(changed) {
+        if (!changed) {
+          return;
+        }
+
+        el("banner").appendChild(
+          element(
+            "p",
+            "sub",
+            "rules.toml changed outside this tool. The rules shown are the ones in memory; save a rule to make the file ours again.",
+          ),
+        );
+      }
+
       function renderRules() {
         const body = el("rules");
 
@@ -760,6 +776,12 @@
       }
 
       function apply(state) {
+        // A tab that was opened by typing the address has no token in the URL and learns it here,
+        // before any button can be pressed.
+        if (token === "" && state.token) {
+          token = state.token;
+        }
+
         rules = state.rules.rule;
         detected = state.detected;
         learnMode = state.learn_mode;
@@ -772,6 +794,7 @@
         renderDetected();
         renderBanner(state.store);
         renderStartup(state.startup);
+        renderRulesChanged(state.rules_changed);
 
         // The state carries the newest events first, so the panel needs no second request.
         if (state.events.length > 0) {
@@ -792,10 +815,24 @@
         }
       }
 
+      // The token is the point of the URL the tray opened. A tab the human typed the address into
+      // has none and gets it from the first state body, which is read before any button can be
+      // pressed.
+      let token = new URLSearchParams(window.location.search).get("token") ?? "";
+
       async function request(method, path, payload) {
+        const headers = {};
+
+        if (payload) {
+          headers["content-type"] = "application/json";
+        }
+        if (token !== "") {
+          headers["x-winfw-token"] = token;
+        }
+
         const response = await fetch(path, {
           method,
-          headers: payload ? { "content-type": "application/json" } : {},
+          headers,
           body: payload ? JSON.stringify(payload) : undefined,
         });
 
@@ -803,7 +840,13 @@
           throw new Error(path + " answered " + response.status);
         }
 
-        return response.json();
+        // One route answers with a bare Base64 string rather than JSON, and reading that as JSON
+        // would fail on the padding character.
+        if ((response.headers.get("content-type") ?? "").startsWith("application/json")) {
+          return response.json();
+        }
+
+        return response.text();
       }
 
       async function load() {

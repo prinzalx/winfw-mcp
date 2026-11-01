@@ -421,48 +421,47 @@ Ordered by how much pain they could cause.
 
 ---
 
-## 10. MCP access model (milestone 9)
+## 10. MCP access model (milestone 9, decided differently in 0.36.0)
 
-Rough shape, decided 2026-10-31, deliberately minimal.
+The first cut gated writes behind `mcp_writes = "none" | "rules" | "all"`. Since **0.36.0** the
+answer is simpler and stronger: **the MCP endpoint has no writing tools at all**, and the setting is
+gone from the code.
 
-An agent talking to the MCP endpoint may **read everything** — settings, rules, profiles,
-the live WFP inventory, the Detected list. **Writes are gated**, and by default there are
-none: the endpoint starts out read-only on the policies.
+What remains is six readers — `status`, `rules.list`, `rules.share`, `detected.list`, `events.list`,
+`profiles.list`. Removed are `rules.allow`, `rules.deny`, `rules.remove`, `rules.import`,
+`rules.decode`, `settings.set`, `profile.use`, `shutdown` and `export`.
 
-The gate belongs in the **core**, not in the transport. The same functions serve the browser
-and the agent, so a permission check pushed down to the HTTP layer could be walked around by
-the MCP layer and vice versa. Concretely this wants one config string:
+The reason is the sandbox question that was already raised as risk 1 below. A tool that can write can
+hand itself a firewall rule, and a firewall rule *is* the way out to the network: an agent that runs a
+program which reaches the internet can therefore declare its own traffic permitted. Reading answers a
+question about the policy; writing changes the policy, and a policy that the thing being policed can
+edit is a weaker defence than the agent's good manners.
 
-```toml
-# config.toml — how much the MCP endpoint may change
-mcp_writes = "none"   # "none" | "rules" | "all"
-```
+A client that calls a removed tool hears `-32601` (`METHOD_NOT_FOUND`), not a refusal. It is not a
+policy decision the endpoint made but something the endpoint cannot do, which is what the JSON-RPC
+code says. One consequence is worth naming: **an agent cannot stop this tool any more**, because
+`shutdown` was a writing tool.
 
-- `none` — read-only. Anything that would mutate a file or the store is rejected with a clear
-  error naming the setting.
-- `rules` — may add, edit, remove and reorder entries in `rules.toml` and apply them. This is
-  the intended everyday setting.
-- `all` — may also flip settings and switch profiles.
-
-A per-service × per-target allow-list is the natural refinement once we see what an agent
-actually touches; it is explicitly **not** part of the first cut.
+The per-service × per-target allow-list is still the natural refinement, and it now applies to the
+HTTP writes rather than to the endpoint: whoever is allowed to write through the browser is the group
+that decides what an agent may ask for.
 
 ### Where this can fail
 
 These are the ways an agent escapes its sandbox, and they apply to the web UI too:
 
-1. **Write races.** The browser user and the agent share one core. Applying is a full rebuild,
-   so the last writer wins and an edit made a second earlier can be silently undone. Needs at
-   least a cheap "store changed underneath you" check before M9.
-2. **Persistent filters outlive the process.** There is no notion of a *temporary* rule yet, so
-   an agent's experiment stays in the store after it is gone. A temporary rule (WFP non-
-   persistent filter plus a volatile entry in our own state) is the open question.
-3. **File versus store.** Both `rules.toml` and WFP are written. Which one is authoritative has
-   to be defined before two clients can write; the plan is *file first, then store*, and a load
-   always reads the file.
-4. **Reads need elevation too.** If the process is not elevated the agent reads an empty store
-   and can conclude "no rules exist". Reporting that as *unknown* rather than *empty* is part of
-   the same work as the banner in §9.2.
+1. **Write races.** The browser user and any HTTP client share one core. Applying is a full rebuild,
+   so the last writer wins and an edit made a second earlier can be silently undone. Mitigated since
+   **0.36.0** by the fingerprint notice for `rules.toml`; a real merge is not implemented.
+2. **Persistent filters outlive the process.** There is no notion of a *temporary* rule yet, so an
+   agent's experiment stays in the store after it is gone. A temporary rule (WFP non-persistent filter
+   plus a volatile entry in our own state) is the open question.
+3. **File versus store.** Both `rules.toml` and WFP are written. Which one is authoritative is defined
+   as *file first, then store*, and a load always reads the file. Since **0.36.0** a change to the file
+   made by someone else is noticed rather than silently followed.
+4. **Reads need elevation too.** If the process is not elevated the agent reads an empty store and can
+   conclude "no rules exist". Reporting that as *unknown* rather than *empty* is part of the same work
+   as the banner in §9.2, and it is what the store banner on the page already says today.
 
 ### Open questions for you
 
@@ -471,3 +470,32 @@ These are the ways an agent escapes its sandbox, and they apply to the web UI to
 - Should `Quit` in the tray also *remove* winfw's WFP filters, or leave enforcement in place?
 - Is the Detected list capped and persisted across restarts, or allowed to grow?
 - Do Detected entries expire on a timeout as well as a count cap?
+
+## 11. How the HTTP API is guarded (0.36.0)
+
+Making the endpoint read-only closes one door and leaves the other open: a client on this machine can
+still `POST` to `127.0.0.1:8788`, and the process often runs elevated, so the write would happen with
+rights the client does not have. The guard in `src/server.rs` is the answer, and it is deliberately
+transport-only — the routes themselves did not change shape.
+
+- **Session token.** Sixteen random bytes as hex from `getrandom`, made at startup, held in memory,
+  never written to a file and never logged. It reaches the browser through the URL the tray opens and
+  through the first `/api/state` body for a tab whose address was typed by hand. Required on writes,
+  answered with `401`.
+- **`Host` check on every route, reads included.** Only `127.0.0.1`, `localhost`, `::1` or another
+  loopback address, answered with `403`. This is the DNS-rebinding defence, and it is the reason a read
+  is checked at all.
+- **`Origin` check on writes**, answered with `403`; the cross-site request forgery case.
+- **`Content-Type: application/json` required on writes**, answered with `415`. A form post and a
+  `text/plain` fetch body are exactly what a cross-origin request may send without a preflight.
+- **`/mcp` is exempt** from token, origin and content type, and must not reach a writing route: the
+  endpoint is configured with a URL, not with a session.
+
+The honest limit is the user account. A process running as the same user can read the port out of
+`server.port`, ask `/api/state` for the token, and write. What the guard defeats is a *page* that is
+not ours, which is the case a browser-based agent actually presents.
+
+A second honest limit: no `OPTIONS` route is implemented and no `Access-Control-Allow-Origin` header is
+sent, so a cross-origin `fetch` that sets a JSON content type is stopped by the browser as well as by
+the guard. That is fine for a server whose only intended client is the page it opened itself.
+

@@ -11,51 +11,47 @@ client that asks for anything else is told so rather than silently ignored.
 
 ## Tools
 
-| Tool | Purpose | Writes? |
-|---|---|---|
-| `status` | settings, rule count, store health, the state of the event feed, what the rebuild at startup found, how much the endpoint may write | no |
-| `rules.list` | every rule, in file order | no |
-| `rules.share` | one rule as a Base64 string (takes `index`) | no |
-| `rules.decode` | read a Base64 share string back (takes `share`; with `add` the rule is appended) | no, yes with `add` |
-| `rules.import` | replace the whole rule list with the text of a rules file (takes `text`) | yes |
-| `rules.allow` | add an allow rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`, `remote`), and dismiss the Detected entry it decides | yes |
-| `rules.deny` | add a deny rule, dismissing the Detected entry it decides (same arguments) | yes |
-| `rules.remove` | remove the rule at an index, write the file, rebuild the store (takes `index`) | yes |
-| `detected.list` | what learning mode collected | no |
-| `events.list` | recent connection events, each naming both endpoints, whether the traffic left the machine, and the deciding filter id and rule | no |
-| `export` | copy an area (`rules`, `config`, `detected`, `profiles`, `all`) into `export\` | yes |
-| `profiles.list` | the active profile and the stored profile names | no |
-| `profile.use` | switch the live profile (takes `name`) | yes |
-| `settings.set` | change `learn_mode`, `default_policy` or `theme` (all optional) | yes |
-| `shutdown` | stop the process; the filters stay in the firewall | yes |
+Six tools, and every one of them reads.
 
-`rules.share` and `rules.decode` are the two directions of one string, which is how a rule travels
-between machines without the browser: `share` on one host, `decode` with `add` on the other. Without
-`add` a decode writes nothing, so it stays usable under the default `mcp_writes = none`, and the
-pattern it carries is validated before anything is written — a share string is Base64 around JSON a
-human may have edited.
+| Tool | Purpose |
+|---|---|
+| `status` | settings, rule count, store health, the state of the event feed, what the rebuild at startup found |
+| `rules.list` | every rule, in file order |
+| `rules.share` | one rule as a Base64 string (takes `index`) |
+| `detected.list` | what learning mode collected |
+| `events.list` | recent connection events, each naming both endpoints, whether the traffic left the machine, and the deciding filter id and rule |
+| `profiles.list` | the active profile and the stored profile names |
 
-`rules.allow` and `rules.deny` take an application an agent read from `detected.list` and take it
-off that list once the store accepted the rule, which is what the browser has always done. An entry
-the store refused stays visible, so a decision nothing acted on is not lost silently.
+`rules.share` is the readable half of a rule: an agent can hand the string to a human, and the
+human can put it in the browser, which is how a rule travels between machines without anyone
+editing a file over a share.
 
-## Who may write
+### What happened to the writing tools
 
-Reads are always allowed. Writes go through `mcp_writes` in `config.toml`, which is `none` by
-default: an agent should be able to ask questions before anyone allows it to answer them.
+Until `0.36.0` the endpoint also offered `rules.allow`, `rules.deny`, `rules.remove`,
+`rules.import`, `rules.decode`, `settings.set`, `profile.use`, `shutdown` and `export`. They are
+gone from the code rather than switched off by configuration, and the reason is circular
+permission: a tool that can write can hand itself a firewall rule, and a firewall rule is the way
+out to the network. An agent that runs a program which reaches the internet could therefore open
+its own gate, which is not a question about the firewall but a change to it.
 
-`rules` permits the tools that touch the rule list. `all` additionally permits the ones that rewrite
-the settings as well, which today means `profile.use` and `settings.set`.
+A client that calls one of the removed tools hears `-32601` (`METHOD_NOT_FOUND`), the same answer
+it would get for a name that never existed. What the endpoint cannot do is the protocol's business,
+not a policy decision, so it is not reported as a tool that ran and declined.
 
-A refused write is not a transport error; it comes back as a normal tool result with `isError` set
-and the reason both as text and as structured content. That is what the MCP spec says about a tool
-that ran and declined. Deny outranks allow, always, so an agent can widen a hole but cannot talk
-its way past a deny.
+The consequence worth stating plainly: **an MCP client cannot stop this tool.** `shutdown` was a
+writing tool, so stopping the process means the browser, the tray, or a `POST /api/shutdown` with
+the session token.
 
-An argument the tool cannot use is a protocol error instead, `-32602` (`INVALID_PARAMS`). A pattern
-that is not an absolute path is refused this way, so an agent that hands over `not-a-path` is told
-so rather than left with a rule that matches nothing (`status` will not look wrong, but nothing will
-match).
+## Reads and the token
+
+The MCP endpoint is deliberately outside the session token described in
+[the security model](10-security-model.md). An agent is configured with a URL, and a URL it has to
+be told about is a URL that can be copied into another process on this machine. Because the endpoint
+only reads, the worst that an uninvited reader does is learn what the rules are.
+
+The writing half of that argument belongs to the HTTP API in
+[chapter 5](05-web-ui.md): the browser holds the token, and only the browser may write.
 
 ## Why hand-written
 

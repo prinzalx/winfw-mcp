@@ -57,6 +57,7 @@ impl Request {
     }
 
     /// One string argument of a tool, which is how every argument of this endpoint arrives.
+    #[allow(dead_code)] // the writing tools are gone; the tests still read arguments this way
     pub fn string_arg(&self, name: &str) -> Option<String> {
         self.arg(name)
             .and_then(|value| value.as_str().map(str::to_owned))
@@ -163,7 +164,7 @@ pub fn tool_text(text: impl Into<String>) -> serde_json::Value {
     })
 }
 
-/// The result body of a tool that answers with data rather than with a sentence.
+/// The report a tool hands back when it has data to show.
 ///
 /// The data is given twice on purpose: as text for the model, which reads `content`, and as
 /// `structuredContent` for a client that would rather not parse a string it was given as JSON.
@@ -174,18 +175,6 @@ pub fn tool_json(value: serde_json::Value) -> serde_json::Value {
         "content": [{ "type": "text", "text": text }],
         "isError": false,
         "structuredContent": value,
-    })
-}
-
-/// The result body of a tool that declined to act.
-pub fn tool_refusal(text: impl Into<String>) -> serde_json::Value {
-    let text = text.into();
-    serde_json::json!({
-        "content": [{ "type": "text", "text": text.clone() }],
-        "isError": true,
-        // The refusal is also structured, so a client does not have to parse prose to learn that
-        // the policy rather than the firewall was the obstacle.
-        "structuredContent": { "refused": true, "reason": text },
     })
 }
 
@@ -275,25 +264,6 @@ mod tests {
         let request = parse(br#"{"id":1,"method":"ping"}"#).expect("accepted");
 
         assert_eq!(request.method, "ping");
-    }
-
-    #[test]
-    fn a_refusal_is_a_result_rather_than_a_transport_error() {
-        let refusal = tool_refusal("mcp_writes is none");
-        let response = Response::result(Some(serde_json::json!(1)), refusal);
-
-        assert!(
-            response.error.is_none(),
-            "a refusal must not look like a protocol error"
-        );
-        assert_eq!(
-            response
-                .result
-                .expect("result")
-                .get("isError")
-                .and_then(|value| value.as_bool()),
-            Some(true)
-        );
     }
 
     #[test]

@@ -51,14 +51,17 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   than as an empty list. Under it, since **0.31.0**, what the rebuild at startup found: a line naming
   the filters the store held and the filters the rules describe, shown only when the two differ. An
   unchanged restart says nothing, and a refused store needs no second notice because the banner above
-  already names it.
+  already names it. Since **0.36.0** a third notice appears when `rules.toml` on disk is not the file
+  the tool itself wrote: someone edited it, restored a backup over it, or deleted it, and the rules
+  the page shows are the ones in memory rather than the ones in the file. Saving a rule makes the
+  file ours again and the notice goes away.
 
 ## Routes
 
 | Route | Purpose |
 |---|---|
 | `GET /` | the page itself |
-| `GET /api/state` | settings, rules, what the store reported, the state of the event feed and what the rebuild at startup found |
+| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, the session token and whether `rules.toml` changed outside the tool |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
 | `POST /api/settings` | change `learn_mode`, `default_policy` or `theme` at runtime; only `log_level` is written for the next run |
@@ -78,6 +81,28 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 | `GET /api/health` | liveness, for a supervisor or the MCP transport |
 | `POST /mcp` | the Model Context Protocol endpoint (JSON-RPC 2.0) |
 
+## Who may write
+
+Since **0.36.0** every request passes a guard before it reaches a route, and the guard distinguishes
+reading from writing.
+
+| Check | Applies to | Answer | Why |
+|---|---|---|---|
+| `Host` names `127.0.0.1`, `localhost` or another loopback address | every route, reads included | **403** | DNS rebinding: a page on another domain can be made to resolve to `127.0.0.1` after it loaded, and then only the `Host` header says which name was used |
+| `Origin`, when present, is a loopback origin | writing routes | **403** | the same page on another port is not this page; this is the CSRF case |
+| `Content-Type: application/json` | writing routes | **415** | a form or a `text/plain` body is what a cross-site request is allowed to send without asking first |
+| `x-winfw-token` equals the token issued at startup | writing routes | **401** | the browser holds the token; a process that never saw it may not write |
+
+The token is sixteen random bytes rendered as hex, made when the process starts, held in memory only,
+and never written to a file or to the log. It reaches the browser in the URL the tray opens
+(`http://127.0.0.1:8788/?token=…`); a tab whose address was typed by hand has no token and takes it
+from the first `/api/state` body, which is read before any button can be pressed.
+
+`GET`, `HEAD` and `POST /mcp` are exempt from the token, the origin and the content type: a read
+cannot change anything, and the MCP endpoint is configured with a URL rather than with a session. The
+`Host` check is not exempt, because that is exactly the check a read needs too. What this buys and
+what it does not is the subject of [the security model](10-security-model.md).
+
 A request body the server cannot read answers **400 Bad Request** since **0.34.0**, and only a
 body: a JSON syntax error, a field of the wrong type, a name outside an enum like a theme that is
 not `light`, `dark` or `auto`, a field the route does not know. Anything else that can fail — a
@@ -96,8 +121,9 @@ whole file replaces the list: `Restore` on the page reads the chosen file in the
 its text, and the MCP `rules.import` tool takes the same text. What comes back is read by the same
 reader that reads `rules.toml` at startup, so a version this build does not know, a field name it
 does not recognise or a pattern it cannot hold is refused before the file on disk is touched — and
-the generation it replaces is kept as the backup either way. `rules.decode` remains the read
-direction for a single rule, and appends it only when asked to with `add`.
+the generation it replaces is kept as the backup either way. The read direction for a single rule is
+`POST /api/rules/share`, which answers with the Base64 string alone rather than with JSON; the MCP
+endpoint offers the same string as `rules.share`.
 
 ## Stopping the page's server
 
