@@ -15,7 +15,11 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 
 ## What is on the page
 
-- **Profile** selector, which switches the live rule file.
+- **Profile** selector, which switches the live rule file, with `New`, `Rename` and `Delete` beside
+  it. `New` copies the rules on screen into a new profile and switches to it; `Rename` and
+  `Delete` work on the profile the selector holds, and `Delete` asks first because it takes the
+  rules file with it. Renaming or deleting the unnamed `default` is refused: it is `rules.toml`
+  itself rather than a file in `profiles\`.
 - **Header** line: address, learning mode, default policy. Learning mode and the default policy are
   underlined because they are clickable — clicking one asks the server to switch it to the other
   value, which writes `config.toml` and rebuilds the store in the same request.
@@ -57,6 +61,9 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 | `POST /api/rules/import` | append the rule a Base64 string carries |
 | `GET /api/profiles` | the active profile and the names of the stored profiles |
 | `POST /api/profiles/switch` | make another profile live (an empty name selects `rules.toml`) |
+| `POST /api/profiles/create` | copy the live rules into a new profile and make it live; a name already taken is refused |
+| `POST /api/profiles/rename` | give a profile another name, taking its backup along; the live profile stays live |
+| `POST /api/profiles/delete` | remove a profile and its backup, falling back to `rules.toml` when it was the live one |
 | `GET /api/events` | the connection feed as a server-sent event stream |
 | `GET /api/health` | liveness, for a supervisor or the MCP transport |
 | `POST /mcp` | the Model Context Protocol endpoint (JSON-RPC 2.0) |

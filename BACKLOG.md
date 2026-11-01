@@ -98,9 +98,10 @@ Kept as asked, with the two audits now folded in below.
 
 ### 3.4 Profiles
 
-- **A new profile cannot be created from the browser.** The selector lists existing names only. A
-  name typed into `POST /api/profiles/switch` is created on demand, but nothing renames or deletes a
-  profile, and stale files are never cleaned up.
+- ~~**A new profile cannot be created from the browser.**~~ — closed in 0.28.0. `New`, `Rename` and
+  `Delete` sit beside the selector, and a name already in use is refused rather than silently
+  overwritten. What is left of the finding is that the Detected list is still shared between
+  profiles (the next bullet), which a profile manager does not settle.
 - **The Detected list is not scoped per profile.** `learn.json` is shared, and it is the pool a
   wildcard pattern expands against, so switching profile silently changes what a wildcard means.
 
@@ -581,3 +582,29 @@ Found while 0.27.0 ("say why the connection list is empty") was built.
 - **One helper so the two reports cannot disagree.** `AppState::monitor()` is what both
   `/api/state` and the MCP `status` tool answer with, which is the same rule the settings follow:
   the authoritative value is read in one place.
+
+## 19. Profile management round notes (2026-11-01)
+
+Found while 0.28.0 ("create, rename and delete a profile from the browser") was built.
+
+- **A profile was always a file, so the browser only ever needed three verbs.** The profile list
+  already came from the rules directory, which meant creating one was "write a file and switch to
+  it" and deleting one was "remove the file". No new storage concept was needed, only the endpoints
+  that admit a profile is a file.
+- **A new profile copies the current rules rather than starting empty.** Starting empty would have
+  dropped the live process onto a rule set with nothing but the built-ins, which reads as "the
+  firewall stopped working". Copying first keeps the connection state a user expects while they edit
+  the new set down.
+- **The switch had to become a helper.** `switch_profile` owned the "read the rules, build a live
+  filter set, apply it" sequence, so `make_live()` was extracted before the three new routes could
+  reuse it. Refactoring first kept the routes at four lines each instead of duplicating the apply
+  path three times.
+- **Deleting the live profile falls back to the default rules.** There is no meaningful "no profile"
+  state while the engine is running, so an empty name is the fallback. The default rules are also
+  the only rules that cannot be deleted, which is why an empty name is refused rather than treated
+  as a file called `""`.
+- **A rename is a file rename, not a rewrite.** The rules are saved to the old name first so no edits
+  are lost, then the rules file and its backup move together. Rewriting the content under a new name
+  would have left the backup behind with the old name inside it.
+- **The backup travels with the file.** Every delete removes the backup path too, because a stale
+  backup for a profile that no longer exists can only ever confuse the next import.

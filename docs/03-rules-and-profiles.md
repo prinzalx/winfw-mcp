@@ -129,6 +129,17 @@ Switching profiles writes the current rules back to the file they came from befo
 read, so no rule is ever only in memory. Switching is available from the page and over MCP, and the
 choice survives a restart.
 
+The page can also create, rename and delete a profile. **New** copies the rules on screen into the
+new file and switches to it, on the grounds that a profile started in a browser is meant to be a
+different take on the rules you are looking at rather than an empty file to fill rule by rule; a
+name already in use is refused rather than overwritten. **Rename** takes the file's backup along
+with it, so the generation kept belongs to the file rather than to the name it had. **Delete**
+removes the file and its backup, and falls back to `rules.toml` when the deleted profile was the
+live one.
+
+The unnamed default is not one of these files, so renaming or deleting it is refused: `rules.toml`
+is where the tool falls back to, and removing it would leave nothing to fall back to.
+
 ---
 
 Previous: [2. Data and configuration](02-data-and-configuration.md) · Next: [4. Learning mode](04-learning-mode.md)

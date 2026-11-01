@@ -210,6 +210,9 @@
     <div class="actions">
       <span class="sub">Profile</span>
       <select id="profile" title="Named rule set"></select>
+      <button id="profile-new" title="Copy the live rules into a new profile and switch to it">New</button>
+      <button id="profile-rename" title="Give the live profile another name">Rename</button>
+      <button id="profile-delete" title="Remove the live profile and fall back to rules.toml">Delete</button>
     </div>
 
     <h2>Rules</h2>
@@ -884,6 +887,65 @@
           fillProfiles();
         } catch (error) {
           status("could not switch profile: " + error.message);
+        }
+      });
+
+      // The three actions work on what the selector holds, because that is the profile the user is
+      // looking at. A name the server refuses comes back as an error, and the status line is where
+      // such a refusal belongs rather than in a dialog of its own.
+      el("profile-new").addEventListener("click", async () => {
+        const name = prompt("Name of the new profile, made out of the rules on screen:");
+
+        if (name === null || name.trim() === "") {
+          return;
+        }
+
+        try {
+          apply(await request("POST", "/api/profiles/create", { name: name.trim() }));
+          status("created profile " + name.trim());
+          fillProfiles();
+        } catch (error) {
+          status("could not create profile: " + error.message);
+        }
+      });
+
+      el("profile-rename").addEventListener("click", async () => {
+        const name = el("profile").value;
+        const next = prompt(
+          "New name for profile '" + (name === "" ? "default" : name) + "':",
+        );
+
+        if (next === null || next.trim() === "") {
+          return;
+        }
+
+        try {
+          apply(await request("POST", "/api/profiles/rename", { name, new_name: next.trim() }));
+          status("renamed " + name + " to " + next.trim());
+          fillProfiles();
+        } catch (error) {
+          status("could not rename profile: " + error.message);
+        }
+      });
+
+      el("profile-delete").addEventListener("click", async () => {
+        const name = el("profile").value;
+
+        if (name === "") {
+          status("the default rules are not a profile, so there is nothing to delete");
+          return;
+        }
+
+        if (!confirm("Delete profile '" + name + "'? Its rules file goes with it.")) {
+          return;
+        }
+
+        try {
+          apply(await request("POST", "/api/profiles/delete", { name }));
+          status("deleted profile " + name);
+          fillProfiles();
+        } catch (error) {
+          status("could not delete profile: " + error.message);
         }
       });
 
