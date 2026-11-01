@@ -591,8 +591,20 @@
 
         const when = new Date(event.time_ms).toLocaleTimeString();
 
+        // Name the rule the firewall blamed for this verdict. "other" means a filter we did not
+        // install (another firewall) that a later rebuild will not account for.
+        const blame = event.rule
+          ? " by " + event.rule
+          : event.filter_id
+            ? " by other"
+            : "";
+
         row.appendChild(
-          element("span", "meta", event.kind + " " + when + " port " + event.remote_port),
+          element(
+            "span",
+            "meta",
+            event.kind + " " + when + " port " + event.remote_port + blame,
+          ),
         );
 
         list.prepend(row);

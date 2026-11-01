@@ -175,6 +175,7 @@ fn serve(
         Arc::clone(&rules),
         Arc::clone(&live),
         worker.handle(),
+        worker.owners(),
     );
 
     // Our filters persist across runs, so without this the store would keep whatever the previous

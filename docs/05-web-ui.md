@@ -26,7 +26,8 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   goes. A value the server cannot read bounces back as an error and the row is redrawn from what
   the server has.
 - **Detected** table: the learning mode, with `allow`, `deny` and `dismiss` per row.
-- **Recent connections**: fed over SSE, newest first.
+- **Recent connections**: fed over SSE, newest first. Each line names the rule the firewall blamed
+  for its verdict — `by browser` for one of ours, `by other` for a filter another firewall owns.
 - **Actions**: Add rule, Apply to WFP, Clear our filters, Export, Import, Quit.
 - **Banner**: what the store reported. A refused store is shown as a banner with its reason rather
   than as an empty list.

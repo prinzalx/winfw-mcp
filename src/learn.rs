@@ -210,6 +210,8 @@ mod tests {
             protocol: 6,
             allowed: true,
             kind: "allowed".to_owned(),
+            filter_id: 0,
+            rule: None,
         }
     }
 

@@ -29,6 +29,8 @@ use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
 };
 use windows::core::{GUID, PCWSTR, PWSTR};
 
+use crate::monitor::Attribution as Owners;
+
 use crate::config::Policy;
 use crate::rules::{Action, Direction, Family, Rule, RuleFile, is_wildcard, wildcard_match};
 
@@ -121,12 +123,15 @@ pub struct Inventory {
 }
 
 /// The difference one `apply` made to the live store.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Applied {
     /// Filters that carried our provider key and are gone now.
     pub removed: usize,
     /// Filters installed from the enabled rules, counted per layer.
     pub installed: usize,
+    /// Who is who in the store that is in there now, so an event naming one of these ids can be
+    /// read back as the rule that decided it.
+    pub owners: Owners,
 }
 
 /// Run one of the three enumeration sequences end to end and collect the display names.
@@ -279,16 +284,18 @@ impl Engine {
             report.removed = self.remove_our_filters()?;
 
             let mut installed = 0;
+            let mut owners = Owners::new();
 
             for rule in rules.rule.iter().filter(|rule| rule.enabled) {
-                installed += self.add_rule(rule, known)?;
+                installed += self.add_rule(rule, known, &mut owners)?;
             }
 
             if policy == Policy::Deny {
-                installed += self.add_base_filters()?;
+                installed += self.add_base_filters(&mut owners)?;
             }
 
             report.installed = installed;
+            report.owners = owners;
 
             Ok(())
         })?;
@@ -487,7 +494,7 @@ impl Engine {
     /// Install one rule as one filter per application per layer. Which layers that is depends on
     /// the direction of the rule; with no direction both an outbound and an inbound connection are
     /// covered, for both address families. Returns the number of filters installed.
-    fn add_rule(&self, rule: &Rule, known: &[String]) -> Result<usize> {
+    fn add_rule(&self, rule: &Rule, known: &[String], owners: &mut Owners) -> Result<usize> {
         let apps = app_ids(&rule.pattern, known);
 
         let mut provider_key = PROVIDER_KEY;
@@ -666,6 +673,8 @@ impl Engine {
                     );
                 }
 
+                owners.insert(filter_id, rule.name.clone());
+
                 installed += 1;
             }
         }
@@ -681,7 +690,7 @@ impl Engine {
     /// the machine decides. Above it sit the permits without which the policy would break the
     /// machine itself: loopback (the browser has to reach this tool's own web server), 6to4,
     /// and the ICMPv6 neighbor and router messages the IPv6 stack needs.
-    fn add_base_filters(&self) -> Result<usize> {
+    fn add_base_filters(&self, owners: &mut Owners) -> Result<usize> {
         // Not from the windows crate under the name we would wish for it: `IPPROTO_IPV6` there
         // is the IPv6 *socket option* level, the same number 41 the reference uses as the
         // protocol value of the 6to4 permit.
@@ -711,6 +720,7 @@ impl Engine {
                 FWP_ACTION_PERMIT,
                 WEIGHT_BASE_PERMIT,
                 &loopback,
+                owners,
             )?;
 
             installed += 1;
@@ -733,6 +743,7 @@ impl Engine {
             FWP_ACTION_PERMIT,
             WEIGHT_BASE_PERMIT,
             &sixtofour,
+            owners,
         )?;
 
         installed += 1;
@@ -755,6 +766,7 @@ impl Engine {
                 FWP_ACTION_PERMIT,
                 WEIGHT_BASE_PERMIT,
                 &permit,
+                owners,
             )?;
 
             installed += 1;
@@ -767,6 +779,7 @@ impl Engine {
                 FWP_ACTION_BLOCK,
                 WEIGHT_BASE_BLOCK,
                 &[],
+                owners,
             )?;
 
             installed += 1;
@@ -783,6 +796,7 @@ impl Engine {
         action: FWP_ACTION_TYPE,
         weight: u8,
         conditions: &[FWPM_FILTER_CONDITION0],
+        owners: &mut Owners,
     ) -> Result<()> {
         let mut provider_key = PROVIDER_KEY;
 
@@ -827,6 +841,8 @@ impl Engine {
                 layer_index(layer),
             );
         }
+
+        owners.insert(filter_id, name.to_owned());
 
         Ok(())
     }
@@ -1338,6 +1354,56 @@ mod tests {
         let cleared = engine.clear().expect("clear the store");
 
         assert_eq!(cleared, BASE_FILTERS, "clearing removes the base filters");
+    }
+
+    /// Every filter `apply` installs is accounted for in the table it hands back, so an event
+    /// naming one of those ids can be read back as the rule it came from. Ids are never zero, the
+    /// value the monitor reads as "no filter was named".
+    #[test]
+    fn apply_accounts_for_every_filter_it_installs() {
+        let engine = Engine::open().expect("open engine");
+
+        match engine.clear() {
+            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
+            Err(error) => {
+                let reason = format!("{error:#}");
+                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
+                println!("write path skipped, access denied");
+                return;
+            }
+        }
+
+        let rules = RuleFile {
+            rule: vec![Rule::plain(
+                "winfw-mcp attribution test",
+                Action::Deny,
+                TEST_APP,
+            )],
+        };
+
+        let applied = engine
+            .apply(&rules, &[], Policy::Allow)
+            .expect("apply the rule");
+
+        // One table entry per installed filter: nothing we put in the store is unaccounted for.
+        assert_eq!(
+            applied.owners.len(),
+            applied.installed,
+            "every installed filter is in the table",
+        );
+        assert!(
+            applied.owners.keys().all(|id| *id != 0),
+            "WFP never hands out id 0, which the monitor uses as the sentinel",
+        );
+        assert!(
+            applied
+                .owners
+                .values()
+                .all(|name| name == "winfw-mcp attribution test"),
+            "a table entry names the rule its filter came from",
+        );
+
+        engine.clear().expect("clear the store");
     }
 
     /// A filter key has to survive a restart, and a rule installed on several layers needs a

@@ -9,7 +9,7 @@
 //! the only consumers are the UI panel and learning mode, neither of which needs history older
 //! than the last few screens.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -37,7 +37,27 @@ pub struct NetEvent {
     pub allowed: bool,
     /// How the event was classified, for the UI label.
     pub kind: String,
+    /// The store's id of the filter that decided this, `0` when the event did not name one.
+    ///
+    /// Ids are handed out per install, so this is only meaningful beside the table of the rebuild
+    /// that is currently in the store. It is reported raw so a client can tell "not ours" from "no
+    /// filter was named at all".
+    pub filter_id: u64,
+    /// The rule that filter came from, when the filter is one of ours.
+    ///
+    /// `None` with a non-zero `filter_id` means the store blamed a filter this tool did not install
+    /// — another firewall on the machine — or one of ours that a later rebuild replaced.
+    pub rule: Option<String>,
 }
+
+/// Which of our filters the store blames for a verdict, by the id it handed us when the filter went
+/// in, pointing at the rule it was installed from.
+///
+/// A net event names a `filterId` and nothing else, and ids are handed out per install rather than
+/// derived from content, so the table only answers for the rebuild that is currently in the store.
+/// An id that is not in here belongs to something else on the machine, or to one of our own filters
+/// that a later rebuild replaced.
+pub type Attribution = HashMap<u64, String>;
 
 /// The shared log between the monitor's callbacks and the request threads.
 #[derive(Debug, Default)]
@@ -112,6 +132,9 @@ struct Sink {
     /// Hand a store rebuild to the WFP worker when an application turns up that no filter knows
     /// yet. The answer is not waited for: the next page load reads the store anyway.
     rebuild: Option<SyncSender<crate::server::WorkItem>>,
+    /// The table the WFP worker republishes on every rebuild, read here to name the rule an event
+    /// blames. Shared so a rebuild is visible to the callback without restarting the subscription.
+    owners: Arc<Mutex<Attribution>>,
 }
 
 /// The thread that keeps a subscription open.
@@ -135,10 +158,12 @@ impl Monitor {
         rules: Arc<Mutex<crate::rules::RuleFile>>,
         live: Arc<crate::server::Live>,
         rebuild: Option<SyncSender<crate::server::WorkItem>>,
+        owners: Arc<Mutex<Attribution>>,
     ) -> Self {
         let (shutdown, receiver) = channel();
 
-        let join = thread::spawn(move || listen(log, detector, rules, live, rebuild, receiver));
+        let join =
+            thread::spawn(move || listen(log, detector, rules, live, rebuild, owners, receiver));
 
         Self {
             shutdown: Some(shutdown),
@@ -165,6 +190,7 @@ fn listen(
     rules: Arc<Mutex<crate::rules::RuleFile>>,
     live: Arc<crate::server::Live>,
     rebuild: Option<SyncSender<crate::server::WorkItem>>,
+    owners: Arc<Mutex<Attribution>>,
     shutdown: Receiver<()>,
 ) {
     use std::ffi::c_void;
@@ -270,6 +296,7 @@ fn listen(
         rules,
         live,
         rebuild,
+        owners,
     })) as *mut c_void;
 
     let mut events = HANDLE::default();
@@ -344,6 +371,37 @@ fn listen(
             "other"
         };
 
+        // The event names the deciding filter by id, in whichever arm of the union its type
+        // selects. Both classify arms carry a `filterId`; the IPsec arm does not name one we
+        // installed, so everything else reports `0` and reads as "not ours".
+        let filter_id = unsafe {
+            match event.r#type {
+                FWPM_NET_EVENT_TYPE_CLASSIFY_ALLOW => event
+                    .Anonymous
+                    .classifyAllow
+                    .as_ref()
+                    .map_or(0, |allow| allow.filterId),
+                FWPM_NET_EVENT_TYPE_CLASSIFY_DROP => event
+                    .Anonymous
+                    .classifyDrop
+                    .as_ref()
+                    .map_or(0, |drop| drop.filterId),
+                _ => 0,
+            }
+        };
+
+        // Look the id up in the table the last rebuild left behind. A miss is not an error: it is
+        // either a filter another firewall owns or one a later rebuild replaced.
+        let rule = if filter_id == 0 {
+            None
+        } else {
+            sink.owners
+                .lock()
+                .expect("owners lock poisoned")
+                .get(&filter_id)
+                .cloned()
+        };
+
         let entry = NetEvent {
             seq: 0,
             time_ms: filetime_to_millis(&event.header.timeStamp),
@@ -351,7 +409,9 @@ fn listen(
             remote_port: event.header.remotePort,
             protocol: event.header.ipProtocol,
             allowed,
-            kind: kind.to_owned(),
+            kind: kind.to_string(),
+            filter_id,
+            rule,
         };
 
         // Learning mode looks at the application behind the connection, not at the connection
@@ -418,6 +478,7 @@ fn listen(
     _rules: Arc<Mutex<crate::rules::RuleFile>>,
     _live: Arc<crate::server::Live>,
     _rebuild: Option<SyncSender<crate::server::WorkItem>>,
+    _owners: Arc<Mutex<Attribution>>,
     shutdown: Receiver<()>,
 ) {
     let _ = shutdown.recv();
@@ -475,7 +536,22 @@ mod tests {
             protocol: 6,
             allowed: true,
             kind: "allowed".to_owned(),
+            filter_id: 0,
+            rule: None,
         }
+    }
+
+    /// The table answers for the ids it holds and for nothing else: a miss is how the monitor
+    /// reads "a filter we did not install", and id `0` — the value for "no filter was named" —
+    /// is never a key.
+    #[test]
+    fn the_attribution_table_names_only_the_ids_it_holds() {
+        let mut table = Attribution::new();
+        table.insert(42, "browser".to_owned());
+
+        assert_eq!(table.get(&42).map(String::as_str), Some("browser"));
+        assert_eq!(table.get(&7), None, "an id we did not install is a miss");
+        assert_eq!(table.get(&0), None, "the sentinel id is never a key");
     }
 
     #[test]

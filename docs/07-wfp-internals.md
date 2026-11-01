@@ -116,6 +116,28 @@ way:
 
 The options are per session, so the monitor configures its own and leaves the machine alone.
 
+## Naming the filter that decided an event
+
+An event names the filter behind its verdict by a number and nothing else: `filterId` in the
+classify arm of the event union. The number is not derived from content and it is not stable — it is
+an index into the store, handed out when the filter goes in — so reading it back needs a table this
+process built itself.
+
+`apply` fills that table. Every filter it installs is recorded under the id WFP reports, against the
+rule name it came from, and the finished table rides out on `Applied::owners`. The WFP worker owns
+the live copy and republishes it after every successful rebuild, so the table always describes the
+store that is in there right now; a `Clear` empties it. The monitor's callbacks look an event's id up
+in that table under a lock.
+
+Two answers are deliberately distinguished in the API. `"rule": "browser"` means one of our filters
+decided it, and `"rule": null` beside a non-zero `filter_id` means the store blamed a filter we do not
+know — another firewall on the machine, or one of ours that a later rebuild replaced. `filter_id: 0`
+is the sentinel for "the event named no filter at all", and because WFP never hands out id 0 it can
+never collide with a real filter.
+
+This is the piece the reference gets from comparing the dropping filter's provider key against its
+own; we get the same answer from a table we own, which also covers the permit side of a verdict.
+
 ## Threading
 
 The server is `std` only: one thread per connection, no async runtime. Every request that matters
@@ -131,8 +153,7 @@ permits for loopback and ICMPv6 neighbour discovery so the machine stays reachab
 the same shape, but only when `default_policy = "deny"` is asked for; the default remains the friendlier
 `allow`, where traffic no rule mentions is left to the rest of the machine.
 
-That gap, and the other differences found while comparing (remote destination, protocol, direction
-and address family in a rule; provider attribution on events), is collected in the
+That gap, and the other differences found while comparing, are collected in the
 [backlog](../BACKLOG.md).
 
 ---

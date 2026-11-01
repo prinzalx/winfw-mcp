@@ -346,6 +346,9 @@ pub(crate) type WorkItem = (StoreWork, SyncSender<Result<StoreOutcome>>);
 pub struct WfpWorker {
     sender: Option<SyncSender<WorkItem>>,
     join: Option<JoinHandle<()>>,
+    /// The filter-id to rule-name table, republished on every rebuild so the monitor can name the
+    /// rule an event blames. Owned here because this thread is the only one that changes it.
+    owners: Arc<Mutex<crate::monitor::Attribution>>,
 }
 
 impl WfpWorker {
@@ -356,7 +359,16 @@ impl WfpWorker {
         // out, which is also what keeps two full filter rebuilds from racing.
         let (sender, receiver) = sync_channel::<WorkItem>(1);
 
+        // The attribution table the monitor reads. The worker republishes it after each rebuild,
+        // so the table always describes the store that is in there right now.
+        let owners = Arc::new(Mutex::new(crate::monitor::Attribution::new()));
+        let shared_owners = Arc::clone(&owners);
+
         let join = thread::spawn(move || {
+            // On non-Windows the table is never read but still has to stay alive with the worker.
+            #[cfg(not(windows))]
+            let _ = &shared_owners;
+
             #[cfg(windows)]
             let engine = match crate::wfp::Engine::open() {
                 Ok(engine) => Some(engine),
@@ -370,6 +382,8 @@ impl WfpWorker {
                 let outcome = handle_work(
                     #[cfg(windows)]
                     engine.as_ref(),
+                    #[cfg(windows)]
+                    &shared_owners,
                     work,
                 );
 
@@ -381,6 +395,7 @@ impl WfpWorker {
         Self {
             sender: Some(sender),
             join: Some(join),
+            owners,
         }
     }
 
@@ -389,6 +404,12 @@ impl WfpWorker {
     /// that no filter knows yet.
     pub fn handle(&self) -> Option<SyncSender<WorkItem>> {
         self.sender.clone()
+    }
+
+    /// The live filter-id to rule-name table. Cloning the `Arc` hands the monitor a view of the
+    /// store that the worker republishes on every rebuild.
+    pub fn owners(&self) -> Arc<Mutex<crate::monitor::Attribution>> {
+        Arc::clone(&self.owners)
     }
 
     /// Hand one unit of work to the worker and wait for the answer.
@@ -431,7 +452,12 @@ impl Drop for WfpWorker {
 /// `ok: false` with the reason, and the UI shows a banner instead of an empty list. Any other
 /// failure is a real one and reaches the browser the same way, but is logged at warn level.
 #[cfg(windows)]
-fn handle_work(engine: Option<&crate::wfp::Engine>, work: StoreWork) -> Result<StoreOutcome> {
+fn handle_work(
+    #[cfg(windows)] engine: Option<&crate::wfp::Engine>,
+    #[cfg(windows)] owners: &Mutex<crate::monitor::Attribution>,
+    work: StoreWork,
+) -> Result<StoreOutcome> {
+    #[cfg(windows)]
     let Some(engine) = engine else {
         return Ok(StoreOutcome::refused(
             InventorySummary::default(),
@@ -445,14 +471,22 @@ fn handle_work(engine: Option<&crate::wfp::Engine>, work: StoreWork) -> Result<S
             known,
             policy,
         } => {
-            let result = engine
-                .apply(&rules, &known, policy)
-                .map(|applied| (applied.removed, applied.installed));
+            let result = engine.apply(&rules, &known, policy).map(|applied| {
+                // The rebuild wrote the whole store, so its table replaces ours wholesale rather
+                // than being merged; a filter the rebuild dropped is no longer in the store.
+                *owners.lock().expect("owners lock poisoned") = applied.owners;
+
+                (applied.removed, applied.installed)
+            });
 
             (0, 0, result)
         }
         StoreWork::Clear => {
-            let result = engine.clear().map(|removed| (removed, 0));
+            let result = engine.clear().map(|removed| {
+                owners.lock().expect("owners lock poisoned").clear();
+
+                (removed, 0)
+            });
 
             (0, 0, result)
         }
@@ -1710,6 +1744,8 @@ mod tests {
             protocol: 6,
             allowed: true,
             kind: "allowed".to_owned(),
+            filter_id: 0,
+            rule: None,
         }
     }
 
@@ -2358,6 +2394,33 @@ mod tests {
             body.find("newer.exe") < body.find("older.exe"),
             "the newest event must come first: {body}",
         );
+    }
+
+    /// An event that names a filter carries both the raw id and the rule it resolved to, which is
+    /// what lets the panel say which of our rules decided a connection.
+    #[test]
+    fn the_state_endpoint_carries_the_rule_an_event_blames() {
+        let events = Arc::new(EventLog::new());
+
+        let mut event = connection("blamed.exe");
+        event.filter_id = 42;
+        event.rule = Some("browser".to_owned());
+        events.push(event);
+
+        let server_state = state_with(Arc::clone(&events), Live::default());
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains(r#""filter_id":42"#), "{body}");
+        assert!(body.contains(r#""rule":"browser""#), "{body}");
     }
 
     /// The stream is not a buffered response, so it is exercised over a socket.

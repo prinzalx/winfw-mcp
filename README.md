@@ -30,7 +30,7 @@ The documentation is split into chapters, so that each question has one place to
 | [4. Learning mode](docs/04-learning-mode.md) | the Detected list and how an application becomes a rule |
 | [5. The web UI](docs/05-web-ui.md) | the page, what is on it, and every HTTP route |
 | [6. The MCP endpoint](docs/06-mcp-endpoint.md) | JSON-RPC methods, the tool list, who may write |
-| [7. WFP internals](docs/07-wfp-internals.md) | elevation, our filters, applying, the event stream, threading |
+| [7. WFP internals](docs/07-wfp-internals.md) | elevation, our filters, applying, the event stream, filter attribution, threading |
 | [8. Lifecycle and tray](docs/08-lifecycle.md) | starting, the tray icon, stopping, what stays behind |
 | [9. Development](docs/09-development.md) | source layout, tests, the release process, version history |
 
@@ -63,7 +63,13 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.17.0**, in which the tool gets its own logo: an icon generated into the
+The current release is **0.18.0**, in which a connection event names the rule the firewall blamed
+for its verdict. An event carries the deciding filter's id, which the tool reads back through the
+table of the rebuild that is currently in the store: for one of our filters the page and the API
+report the rule name, and for an id we do not know they report "other" rather than guessing. See
+[WFP internals](docs/07-wfp-internals.md#naming-the-filter-that-decided-an-event).
+
+The release before, **0.17.0**, gave the tool its own logo: an icon generated into the
 executable, loaded by the tray, read by the shell as version information, and served to the browser
 as the favicon. What is known to be missing or fragile is listed in the
 [backlog](BACKLOG.md), ranked in its last section.

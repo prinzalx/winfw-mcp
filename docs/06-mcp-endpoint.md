@@ -19,7 +19,7 @@ client that asks for anything else is told so rather than silently ignored.
 | `rules.allow` | add an allow rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`, `remote`) | yes |
 | `rules.deny` | add a deny rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`, `remote`) | yes |
 | `detected.list` | what learning mode collected | no |
-| `events.list` | recent connection events | no |
+| `events.list` | recent connection events, each naming the deciding filter id and rule | no |
 | `export` | copy an area (`rules`, `config`, `detected`, `all`) into `export\` | yes |
 | `profiles.list` | the active profile and the stored profile names | no |
 | `profile.use` | switch the live profile (takes `name`) | yes |
