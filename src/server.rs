@@ -115,6 +115,9 @@ pub struct AppState {
     /// tray's `Quit` both clear it, which is the only way either of them has of ending a process
     /// whose main thread is parked in the accept loop.
     running: Arc<AtomicBool>,
+    /// What the rebuild at startup made of the store. Never changes afterwards: it is the record of
+    /// the difference the process found between the store and the rules file.
+    startup: Startup,
 }
 
 impl AppState {
@@ -128,6 +131,7 @@ impl AppState {
         live: Arc<Live>,
         active_file: PathBuf,
         active_name: String,
+        startup: Startup,
     ) -> Self {
         Self {
             paths,
@@ -139,6 +143,7 @@ impl AppState {
             active_file: Mutex::new(active_file),
             active_name: Mutex::new(active_name),
             running: Arc::new(AtomicBool::new(true)),
+            startup,
         }
     }
 
@@ -371,6 +376,70 @@ impl StoreOutcome {
                     .clone()
                     .unwrap_or_else(|| "no reason given".to_owned())
             )
+        }
+    }
+}
+
+/// What the rebuild at startup made of the store, kept for the page and for MCP `status`.
+///
+/// The store holds the filters the previous run left behind; the rules file describes the filters
+/// the user wants. When the two counts differ, something changed while the tool was not running,
+/// which PLAN.md section 6 asks to surface rather than only log. A refused store keeps its own
+/// counts at zero, because nothing was read and nothing was written either.
+#[derive(Debug, Clone, Serialize)]
+pub struct Startup {
+    /// Whether a startup rebuild was attempted at all. A state built in a test never touches the
+    /// store, and its banner must not claim a diff the process never measured.
+    measured: bool,
+    /// Whether the store took the rebuild.
+    ok: bool,
+    /// Our filters the previous run left in the store.
+    removed: usize,
+    /// Filters the rules file describes.
+    installed: usize,
+    /// Why the store refused, when it did.
+    reason: Option<String>,
+    /// Whether the page has anything to say: the two counts differ. A first run, where the store
+    /// was empty, is news once; an unchanged restart is not.
+    differs: bool,
+}
+
+impl Startup {
+    /// The answer a startup rebuild made.
+    pub(crate) fn from_outcome(outcome: &StoreOutcome) -> Self {
+        Self {
+            measured: true,
+            ok: outcome.ok,
+            removed: outcome.removed,
+            installed: outcome.installed,
+            reason: outcome.reason.clone(),
+            differs: outcome.ok && outcome.removed != outcome.installed,
+        }
+    }
+
+    /// The rebuild never reached the engine, so the counts stay at zero and the reason stands in
+    /// for them.
+    pub(crate) fn refused(reason: String) -> Self {
+        Self {
+            measured: true,
+            ok: false,
+            removed: 0,
+            installed: 0,
+            reason: Some(reason),
+            differs: false,
+        }
+    }
+
+    /// A state that did not come through a startup rebuild, which is every state a test builds.
+    #[cfg(test)]
+    fn unmeasured() -> Self {
+        Self {
+            measured: false,
+            ok: false,
+            removed: 0,
+            installed: 0,
+            reason: None,
+            differs: false,
         }
     }
 }
@@ -1181,6 +1250,7 @@ fn mcp_tool(
                     "reason": outcome.reason,
                 },
                 "monitor": state.monitor(),
+                "startup": state.startup.clone(),
             })))
         }
         "rules.list" => {
@@ -1583,6 +1653,8 @@ struct StateJson {
     detected: Vec<Detected>,
     /// Whether the feed behind the events is running, with how much it delivered.
     monitor: MonitorJson,
+    /// What the rebuild at startup found, so the page can say what changed while it was closed.
+    startup: Startup,
 }
 
 /// The monitor's state together with the count the log holds, so an empty list can be told apart
@@ -1621,6 +1693,7 @@ impl StateJson {
             events,
             detected,
             monitor: state.monitor(),
+            startup: state.startup.clone(),
         }
     }
 }
@@ -2131,6 +2204,7 @@ mod tests {
             Arc::new(live),
             active_file,
             String::new(),
+            Startup::unmeasured(),
         )
     }
 
@@ -2164,6 +2238,7 @@ mod tests {
             Arc::new(Live::default()),
             active_file,
             String::new(),
+            Startup::unmeasured(),
         )
     }
 
@@ -2753,6 +2828,7 @@ mod tests {
             Arc::new(Live::default()),
             scratch.join("data").join("rules.toml"),
             String::new(),
+            Startup::unmeasured(),
         );
         let worker = WfpWorker::start();
 
@@ -3316,6 +3392,97 @@ mod tests {
         assert!(
             after.contains("0x00000005"),
             "the code has to be named: {after}"
+        );
+    }
+
+    /// The report of the startup rebuild is only worth a line when the store held something other
+    /// than what the rules describe. A refused store has no counts to compare, and a first run with
+    /// an empty store and an unchanged restart are both cases where nothing went wrong.
+    #[test]
+    fn a_startup_rebuild_claims_a_diff_only_when_the_counts_differ() {
+        let changed = StoreOutcome {
+            ok: true,
+            removed: 3,
+            installed: 5,
+            inventory: InventorySummary::default(),
+            reason: None,
+        };
+
+        assert!(Startup::from_outcome(&changed).differs);
+
+        let same = StoreOutcome {
+            installed: 3,
+            ..changed.clone()
+        };
+
+        assert!(
+            !Startup::from_outcome(&same).differs,
+            "an unchanged restart is not news",
+        );
+
+        let refused = StoreOutcome::refused(InventorySummary::default(), "access denied");
+
+        assert!(
+            !Startup::from_outcome(&refused).differs,
+            "a refused store has nothing counted",
+        );
+        assert!(
+            !Startup::unmeasured().differs,
+            "a state that never rebuilt must say nothing",
+        );
+    }
+
+    /// The page cannot show the diff the process found before the listener existed unless the state
+    /// carries it, which is what PLAN.md section 6 asks for.
+    #[test]
+    fn the_state_endpoint_carries_the_startup_diff() {
+        let mut server_state = state();
+
+        server_state.startup = Startup {
+            measured: true,
+            ok: true,
+            removed: 2,
+            installed: 6,
+            reason: None,
+            differs: true,
+        };
+
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains("\"startup\""), "{body}");
+        assert!(body.contains("\"removed\":2"), "the store's count: {body}");
+        assert!(body.contains("\"installed\":6"), "the rules' count: {body}");
+        assert!(body.contains("\"differs\":true"), "{body}");
+    }
+
+    /// A state that never went through a startup rebuild says so, rather than letting the page read
+    /// two zeros as a store that was found empty.
+    #[test]
+    fn a_state_that_never_rebuilt_the_store_says_the_startup_was_not_measured() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains("\"measured\":false"),
+            "a test state never touched the store: {body}"
         );
     }
 

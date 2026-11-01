@@ -63,12 +63,15 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.30.0**, in which an export covers the stored profiles: `export` takes a
-`profiles` area, and the default `all` area copies every profile file into `export\profiles\`,
-because a set of equal files flattened next to `rules.toml` is impossible to read afterwards
-([the web UI](docs/05-web-ui.md)).
+The current release is **0.31.0**, in which the rebuild the server makes of the store at startup
+reports itself: the counts it answered are kept, and when the store held something other than what
+the rules describe, the page says so instead of the difference ending up in the log alone
+([lifecycle and tray](docs/08-lifecycle.md#starting)).
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
+an export covers the stored profiles since **0.30.0**, where the `all` area copies every profile
+file into `export\profiles\` and `export` takes a `profiles` area of its own
+([the web UI](docs/05-web-ui.md));
 an agent can edit the rule list instead of only lengthening it since **0.29.0**, where
 `rules.remove` takes the rule at an index out of the file and rebuilds the store, `rules.decode`
 reads a Base64 share string back and appends it only when told to with `add`, and

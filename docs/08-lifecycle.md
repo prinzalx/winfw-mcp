@@ -14,6 +14,16 @@ failure of the tool: the server answers anyway and the user types the address, s
 only logged. Because the release binary has no console, the startup lines and the outcome of adding
 the icon are appended to the log file in the data directory as well.
 
+Before the listener is bound, the server rebuilds the store from the rules it just read. Our filters
+are persistent, so without that step the store would keep whatever the previous run left in it, and
+a rule edited while the tool was closed would not be enforced until the next write. Since **0.31.0**
+the answer of that rebuild is kept rather than only logged: `GET /api/state` and the MCP `status`
+tool carry a `startup` object with the filters the store held, the filters the rules describe, and a
+`differs` flag for the two having disagreed. The page shows a line about it under the store banner,
+and stays quiet when nothing disagrees — an unchanged restart and a store the tool refused both have
+nothing to report there, because a refusal has no counts to compare and is already named by the
+banner itself.
+
 The logo in the notification area is our own, and it comes out of the executable rather than from a
 file beside it: `build.rs` puts `assets\winfw-mcp.ico` in the binary's resources and the tray loads
 it from there, which is what keeps a single `.exe` portable. If the resource is missing — a build

@@ -361,6 +361,27 @@
         banner.appendChild(note);
       }
 
+      /* What the rebuild at startup found, next to the store's own report. It is only said once per
+         load and only when the two counts differ: a first run had an empty store, and an unchanged
+         restart has nothing to report. */
+      function renderStartup(startup) {
+        if (!startup || !startup.measured || !startup.differs) {
+          return;
+        }
+
+        el("banner").appendChild(
+          element(
+            "p",
+            "sub",
+            "At startup the store held " +
+              startup.removed +
+              " filters and the rules describe " +
+              startup.installed +
+              ".",
+          ),
+        );
+      }
+
       function renderRules() {
         const body = el("rules");
 
@@ -719,6 +740,7 @@
         renderRules();
         renderDetected();
         renderBanner(state.store);
+        renderStartup(state.startup);
 
         // The state carries the newest events first, so the panel needs no second request.
         if (state.events.length > 0) {

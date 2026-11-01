@@ -65,9 +65,12 @@ Kept as asked, with the two audits now folded in below.
   both reports carry how many events the log took in, so an empty list names its reason. What is
   left of the finding is the monitor's own health over time: the state says nothing about a thread
   that stopped delivering while the subscription stayed open.
-- **Reconcile on startup is missing in `--serve`.** PLAN.md §6 wants the WFP store reconciled against
-  `rules.toml` at startup with the diff surfaced in the UI. `--serve` only loads the files and binds;
-  the banner shows store counts, never a diff.
+- ~~**Reconcile on startup is missing in `--serve`.**~~ — closed in 0.31.0. PLAN.md §6 wants the WFP
+  store reconciled against `rules.toml` at startup with the diff surfaced in the UI. The rebuild was
+  always made; what was missing was its answer, which now travels to `/api/state` and MCP `status` as
+  a `startup` object and to the banner as a line. What is left of the finding is the *content* of that
+  diff: it compares counts, not rules, so a rule edited while the tool was closed that leaves the
+  filter count the same (an action flipped, a field narrowed) is rebuilt correctly but not named.
 
 ### 3.2 Settings
 
@@ -659,3 +662,23 @@ Found while 0.29.0 ("an agent can edit the rule list") was built.
 
 Three tests cover it: profiles copied by `all`, the `profiles` area leaving the single files out,
 and an empty profiles directory exporting nothing.
+
+## 22. Startup reconcile round notes
+
+- The rebuild `--serve` makes of the store before it binds already answered with `removed` and
+  `installed`, and the answer went into `info!` and nowhere else. It is kept now, in a `Startup`
+  value the state holds for the life of the process.
+- The two counts are the diff PLAN.md §6 asks for, and they were already correct: `apply()` removes
+  every filter carrying our provider key and installs what the rules describe, so the pair says
+  exactly what changed while the tool was closed.
+- `differs` is computed at construction rather than in the page, so the HTTP body and the MCP tool
+  cannot disagree about whether the difference is worth a line. It is true only when the store took
+  the rebuild *and* the counts differ.
+- A refused store keeps `differs` false on purpose. It has no counts to compare, and the degraded
+  store banner names the refusal already; a second, emptier notice under it would read as a bug.
+- A state built in a test is `measured: false`, which is its own field rather than a smuggled
+  meaning in `ok`: two zeros from a process that never asked the store must not look like a store
+  that was found empty.
+
+Three tests: `differs` only when the counts differ, the state endpoint carrying the counts, and an
+unmeasured state saying so instead of claiming a diff.

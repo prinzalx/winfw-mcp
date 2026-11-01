@@ -42,14 +42,17 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   because nothing was delivered?", which an unelevated run can only answer the second way.
 - **Actions**: Add rule, Apply to WFP, Clear our filters, Export, Import, Quit.
 - **Banner**: what the store reported. A refused store is shown as a banner with its reason rather
-  than as an empty list.
+  than as an empty list. Under it, since **0.31.0**, what the rebuild at startup found: a line naming
+  the filters the store held and the filters the rules describe, shown only when the two differ. An
+  unchanged restart says nothing, and a refused store needs no second notice because the banner above
+  already names it.
 
 ## Routes
 
 | Route | Purpose |
 |---|---|
 | `GET /` | the page itself |
-| `GET /api/state` | settings, rules, what the store reported and the state of the event feed |
+| `GET /api/state` | settings, rules, what the store reported, the state of the event feed and what the rebuild at startup found |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
 | `POST /api/settings` | change `learn_mode` or `default_policy` at runtime; `theme` and `log_level` are written for the next run |

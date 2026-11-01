@@ -198,18 +198,24 @@ fn serve(
     // run left in it: a rule edited while the tool was stopped, or an application that appeared
     // since, would not be reflected until the next write. A refused store is a supported state.
     let startup_rules = rules.lock().expect("rules lock poisoned").clone();
-    match worker.ask(server::StoreWork::Apply {
+    let startup = match worker.ask(server::StoreWork::Apply {
         rules: startup_rules,
         known: detector.apps(),
         policy: settings.default_policy,
     }) {
         Ok(outcome) => {
-            info!(store = %outcome.describe(), "store rebuilt from the rules at startup")
+            info!(store = %outcome.describe(), "store rebuilt from the rules at startup");
+
+            server::Startup::from_outcome(&outcome)
         }
         Err(error) => {
-            warn!(reason = %format!("{error:#}"), "could not rebuild the store at startup")
+            let reason = format!("{error:#}");
+
+            warn!(reason = %reason, "could not rebuild the store at startup");
+
+            server::Startup::refused(reason)
         }
-    }
+    };
 
     let state = server::AppState::new(
         paths,
@@ -220,6 +226,7 @@ fn serve(
         Arc::clone(&live),
         active_rules,
         active_name,
+        startup,
     );
     // Taken before `state` moves into the server, because `Quit` on the tray has to reach the same
     // flag the routes set.
