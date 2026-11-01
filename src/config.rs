@@ -42,6 +42,14 @@ pub struct Settings {
     /// has the BFE take the filters out again when the last engine handle closes, which is what a
     /// user who wants the tool to be the firewall only while it runs asks for.
     pub volatile_filters: bool,
+    /// Keep connections that never left the machine in the feed instead of dropping them.
+    ///
+    /// Reading 0.37.0: a local agent talking to a local server produces a stream of loopback
+    /// connections, and the connection panel exists for the traffic a user can act on, so those
+    /// events are dropped before they reach the log. This switch brings them back for a diagnosis.
+    ///
+    /// Like `log_level` it is read once at startup, and changing it takes a restart.
+    pub debug_show_loopback: bool,
     /// What an application that no rule mentions should get: the Windows default (`allow`) or a
     /// firewall (`deny`).
     ///
@@ -155,6 +163,7 @@ impl Default for Settings {
             mcp_writes: None,
             active_profile: String::new(),
             volatile_filters: false,
+            debug_show_loopback: false,
             default_policy: Policy::default(),
         }
     }
@@ -219,6 +228,7 @@ mod tests {
             mcp_writes: None,
             active_profile: "work".to_owned(),
             volatile_filters: true,
+            debug_show_loopback: true,
             default_policy: Policy::Deny,
         };
 
@@ -235,6 +245,31 @@ mod tests {
 
         assert!(path.is_file(), "the file should exist after the first run");
         assert_eq!(settings, Settings::default());
+    }
+
+    /// The switch is off unless the file says otherwise, so a run shows external traffic by
+    /// default, and it survives the round trip so a diagnosis run needs no other change.
+    #[test]
+    fn the_loopback_debug_switch_defaults_off_and_survives_a_round_trip() {
+        assert!(
+            !Settings::default().debug_show_loopback,
+            "loopback traffic is dropped by default",
+        );
+
+        let path = crate::testutil::scratch_dir("config-loopback").join("config.toml");
+
+        std::fs::write(
+            &path,
+            "debug_show_loopback = true
+",
+        )
+        .expect("write");
+
+        assert!(
+            Settings::load_or_create(&path)
+                .expect("load")
+                .debug_show_loopback
+        );
     }
 
     #[test]

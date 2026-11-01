@@ -64,14 +64,19 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.36.0**, in which the MCP endpoint reads only. The nine writing tools are
-gone from the code rather than switched off by a setting, because an agent that can write a rule can
-open its own gate; `status`, `rules.list`, `rules.share`, `detected.list`, `events.list` and
-`profiles.list` are what an agent may call. In the same release the writing HTTP routes ask for a
-session token that never reaches a file, and every route checks the `Host` header
-([the web UI](docs/05-web-ui.md#who-may-write), [security model](docs/10-security-model.md)).
+The current release is **0.37.0**, in which the connection views show only traffic that left the
+machine. A connection over a loopback address is now dropped in the monitor before it reaches the
+log, so the list, its counters, the Detected list and MCP cannot disagree about it, while a
+destination on the local segment is shown and marked `local network` with a filter of its own
+([the web UI](docs/05-web-ui.md#connections-worth-showing),
+[WFP internals](docs/07-wfp-internals.md#the-event-stream)).
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
+the MCP endpoint reads only since **0.36.0**, where the nine writing tools are gone from the code
+rather than switched off by a setting — an agent that can write a rule can open its own gate — and
+where the writing HTTP routes ask for a session token that never reaches a file while every route
+checks the `Host` header ([the web UI](docs/05-web-ui.md#who-may-write),
+[security model](docs/10-security-model.md));
 a boot-time start stopped outrunning the Base Filtering Engine in **0.35.0**, where the engine open
 retries five times over 3.7 seconds because the worker thread opens the engine once for the life of
 the process and a miss used to stand for the whole session

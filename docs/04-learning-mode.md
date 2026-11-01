@@ -19,6 +19,11 @@ is the pair of application *and* destination. What counts as covered is decided 
 an application with a rule that names no destination covers every address, so nothing new is ever
 reported for it.
 
+A connection that never left the machine is not collected either. Since **0.37.0** it is dropped in
+the monitor before learning mode is asked about it, so an agent talking to this tool's own local web
+server does not add entries anyone has to dismiss
+([WFP internals](07-wfp-internals.md#the-event-stream)).
+
 ## Deciding
 
 Each row can be allowed, denied or dismissed:

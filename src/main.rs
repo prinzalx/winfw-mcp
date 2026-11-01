@@ -197,6 +197,7 @@ fn serve(
         Arc::clone(&live),
         worker.handle(),
         worker.owners(),
+        settings.debug_show_loopback,
     );
 
     // Our filters persist across runs, so without this the store would keep whatever the previous

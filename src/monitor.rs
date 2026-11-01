@@ -8,6 +8,10 @@
 //! The log is bounded on purpose. A firewall sees far more connections than a human can read, and
 //! the only consumers are the UI panel and learning mode, neither of which needs history older
 //! than the last few screens.
+//!
+//! A connection that never left the machine is dropped before it reaches the log, so the feed, its
+//! counters and learning mode all agree about what is worth showing. The rules themselves do not
+//! care: the loopback permits of the default-deny policy are still installed.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
@@ -49,7 +53,16 @@ pub struct NetEvent {
     ///
     /// Only the classify arms of an event report this, and a dropped event that is not a classify
     /// drop reports `false` rather than "unknown".
+    ///
+    /// A connection with this marker set never reaches the feed at all (see
+    /// [`shown_in_feed`]), so what the page and the MCP show are external connections; the field
+    /// stays for the debug switch that keeps them.
     pub loopback: bool,
+    /// `true` when the remote end is on the local segment: private, link-local or unique local.
+    ///
+    /// Such a connection leaves the machine and is therefore shown, but it is marked so the page
+    /// can offer a filter for it. Always `false` for an event that names no remote address.
+    pub local_network: bool,
     /// `false` when the firewall blocked the connection.
     pub allowed: bool,
     /// How the event was classified, for the UI label.
@@ -65,6 +78,81 @@ pub struct NetEvent {
     /// `None` with a non-zero `filter_id` means the store blamed a filter this tool did not install
     /// — another firewall on the machine — or one of ours that a later rebuild replaced.
     pub rule: Option<String>,
+}
+
+/// Whether a text address is a loopback address: all of `127.0.0.0/8` or `::1`.
+///
+/// Text is what the event carries, so this is a parser rather than a comparison of bytes. An
+/// address that does not parse at all is not loopback: refusing to classify it is what keeps an
+/// event the engine described oddly from being dropped out of the feed.
+#[cfg(windows)]
+fn is_loopback_address(address: &str) -> bool {
+    use std::net::IpAddr;
+
+    match address.parse::<IpAddr>() {
+        Ok(IpAddr::V4(address)) => address.is_loopback(),
+        Ok(IpAddr::V6(address)) => {
+            address.is_loopback()
+                || address
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_loopback())
+        }
+        Err(_) => false,
+    }
+}
+
+/// Whether a text address names a network on the local segment rather than the Internet: the
+/// private ranges (RFC 1918), link-local (`169.254.0.0/16`, `fe80::/10`) or unique local
+/// (`fc00::/7`).
+///
+/// These connections do leave the machine — a share on another box is not loopback — but they are
+/// not the destinations a rule for `*.example.com` is about, so the page marks them and offers a
+/// filter for them.
+#[cfg(windows)]
+fn is_local_network_address(address: &str) -> bool {
+    use std::net::IpAddr;
+
+    match address.parse::<IpAddr>() {
+        Ok(IpAddr::V4(address)) => {
+            let [first, second, ..] = address.octets();
+
+            first == 10
+                || (first == 172 && (16..=31).contains(&second))
+                || (first == 192 && second == 168)
+                || (first == 169 && second == 254)
+        }
+        Ok(IpAddr::V6(address)) => match address.to_ipv4_mapped() {
+            Some(mapped) => is_local_network_address(&mapped.to_string()),
+            None => {
+                let bytes = address.octets();
+
+                (bytes[0] == 0xfe && bytes[1] & 0xc0 == 0x80) || bytes[0] & 0xfe == 0xfc
+            }
+        },
+        Err(_) => false,
+    }
+}
+
+/// Whether a connection never left this machine.
+///
+/// WFP's own marker is believed when it carries one, which covers the case where both ends are this
+/// machine. Without a marker the remote end decides: a connection to a loopback address cannot have
+/// left. An event that names no remote end is kept, because a destination the header did not fill
+/// is not evidence the traffic stayed home.
+#[cfg(windows)]
+fn stays_on_this_machine(entry: &NetEvent) -> bool {
+    entry.loopback || is_loopback_address(&entry.remote_addr)
+}
+
+/// Whether an event belongs in the connection feed.
+///
+/// Local traffic is dropped here rather than filtered out in the page: a local agent talking to a
+/// local server produces a stream of it, and the ring buffer would fill with noise while the
+/// connections a user could act on fell out the front. Turning `debug_show_loopback` on keeps the
+/// events, which is how the feed behaved before 0.37.0.
+#[cfg(windows)]
+fn shown_in_feed(entry: &NetEvent, debug_show_loopback: bool) -> bool {
+    debug_show_loopback || !stays_on_this_machine(entry)
 }
 
 /// Which of our filters the store blames for a verdict, by the id it handed us when the filter went
@@ -210,6 +298,11 @@ struct Sink {
     /// The table the WFP worker republishes on every rebuild, read here to name the rule an event
     /// blames. Shared so a rebuild is visible to the callback without restarting the subscription.
     owners: Arc<Mutex<Attribution>>,
+    /// Keep connections that never left the machine in the feed instead of dropping them.
+    ///
+    /// Read once at startup, like `log_level`: the switch exists for a diagnosis run, and a feed
+    /// whose rules changed halfway would leave the list behind it hard to read.
+    debug_show_loopback: bool,
 }
 
 /// The thread that keeps a subscription open.
@@ -234,11 +327,22 @@ impl Monitor {
         live: Arc<crate::server::Live>,
         rebuild: Option<SyncSender<crate::server::WorkItem>>,
         owners: Arc<Mutex<Attribution>>,
+        debug_show_loopback: bool,
     ) -> Self {
         let (shutdown, receiver) = channel();
 
-        let join =
-            thread::spawn(move || listen(log, detector, rules, live, rebuild, owners, receiver));
+        let join = thread::spawn(move || {
+            listen(
+                log,
+                detector,
+                rules,
+                live,
+                rebuild,
+                owners,
+                debug_show_loopback,
+                receiver,
+            );
+        });
 
         Self {
             shutdown: Some(shutdown),
@@ -258,7 +362,12 @@ impl Drop for Monitor {
 }
 
 /// Subscribe, then wait to be told to stop.
+///
+/// The arguments are the parts of the callback's context, handed over individually because that is
+/// what `Monitor::start` is given; bundling them here would mean a struct that only exists to be
+/// taken apart again two lines later.
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 fn listen(
     log: Arc<EventLog>,
     detector: Arc<crate::learn::Detector>,
@@ -266,6 +375,7 @@ fn listen(
     live: Arc<crate::server::Live>,
     rebuild: Option<SyncSender<crate::server::WorkItem>>,
     owners: Arc<Mutex<Attribution>>,
+    debug_show_loopback: bool,
     shutdown: Receiver<()>,
 ) {
     use std::ffi::c_void;
@@ -378,6 +488,7 @@ fn listen(
         live,
         rebuild,
         owners,
+        debug_show_loopback,
     })) as *mut c_void;
 
     let mut events = HANDLE::default();
@@ -494,6 +605,8 @@ fn listen(
                 .cloned()
         };
 
+        let remote_addr = event_address(&event.header, End::Remote);
+
         let entry = NetEvent {
             seq: 0,
             time_ms: filetime_to_millis(&event.header.timeStamp),
@@ -501,7 +614,10 @@ fn listen(
             local_addr: event_address(&event.header, End::Local),
             local_port: event_port(&event.header, End::Local),
             remote_port: event_port(&event.header, End::Remote),
-            remote_addr: event_address(&event.header, End::Remote),
+            // Whether the destination is on the local segment is decided here, where the address
+            // already is, so the page can mark it without reading the event again.
+            local_network: is_local_network_address(&remote_addr),
+            remote_addr,
             protocol: event.header.ipProtocol,
             loopback,
             allowed,
@@ -509,6 +625,14 @@ fn listen(
             filter_id,
             rule,
         };
+
+        // A connection that never left the machine is dropped before it reaches anything: the log,
+        // its counter, learning mode and the seen list are all fed from here, and a local agent
+        // talking to a local server would otherwise fill the log with traffic nobody can decide on.
+        // Dropped before the `observe` below, so it never becomes a Detected entry either.
+        if !shown_in_feed(&entry, sink.debug_show_loopback) {
+            return;
+        }
 
         // Learning mode looks at the application behind the connection, not at the connection
         // itself, so the log gets a copy and the detector gets the original. With `learn_mode`
@@ -575,6 +699,7 @@ fn listen(
     _live: Arc<crate::server::Live>,
     _rebuild: Option<SyncSender<crate::server::WorkItem>>,
     _owners: Arc<Mutex<Attribution>>,
+    _debug_show_loopback: bool,
     shutdown: Receiver<()>,
 ) {
     let _ = shutdown.recv();
@@ -726,10 +851,19 @@ mod tests {
             remote_addr: String::new(),
             protocol: 6,
             loopback: false,
+            local_network: false,
             allowed: true,
             kind: "allowed".to_owned(),
             filter_id: 0,
             rule: None,
+        }
+    }
+
+    /// The same event with one end named, which is what decides whether it is shown.
+    fn reaching(app: &str, remote_addr: &str) -> NetEvent {
+        NetEvent {
+            remote_addr: remote_addr.to_owned(),
+            ..event(app)
         }
     }
 
@@ -770,6 +904,95 @@ mod tests {
 
         assert_eq!(event_address(&header, End::Local), "2001:db8::2");
         assert_eq!(event_address(&header, End::Remote), "2001:db8::1");
+    }
+
+    /// A connection that stays on the machine must not reach the log: a local agent talking to a
+    /// local server produces a stream of them, and the ring buffer exists for the connections a
+    /// user could act on.
+    #[cfg(windows)]
+    #[test]
+    fn a_connection_that_never_left_is_not_shown() {
+        let marker = NetEvent {
+            loopback: true,
+            ..reaching("loopback.exe", "127.0.0.1")
+        };
+
+        assert!(stays_on_this_machine(&marker));
+        assert!(!shown_in_feed(&marker, false), "off by default");
+        assert!(
+            shown_in_feed(&marker, true),
+            "the debug switch keeps it for a diagnosis",
+        );
+
+        for address in ["127.0.0.1", "127.5.6.7", "::1"] {
+            assert!(
+                is_loopback_address(address),
+                "{address} is a loopback address",
+            );
+            assert!(
+                !shown_in_feed(&reaching("any.exe", address), false),
+                "{address} is not a destination off this machine",
+            );
+        }
+    }
+
+    /// A LAN destination does leave the machine, so it is shown and only marked. Dropping it
+    /// would hide the printer and the file server behind the very panel that exists to notice
+    /// them.
+    #[cfg(windows)]
+    #[test]
+    fn a_connection_to_the_local_network_is_shown_and_marked() {
+        for address in [
+            "10.1.2.3",
+            "172.16.4.5",
+            "172.31.254.253",
+            "192.168.43.9",
+            "169.254.11.22",
+            "fe80::1",
+            "fd12:3456::7",
+        ] {
+            assert!(
+                is_local_network_address(address),
+                "{address} is on the local segment",
+            );
+            assert!(
+                shown_in_feed(&reaching("any.exe", address), false),
+                "{address} leaves the machine",
+            );
+        }
+
+        for address in ["172.15.0.1", "172.32.0.1", "168.192.1.1", "93.184.216.34"] {
+            assert!(
+                !is_local_network_address(address),
+                "{address} is not on the local segment",
+            );
+        }
+    }
+
+    /// An event that names no remote end is not evidence of a local connection: the header simply
+    /// did not fill the field, and treating that as loopback would quietly drop real traffic.
+    #[cfg(windows)]
+    #[test]
+    fn an_event_without_a_remote_address_is_still_shown() {
+        assert!(!is_loopback_address(""));
+        assert!(!is_local_network_address(""));
+        assert!(!stays_on_this_machine(&reaching("no-remote.exe", "")));
+        assert!(shown_in_feed(&reaching("no-remote.exe", ""), false));
+    }
+
+    /// An address the event described in a form nothing can parse is treated as external rather
+    /// than thrown away, because an unknown destination is still a destination.
+    #[cfg(windows)]
+    #[test]
+    fn an_address_that_does_not_parse_is_not_called_local() {
+        for address in ["not-an-address", "*", "10.0.0"] {
+            assert!(!is_loopback_address(address), "{address}");
+            assert!(!is_local_network_address(address), "{address}");
+            assert!(
+                shown_in_feed(&reaching("odd.exe", address), false),
+                "{address}"
+            );
+        }
     }
 
     /// An address the header says it did not fill must read as absent rather than as the

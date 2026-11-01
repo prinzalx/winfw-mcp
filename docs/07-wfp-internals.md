@@ -134,7 +134,30 @@ The thread reports what subscribing did, because a refused subscription is a sup
 empty connection list needs a reason. It publishes `starting`, `running`, `refused` with the code
 that refused it, or `stopped` on the way out, and both reports read that together with how many
 events the log took in. An unelevated run therefore says `no feed: 0x00000005` rather than looking
-like a machine about to happen.
+like a machine about to happen. Note what that count means since **0.37.0**: it counts what the
+callback handed over, and the callback drops a connection that stayed on the machine before it hands
+anything over.
+
+## What the callback keeps
+
+The callback is where an event is either dropped or copied out, and since **0.37.0** dropping is
+part of its job. A connection that never left the machine does not reach the log at all, which is
+the only way to keep it out of the log's bound, out of its counter, out of the seen list and out of
+the Detected list at the same time; filtering in the page would have left three of those four wrong.
+
+WFP's own `isLoopback` marker is believed when the event carries one. Without a marker the remote
+address decides: `127.0.0.0/8` and `::1` cannot have left. An event that names no remote address is
+kept, because a field the header did not fill is not evidence the traffic stayed home — treating an
+empty destination as local would quietly drop real connections.
+
+A destination on the local segment leaves the machine and is therefore kept: the private ranges,
+`169.254.0.0/16`, `fe80::/10` and `fc00::/7`. It is reported as `local_network` so the page can
+offer a filter for it. `debug_show_loopback` in `config.toml` turns the drop off for a diagnosis
+run; like `log_level` it is read once at startup.
+
+The filters are not involved in any of this. The loopback permits of the default-deny policy are
+installed whatever the feed decides to show, and the tool's own web server answers on `127.0.0.1`
+while the log shows nothing about it.
 
 ## Reading the endpoints of an event
 
@@ -186,8 +209,8 @@ The v4 number is read the same way the store writes an address condition (`u32::
 octets), which keeps the address in the log and the address a rule matches the same value read the
 same way. A connectionless event carries no version and reports no address.
 
-This is the first of the connection table's fields; local address and port, the user name and the
-loopback flag are still only in the event and not in the log.
+The local endpoint and the loopback marker arrived in **0.25.0**; the user name is still only in the
+event and not in the log.
 
 ## Threading
 

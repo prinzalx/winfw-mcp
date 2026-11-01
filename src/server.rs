@@ -2414,6 +2414,7 @@ mod tests {
             remote_port: 443,
             remote_addr: String::new(),
             loopback: false,
+            local_network: false,
             protocol: 6,
             allowed: true,
             kind: "allowed".to_owned(),
@@ -3688,6 +3689,35 @@ pattern = "C:\\Windows\\two.exe"
         assert!(body.contains(r#""local_addr":"127.0.0.1""#), "{body}");
         assert!(body.contains(r#""local_port":49152"#), "{body}");
         assert!(body.contains(r#""loopback":true"#), "{body}");
+        assert!(body.contains(r#""local_network":false"#), "{body}");
+    }
+
+    /// A destination on the local segment leaves the machine, so it is reported and marked rather
+    /// than dropped; the marker is what the page's filter works on, and a client that hides the
+    /// local network needs the same answer over MCP.
+    #[test]
+    fn the_state_endpoint_marks_a_connection_to_the_local_network() {
+        let events = Arc::new(EventLog::new());
+
+        let mut event = connection("printer.exe");
+        event.remote_addr = "192.168.1.20".to_owned();
+        event.local_network = true;
+        events.push(event);
+
+        let server_state = state_with(Arc::clone(&events), Live::default());
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains(r#""remote_addr":"192.168.1.20""#), "{body}");
+        assert!(body.contains(r#""local_network":true"#), "{body}");
     }
 
     /// The stream is not a buffered response, so it is exercised over a socket.

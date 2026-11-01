@@ -204,6 +204,19 @@
       ul.events li.blocked .meta {
         color: var(--deny);
       }
+
+      /* A destination on the local segment is marked with this class, and the filter next to the
+         heading hides exactly those rows. Hiding them by class rather than by the `hidden`
+         attribute is deliberate: the rule above sets `display: flex`, and an author rule beats the
+         user agent's `[hidden]`, so the attribute alone would not hide anything. */
+      ul.events.hide-lan li.lan {
+        display: none;
+      }
+
+      .lan-filter {
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
     </style>
   </head>
   <body>
@@ -264,6 +277,13 @@
     </table>
 
     <h2>Recent connections <span class="sub" id="monitor"></span></h2>
+    <label
+      class="lan-filter"
+      title="connections to a private, link-local or unique local address; the machine does leave home for these, so they are shown rather than dropped"
+    >
+      <input type="checkbox" id="hide-lan" />
+      Hide the local network
+    </label>
     <ul id="events" class="events"></ul>
 
     <div class="actions">
@@ -668,8 +688,19 @@
       }
 
       function renderEvent(event) {
+        // A connection that stayed on this machine never reaches the feed at all, so everything
+        // here left it. What did not leave the local segment is marked, and hidden while the
+        // filter is on.
+        if (event.local_network && el("hide-lan").checked) {
+          return;
+        }
+
         const list = el("events");
         const row = element("li", event.allowed ? "allowed" : "blocked");
+
+        if (event.local_network) {
+          row.classList.add("lan");
+        }
 
         row.appendChild(element("span", "app", event.app || "(no application)"));
 
@@ -713,6 +744,7 @@
               " " +
               where +
               (event.loopback ? " loopback" : "") +
+              (event.local_network ? " local network" : "") +
               blame,
           ),
         );
@@ -990,6 +1022,12 @@
         } catch (error) {
           status("could not change learning mode: " + error.message);
         }
+      });
+
+      // Toggling the filter only sets a class on the list, so rows that arrived over the event
+      // stream are affected exactly like rows the state carried.
+      el("hide-lan").addEventListener("change", () => {
+        el("events").classList.toggle("hide-lan", el("hide-lan").checked);
       });
 
       el("default-policy").addEventListener("click", async () => {

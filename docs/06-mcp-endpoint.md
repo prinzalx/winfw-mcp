@@ -26,6 +26,11 @@ Six tools, and every one of them reads.
 human can put it in the browser, which is how a rule travels between machines without anyone
 editing a file over a share.
 
+Since **0.37.0** `events.list` answers with connections that left the machine. A loopback connection
+is dropped in the monitor before it reaches the log, so an agent cannot see its own traffic in the
+feed, and a destination on the local segment is reported with `local_network` set rather than
+dropped ([WFP internals](07-wfp-internals.md#what-the-callback-keeps)).
+
 ### What happened to the writing tools
 
 Until `0.36.0` the endpoint also offered `rules.allow`, `rules.deny`, `rules.remove`,

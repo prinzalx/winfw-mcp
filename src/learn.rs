@@ -243,6 +243,7 @@ mod tests {
             remote_port: 443,
             remote_addr: String::new(),
             loopback: false,
+            local_network: false,
             protocol: 6,
             allowed: true,
             kind: "allowed".to_owned(),

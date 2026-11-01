@@ -180,6 +180,11 @@ Kept as asked, with the two audits now folded in below.
   tests, no skill file, no `tests/` directory.
 - **Doc drift**: `src/server.rs:14-27` route table omits the two profile routes, and `src/export.rs:3`
   cites PLAN.md section 3 for export when it is section 2.
+- **Doc drift, closed in 0.37.0**: chapter 7 still claimed the local endpoint and the loopback marker
+  were "still only in the event and not in the log", which stopped being true in 0.25.0.
+- **Doc drift, new in 0.37.0**: chapter 4 describes `rules.allow` and `rules.deny` as things an agent
+  calls over MCP. Both were removed in 0.36.0; the section about deciding still reads correctly for
+  the browser, but the sentence is about an endpoint that can no longer do it.
 - **`edition = "2024"` is the newest stable edition, not an oversight.** Rust releases an edition every
   three years and each arrives with the toolchain that adopts it, so edition 2027 does not exist for
   `rustc` 1.99.1 yet (it accepts `2015|2018|2021|2024|future`). Migrate deliberately when it lands;
@@ -854,3 +859,27 @@ so the split lands on a clean tree rather than in the middle of a diff.
 - One note for whoever takes it: `writable_state()` in the tests was deleted in **0.36.0** (its last user
   was the removed writing tools), so the shared test helpers to move are `state()`, `state_with()`,
   `connection()` and `TEST_TOKEN`.
+
+## 29. External-traffic-only round notes (2026-11-02)
+
+- **The drop lives in the callback, not in `EventLog::push`.** That is deliberate: a test that hands
+  an event straight to the log still gets it back, which is what a diagnosis of the log itself needs,
+  and the callback is the one place that can keep an event out of the log, the counter, the seen list
+  and the Detected list in a single step. The cost is that `delivered()` — the `running, N events`
+  next to the heading — counts what the callback accepted rather than what the machine did. Written
+  into chapter 7 rather than left to be rediscovered.
+- **`local_network` is computed in the callback while the address is there**, not in the page. A
+  client that hides local-network rows over MCP needs the same answer the page has, and re-parsing an
+  address per request would put the rule for what counts as local in two places.
+- **The loopback drop and `local_network` are two different questions** and are kept in two different
+  functions on purpose: an event is dropped for what it is (a connection to this machine), and marked
+  for where the destination lives (a network on the segment). An address that parses as neither is
+  shown and unmarked, which is the only safe answer for a form the reader does not recognise.
+- **The new key does not appear in an existing `config.toml`.** The file is written on the first run
+  and on a settings change, not at every start, so an install that predates 0.37.0 has no
+  `debug_show_loopback` line and reads the default (`false`). Someone has to type it to turn the
+  switch on. Adding the key to every config at startup would rewrite the file on every run for no
+  behaviour change, so it is left as it is and written down here.
+- **Not protected by any of this**: the filter checkbox is presentation only and is not stored, so a
+  reload shows the local network again. Persisting it in `config.toml` would need it to be a setting
+  the page can write, which is the settings write path in §3.2.

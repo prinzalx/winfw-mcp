@@ -499,3 +499,28 @@ A second honest limit: no `OPTIONS` route is implemented and no `Access-Control-
 sent, so a cross-origin `fetch` that sets a JSON content type is stopped by the browser as well as by
 the guard. That is fine for a server whose only intended client is the page it opened itself.
 
+## 12. Only external traffic is shown (0.37.0)
+
+The user asked not to be shown communication that never left the machine — a local agent talking to
+this tool's own web server is the case that matters, because that pair is exactly what this project
+is built for. Decided:
+
+| Question | Decision |
+|---|---|
+| What counts as local | A loopback address on either end (`127.0.0.0/8`, `::1`), or WFP's own `isLoopback` marker on the event |
+| An event with no remote address | Shown. A destination the header did not fill is not evidence the traffic stayed home |
+| Where it is dropped | In the monitor's callback, before the log, the seen list and the Detected list are touched |
+| LAN destinations | Shown: they do leave the machine. Marked `local network` in the state, in SSE and over MCP, with a filter on the page |
+| The filters themselves | Unchanged. The loopback permits of the default-deny policy stay installed whether or not the feed shows anything |
+| Debug | `debug_show_loopback` in `config.toml`, off by default, read at startup like `log_level` |
+
+Dropping early rather than filtering in the page is the part worth arguing for: the log is bounded at
+two hundred entries, and a local agent produces a connection per request, so a page-side filter
+would let loopback traffic push the connections a user could act on out of the history while the
+counters still counted them.
+
+Two consequences are accepted rather than worked around. Applications that only ever talk to
+localhost no longer reach the seen list, so they cannot be picked up by a wildcard rule that is
+expanded later; and the event counter on the page counts what the callback handed over, not what the
+machine did. Both are written down in
+[the handbook](docs/07-wfp-internals.md#what-the-callback-keeps).

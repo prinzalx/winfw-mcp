@@ -37,9 +37,9 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   alone.
 - **Recent connections**: fed over SSE, newest first, as `local -> remote`. Each line names the
   destination it went to and the rule the firewall blamed for its verdict — `by browser` for one of
-  ours, `by other` for a filter another firewall owns. A connection that never left the machine is
-  marked `loopback`. An endpoint the event named no address for is left out of the line; an address
-  with no port still shows the port.
+  ours, `by other` for a filter another firewall owns. A destination on the local segment is marked
+  `local network` and can be hidden with the checkbox under the heading. An endpoint the event named
+  no address for is left out of the line; an address with no port still shows the port.
 - **The feed's state**, next to that heading: `running, 128 events`, `no feed: 0x00000005`,
   `starting` or `stopped`. It is the answer to "is this list empty because nothing happened or
   because nothing was delivered?", which an unelevated run can only answer the second way.
@@ -55,6 +55,23 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   the tool itself wrote: someone edited it, restored a backup over it, or deleted it, and the rules
   the page shows are the ones in memory rather than the ones in the file. Saving a rule makes the
   file ours again and the notice goes away.
+
+## Connections worth showing
+
+The list answers one question: what reached out. Since **0.37.0** a connection that never left the
+machine is not on it at all. That is decided in the monitor rather than in the page, because the
+log, the counter next to the heading, the Detected list and everything an MCP client reads are fed
+from that one point — and because the log holds two hundred entries, a local agent talking to this
+tool's own web server would otherwise crowd the connections a user could act on out of the list.
+
+A destination on the local segment does leave the machine, so it is shown rather than dropped, but
+it is marked `local network`: the private ranges, link-local and unique local addresses. The
+checkbox under the heading hides exactly those rows, for someone who only wants the Internet. The
+filter is presentation only and is not remembered across reloads.
+
+None of this touches the rules. In particular the loopback permits of the default-deny policy are
+still installed, which is what keeps the tool reachable while it blocks everything else
+([WFP internals](07-wfp-internals.md#the-default-deny-base)).
 
 ## Routes
 
