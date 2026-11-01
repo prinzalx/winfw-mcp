@@ -63,12 +63,13 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.23.0**, in which the process answers `--help` and `--version`: both
-print and exit successfully, so the version of an installed binary can be read without elevation
-and without touching the live store.
+The current release is **0.24.0**, in which the storage got harder: a rule file names the version
+that wrote it, every write keeps the previous generation as `rules.toml.bak` and falls back to it if
+the file is unreadable, and a pattern that cannot be a path is refused rather than stored as a rule
+that matches nothing.
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
-**0.22.0** added `volatile_filters`, which takes our filters out of the store on a clean stop
+`--help` and `--version` came in **0.23.0**; **0.22.0** added `volatile_filters`, which takes our filters out of the store on a clean stop
 ([lifecycle and tray](docs/08-lifecycle.md#stopping)); a
 tray menu (`Open`, `Pause learning`, `Quit`) came in **0.21.0**; **0.20.0** made learning mode
 notice a destination an allowed application reached; **0.19.0** made a connection event say where it

@@ -39,6 +39,11 @@ and the reason both as text and as structured content. That is what the MCP spec
 that ran and declined. Deny outranks allow, always, so an agent can widen a hole but cannot talk
 its way past a deny.
 
+An argument the tool cannot use is a protocol error instead, `-32602` (`INVALID_PARAMS`). A pattern
+that is not an absolute path is refused this way, so an agent that hands over `not-a-path` is told
+so rather than left with a rule that matches nothing (`status` will not look wrong, but nothing will
+match).
+
 ## Why hand-written
 
 The `rmcp` crate was weighed and rejected here: it would bring a tokio runtime and an axum

@@ -13,6 +13,7 @@ On the first run the binary creates its data directory and the files inside it:
 %APPDATA%\winfw-mcp\
     config.toml          settings, written with defaults on first run
     rules.toml           user rules, order significant: the first match wins
+    rules.toml.bak       the previous generation of the rules, kept from the second save on
     server.port          written while a serving instance runs, removed when it stops
     profiles\            named profiles, one file each
     learn.json           collected Detected entries (learning mode)
@@ -48,9 +49,15 @@ because stdout belongs to the MCP stdio transport.
   directions, every port and every address. They are left out of the file when they are not used,
   so a rule from an earlier version reads and writes exactly as it did.
   [Rules and profiles](03-rules-and-profiles.md#narrowing-a-rule)
-- **Atomic writes.** Files are written to `*.tmp` and renamed, so a crash never leaves a half
-  written config behind. This matters because the WFP filters this tool installs are persistent and
-  outlive the process.
+- **Atomic writes, with the previous generation kept.** Files are written to `*.tmp` and renamed, so
+  a crash never leaves a half written config behind. This matters because the WFP filters this tool
+  installs are persistent and outlive the process. Rule files — `rules.toml` and every profile — are
+  also copied to `<name>.bak` before each write, and a rule file that cannot be read at startup falls
+  back to that backup with a warning in the log rather than a failed start.
+- **A rule file says which version wrote it.** `rules.toml` starts with `version = 1`. A file from an
+  earlier version has no line and is read as this version; a file from a newer one is refused, and the
+  message names both versions. Since an unknown field is an error, the version is what turns "this
+  binary is too old" into a sentence that says so.
 - **Load once, write immediately.** All settings are read at startup; every change made in the web
   UI is written straight back to disk. No save button, no dirty state.
 

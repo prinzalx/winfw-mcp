@@ -93,6 +93,13 @@ with a wildcard is expanded into the applications this tool has actually seen, a
 gets its own filter (up to a fixed cap). A pattern nothing was seen for yet is installed as it
 stands, so the rule stays visible even before it can match.
 
+A pattern is checked on the way in, because a rule that cannot match anything is not a harmless
+typo in a firewall: the connection it was supposed to decide goes the other way. It must be an
+absolute path — rooted at a drive (`C:\...`) or at a single separator (`\device\...`, which is what
+an application looks like before the drive map resolves it) — and it cannot contain a control
+character or any of `"`, `<`, `>`, `|`, which a Windows path cannot hold either. `not-a-path` is
+refused rather than stored as a rule nothing will ever match.
+
 The set of seen applications is wider than the Detected list: it grows whether or not
 `learn_mode` is on, it includes applications an existing rule already covers, and dismissing or
 deciding an entry does not remove it. When an application is seen for the first time and an

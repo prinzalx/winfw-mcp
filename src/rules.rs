@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::store;
 
@@ -328,6 +329,39 @@ impl Rule {
 const WILDCARD_STAR: char = '*';
 const WILDCARD_ANY: char = '?';
 
+/// Refuse a pattern that cannot name a path.
+///
+/// The reference checks a path the user typed against the shape of a drive path
+/// (`_app_isappvalidpath`, `helper.c:574`) and refuses anything else. Doing without that check
+/// means a typo is not an error but a rule that silently matches nothing, which is worse for a
+/// firewall than for most programs: the connection it was supposed to decide goes the other way.
+///
+/// A rule may be rooted at a drive (`C:\...`) or at a single separator, because a device path the
+/// drive map did not resolve arrives as `\Device\HarddiskVolume3\...`.
+pub fn validate_pattern(pattern: &str) -> Result<()> {
+    if pattern.trim().is_empty() {
+        bail!("a rule needs a pattern");
+    }
+
+    if pattern.chars().any(char::is_control) {
+        bail!("a pattern cannot contain a control character");
+    }
+
+    if pattern.contains(['"', '<', '>', '|']) {
+        bail!("a pattern cannot contain the characters \" < > |");
+    }
+
+    let bytes = pattern.as_bytes();
+    let drive_rooted =
+        bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\';
+
+    if !drive_rooted && bytes[0] != b'\\' {
+        bail!("a pattern must be an absolute path such as C:\\Windows\\*.exe");
+    }
+
+    Ok(())
+}
+
 /// Whether a pattern needs matching at all, rather than being an exact path.
 pub fn is_wildcard(pattern: &str) -> bool {
     pattern.contains([WILDCARD_STAR, WILDCARD_ANY])
@@ -420,24 +454,92 @@ pub struct RuleFile {
     pub rule: Vec<Rule>,
 }
 
+/// The version written to a rule file.
+///
+/// The reference keeps a schema version in its profile files and migrates when it reads an older
+/// one. We only ever need to notice the opposite case, because a file with a field we do not know
+/// is refused outright: the version turns that refusal into a message that names the versions.
+pub const RULE_FILE_VERSION: u32 = 1;
+
+/// What `rules.toml` holds: the version and the rules.
+///
+/// The version is deliberately not a field of [`RuleFile`], which is built by hand in a dozen
+/// places and would have to carry a version none of them cares about.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleFileDisk {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    rule: Vec<Rule>,
+}
+
+/// Read one file's bytes, refusing a version this build cannot know.
+fn parse_rule_file(bytes: &[u8]) -> std::result::Result<RuleFile, toml::de::Error> {
+    use serde::de::Error as _;
+
+    let disk = toml::from_slice::<RuleFileDisk>(bytes)?;
+
+    if disk.version > RULE_FILE_VERSION {
+        return Err(toml::de::Error::custom(format!(
+            "rule file version {} is newer than {}",
+            disk.version, RULE_FILE_VERSION
+        )));
+    }
+
+    Ok(RuleFile { rule: disk.rule })
+}
+
 impl RuleFile {
     /// Load the rules, creating an empty file when there is none yet.
+    ///
+    /// A file that cannot be read is not the end of it: the previous generation written by
+    /// [`RuleFile::save`] is tried before the error is reported, which is what makes a torn or
+    /// mistyped write survivable. Falling back is logged rather than silent, because the file on
+    /// disk still holds what could not be read.
     pub fn load_or_create(path: &Path) -> Result<Self> {
-        match store::read_if_exists(path)? {
-            Some(bytes) => {
-                toml::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
-            }
-            None => {
-                let rules = Self::default();
-                rules.save(path)?;
+        let Some(bytes) = store::read_if_exists(path)? else {
+            let rules = Self::default();
+            rules.save(path)?;
+
+            return Ok(rules);
+        };
+
+        match parse_rule_file(&bytes) {
+            Ok(rules) => Ok(rules),
+            Err(error) => {
+                let backup = store::backup_path(path);
+                let Some(back_bytes) = store::read_if_exists(&backup)? else {
+                    return Err(error).with_context(|| format!("parse {}", path.display()));
+                };
+
+                let rules = parse_rule_file(&back_bytes).with_context(|| {
+                    format!(
+                        "parse {} after {} failed: {error}",
+                        backup.display(),
+                        path.display()
+                    )
+                })?;
+
+                warn!(
+                    backup = %backup.display(),
+                    file = %path.display(),
+                    "rules file unreadable, read the backup instead",
+                );
+
                 Ok(rules)
             }
         }
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        let text = toml::to_string_pretty(self).context("serialize rules")?;
-        store::write_atomic(path, text.as_bytes())
+        let disk = RuleFileDisk {
+            version: RULE_FILE_VERSION,
+            rule: self.rule.clone(),
+        };
+        let text = toml::to_string_pretty(&disk).context("serialize rules")?;
+
+        store::write_backup(path, text.as_bytes())
     }
 }
 
@@ -784,5 +886,77 @@ mod tests {
         );
 
         assert!(parsed.is_err(), "only tcp and udp are protocols");
+    }
+
+    #[test]
+    fn a_pattern_must_be_an_absolute_path() {
+        assert!(validate_pattern("C:\\Windows\\*\\browser.exe").is_ok());
+        assert!(validate_pattern("C:\\\\").is_ok(), "a drive root is a path");
+        assert!(validate_pattern("\\device\\harddiskvolume3\\x.exe").is_ok());
+        assert!(validate_pattern("browser.exe").is_err(), "no root at all");
+        assert!(validate_pattern("").is_err(), "nothing is not a path");
+    }
+
+    #[test]
+    fn a_pattern_refuses_what_a_path_cannot_hold() {
+        for bad in ["C:\\a<b.exe", "C:\\a>b.exe", "C:\\a|b.exe", "C:\\a\"b.exe"] {
+            assert!(validate_pattern(bad).is_err(), "{bad} cannot be a path");
+        }
+
+        assert!(
+            validate_pattern("C:\\a\nb.exe").is_err(),
+            "a pasted newline is a control character"
+        );
+    }
+
+    #[test]
+    fn a_shared_rule_still_passes_the_pattern_check() {
+        let shared =
+            crate::export::decode(&crate::export::encode(&sample().rule[0]).expect("encode"))
+                .expect("decode");
+
+        assert!(
+            validate_pattern(&shared.pattern).is_ok(),
+            "{}",
+            shared.pattern
+        );
+    }
+
+    /// The previous generation written by `save` is what a file nothing can make sense of falls
+    /// back to, which is the point of keeping it.
+    #[test]
+    fn an_unreadable_rules_file_falls_back_to_its_backup() {
+        let path = crate::testutil::scratch_dir("rules-backup").join("rules.toml");
+
+        sample().save(&path).expect("first save");
+        sample()
+            .save(&path)
+            .expect("second save, which makes the backup");
+
+        std::fs::write(&path, b"not toml at all ((").expect("corrupt the file");
+
+        let loaded = RuleFile::load_or_create(&path).expect("the backup has to answer");
+
+        assert_eq!(loaded, sample());
+    }
+
+    /// A file written by a later version names both versions rather than failing on a field it
+    /// refuses to know.
+    #[test]
+    fn a_rule_file_from_a_later_version_is_refused_by_name() {
+        let path = crate::testutil::scratch_dir("rules-version").join("rules.toml");
+
+        std::fs::write(&path, "version = 99\n").expect("write");
+
+        let text = format!(
+            "{:#}",
+            RuleFile::load_or_create(&path).expect_err("a newer version is an error")
+        );
+
+        assert!(text.contains("99"), "the version should be named: {text}");
+        assert!(
+            text.contains(&RULE_FILE_VERSION.to_string()),
+            "our version should be named too: {text}"
+        );
     }
 }

@@ -65,6 +65,7 @@ their own.
 
 | Version | Milestone |
 |---|---|
+| 0.24.0 | Storage hardened (§4.4). A rule file names the version that wrote it (`version = 1`; an older file without the line still reads, a newer one is refused with both versions named), every rule-file write keeps the generation before it as `<name>.bak`, and a rule file that cannot be parsed at startup falls back to that backup with a warning rather than failing to start. A pattern is checked on the way in — an absolute path, no control character and none of `" < > |` — on the page, on the HTTP API, over MCP and on import, so a typo is a refusal rather than a rule that matches nothing |
 | 0.1.0 | Data directory, config and rules load, atomic writes |
 | 0.2.0 | WFP read path: engine handle, enumeration of the live store, degraded when unelevated |
 | 0.2.1 | Fix heap corruption while releasing an enumerated store |

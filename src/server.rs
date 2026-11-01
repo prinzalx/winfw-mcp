@@ -53,7 +53,9 @@ use crate::learn::{Detected, Detector};
 use crate::mcp;
 use crate::monitor::{EventLog, NetEvent};
 use crate::paths::DataPaths;
-use crate::rules::{Action, Cidr, Direction, PortRange, Protocol, Rule, RuleFile};
+use crate::rules::{
+    Action, Cidr, Direction, PortRange, Protocol, Rule, RuleFile, validate_pattern,
+};
 
 /// The page served at `/`, embedded so the binary stays a single file.
 const INDEX_HTML: &str = include_str!("../web/index.html");
@@ -745,6 +747,11 @@ impl Server {
                 let rules: RuleFile = serde_json::from_slice(&request.body)
                     .context("body must be a rule file object")?;
 
+                for rule in &rules.rule {
+                    validate_pattern(&rule.pattern)
+                        .with_context(|| format!("rule '{}'", rule.name))?;
+                }
+
                 // File first, then store: a store that refuses us must not lose the user's edit.
                 {
                     let mut current = state.rules.lock().expect("rules lock poisoned");
@@ -775,6 +782,8 @@ impl Server {
                     // No edited pattern given: the drive form of what the firewall reported.
                     crate::device::to_dos_path(&decision.app)
                 });
+
+                validate_pattern(&pattern)?;
 
                 let name = match decision.name {
                     Some(name) if !name.trim().is_empty() => name,
@@ -874,6 +883,8 @@ impl Server {
                 let body: Share = serde_json::from_slice(&request.body)
                     .context("body must carry a share string")?;
                 let incoming = export::decode(&body.share)?;
+
+                validate_pattern(&incoming.pattern)?;
 
                 let applied = {
                     let mut current = state.rules.lock().expect("rules lock poisoned");
@@ -1155,6 +1166,9 @@ fn mcp_tool(
             // The pattern defaults to the application itself, which is the narrowest rule an agent
             // can ask for; widening it to a wildcard stays a human decision in the browser.
             let pattern = call.string_arg("pattern").unwrap_or_else(|| app.clone());
+
+            validate_pattern(&pattern)
+                .map_err(|error| (mcp::INVALID_PARAMS, format!("{error:#}")))?;
 
             let name = call
                 .string_arg("name")
@@ -2068,7 +2082,7 @@ mod tests {
             &Request::new(
                 "POST",
                 "/api/rules",
-                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"a","enabled":true,"protocol":"tcp","direction":"out","port":"1024-2048","remote":"192.168.1.0/24"}]}"#.to_vec(),
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"C:\\Tools\\ssh.exe","enabled":true,"protocol":"tcp","direction":"out","port":"1024-2048","remote":"192.168.1.0/24"}]}"#.to_vec(),
             ),
         )
         .expect("route");
@@ -2101,7 +2115,7 @@ mod tests {
             &Request::new(
                 "POST",
                 "/api/rules",
-                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"a","enabled":true,"remote":"192.168.1.0/33"}]}"#.to_vec(),
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"C:\\Tools\\ssh.exe","enabled":true,"remote":"192.168.1.0/33"}]}"#.to_vec(),
             ),
         );
 
@@ -2113,7 +2127,7 @@ mod tests {
             &Request::new(
                 "POST",
                 "/api/rules",
-                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"a","enabled":true,"remote":"10.0.0.5/24"}]}"#.to_vec(),
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"C:\\Tools\\ssh.exe","enabled":true,"remote":"10.0.0.5/24"}]}"#.to_vec(),
             ),
         )
         .expect("route the network");
@@ -2139,7 +2153,7 @@ mod tests {
             &Request::new(
                 "POST",
                 "/api/rules",
-                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"a","enabled":true,"port":"http"}]}"#.to_vec(),
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"C:\\Tools\\ssh.exe","enabled":true,"port":"http"}]}"#.to_vec(),
             ),
         );
 
@@ -2183,7 +2197,7 @@ mod tests {
                     "POST",
                     "/mcp",
                     format!(
-                        r#"{{"jsonrpc":"2.0","id":1,"method":"rules.deny","params":{{"app":"a","port":{port}}}}}"#,
+                        r#"{{"jsonrpc":"2.0","id":1,"method":"rules.deny","params":{{"app":"C:\\a.exe","port":{port}}}}}"#,
                     )
                     .into_bytes(),
                 ),
