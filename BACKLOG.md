@@ -60,9 +60,11 @@ Kept as asked, with the two audits now folded in below.
   deliberate replacement (`src/tray.rs:3-6`), but nothing at startup shows the URL to the user.
 - **The tray menu has only `Quit`.** The planned `Open` and `Pause protection` are absent; `Open` is
   reachable only through a left click. [verified] There is no pause concept in the code at all.
-- **The UI never says whether the monitor is running.** A refused net-event subscription is only
-  logged (`src/monitor.rs:273-286`), so if the monitor thread dies the page keeps showing the last
-  events as if they were live.
+- ~~**The UI never says whether the monitor is running.**~~ — closed in 0.27.0. The thread
+  publishes what subscribing did (`starting`, `running`, `refused` with the code, `stopped`) and
+  both reports carry how many events the log took in, so an empty list names its reason. What is
+  left of the finding is the monitor's own health over time: the state says nothing about a thread
+  that stopped delivering while the subscription stayed open.
 - **Reconcile on startup is missing in `--serve`.** PLAN.md §6 wants the WFP store reconciled against
   `rules.toml` at startup with the diff surfaced in the UI. `--serve` only loads the files and binds;
   the banner shows store counts, never a diff.
@@ -557,3 +559,25 @@ Found while 0.26.0 ("the log rotates") was built.
   go to both halves, and escape codes in a file are read in an editor later.
 - **`cargo build --release` does not compile `#[cfg(test)]`.** A type error in a test was caught by
   the test run and not by the build, so the two are never the same check.
+
+## 18. Event-feed status round notes (2026-11-01)
+
+Found while 0.27.0 ("say why the connection list is empty") was built.
+
+- **A supported degraded state still needs a face.** An unelevated run cannot open the event
+  session, and that is documented behaviour, but the page answered an empty list with silence. The
+  fix is not a banner nobody reads; it is the state next to the list it explains.
+- **Refused without the code is not an answer.** `0x00000005` and any other failure look the same
+  in the UI, and only one of them means "start elevated". The code travels with the state for that
+  reason, which is also why the status is a struct rather than a `&'static str`.
+- **The counter counts what arrived, not what survived.** The bounded log answers "how many events
+  are in here", which after the capacity is reached is a constant. What distinguishes an idle feed
+  from a working one is a count of what the callback handed over, so `EventLog::delivered()` reads
+  the sequence counter rather than the queue length.
+- **The status belongs to `Live`, not to a new channel.** The monitor thread already shares that
+  struct with the request threads, so publishing to it needed no new plumbing and both reports —
+  the page's and the MCP client's — read the same value. A mutex rather than an atomic, because the
+  report carries the code with it and only one thread ever writes.
+- **One helper so the two reports cannot disagree.** `AppState::monitor()` is what both
+  `/api/state` and the MCP `status` tool answer with, which is the same rule the settings follow:
+  the authoritative value is read in one place.

@@ -13,7 +13,7 @@ client that asks for anything else is told so rather than silently ignored.
 
 | Tool | Purpose | Writes? |
 |---|---|---|
-| `status` | settings, rule count, store health, how much the endpoint may write | no |
+| `status` | settings, rule count, store health, the state of the event feed, how much the endpoint may write | no |
 | `rules.list` | every rule, in file order | no |
 | `rules.share` | one rule as a Base64 string (takes `index`) | no |
 | `rules.allow` | add an allow rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`, `remote`) | yes |

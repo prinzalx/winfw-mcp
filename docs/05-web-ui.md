@@ -33,6 +33,9 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   ours, `by other` for a filter another firewall owns. A connection that never left the machine is
   marked `loopback`. An endpoint the event named no address for is left out of the line; an address
   with no port still shows the port.
+- **The feed's state**, next to that heading: `running, 128 events`, `no feed: 0x00000005`,
+  `starting` or `stopped`. It is the answer to "is this list empty because nothing happened or
+  because nothing was delivered?", which an unelevated run can only answer the second way.
 - **Actions**: Add rule, Apply to WFP, Clear our filters, Export, Import, Quit.
 - **Banner**: what the store reported. A refused store is shown as a banner with its reason rather
   than as an empty list.
@@ -42,7 +45,7 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 | Route | Purpose |
 |---|---|
 | `GET /` | the page itself |
-| `GET /api/state` | settings, rules and what the store reported |
+| `GET /api/state` | settings, rules, what the store reported and the state of the event feed |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
 | `POST /api/settings` | change `learn_mode` or `default_policy` at runtime; `theme` and `log_level` are written for the next run |

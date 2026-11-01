@@ -243,7 +243,7 @@
       <tbody id="detected"></tbody>
     </table>
 
-    <h2>Recent connections</h2>
+    <h2>Recent connections <span class="sub" id="monitor"></span></h2>
     <ul id="events" class="events"></ul>
 
     <div class="actions">
@@ -684,6 +684,28 @@
         }
       }
 
+      // An empty connection list has a reason, and the monitor's state is what names it: an
+      // unelevated run cannot subscribe at all, and without this the list reads as a quiet machine
+      // rather than as a feed that never opened.
+      function renderMonitor(monitor) {
+        if (!monitor) {
+          return;
+        }
+
+        const text =
+          monitor.state === "running"
+            ? "running, " + monitor.events + " events"
+            : monitor.state === "refused"
+              ? "no feed: " + (monitor.code ?? "refused")
+              : monitor.state;
+
+        el("monitor").textContent = "(" + text + ")";
+        el("monitor").title =
+          monitor.state === "refused"
+            ? "the event subscription was refused, so no connection can be listed"
+            : "the state of the connection feed";
+      }
+
       function apply(state) {
         rules = state.rules.rule;
         detected = state.detected;
@@ -700,6 +722,8 @@
           el("events").replaceChildren();
           state.events.forEach(renderEvent);
         }
+
+        renderMonitor(state.monitor);
 
         watchEvents();
 

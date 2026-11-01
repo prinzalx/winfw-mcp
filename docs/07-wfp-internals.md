@@ -116,6 +116,12 @@ way:
 
 The options are per session, so the monitor configures its own and leaves the machine alone.
 
+The thread reports what subscribing did, because a refused subscription is a supported state and an
+empty connection list needs a reason. It publishes `starting`, `running`, `refused` with the code
+that refused it, or `stopped` on the way out, and both reports read that together with how many
+events the log took in. An unelevated run therefore says `no feed: 0x00000005` rather than looking
+like a machine about to happen.
+
 ## Reading the endpoints of an event
 
 Each end of the connection lives in a union of its own in the event header — `Anonymous1` for the

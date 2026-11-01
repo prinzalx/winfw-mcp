@@ -128,6 +128,64 @@ impl EventLog {
     pub fn snapshot(&self) -> Vec<NetEvent> {
         self.since(0)
     }
+
+    /// How many events arrived since the process started, including the ones the bound dropped.
+    ///
+    /// This is what distinguishes a feed that is running but idle from one that delivers events,
+    /// so it counts what came in rather than what the capacity left behind.
+    pub fn delivered(&self) -> u64 {
+        self.inner.lock().expect("event log lock poisoned").next
+    }
+}
+
+/// What the event subscription did about being asked to listen.
+///
+/// A refused subscription is a supported state — an unelevated run cannot open the event session at
+/// all — but it used to be visible only in the log, so the page showed an empty connection list
+/// with no reason and a reader had to know whether the machine was quiet or the feed was out. It is
+/// reported next to the list for that reason.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MonitorStatus {
+    /// `starting`, `running`, `refused` or `stopped`.
+    pub state: &'static str,
+    /// The code that refused it, when one did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+impl Default for MonitorStatus {
+    fn default() -> Self {
+        Self {
+            state: "starting",
+            code: None,
+        }
+    }
+}
+
+impl MonitorStatus {
+    /// The subscription is open and callbacks may arrive.
+    pub fn running() -> Self {
+        Self {
+            state: "running",
+            code: None,
+        }
+    }
+
+    /// A call on the way to subscribing answered a failure, which ends the feed.
+    pub fn refused(code: impl std::fmt::Display) -> Self {
+        Self {
+            state: "refused",
+            code: Some(code.to_string()),
+        }
+    }
+
+    /// The subscription was closed on the way out.
+    pub fn stopped() -> Self {
+        Self {
+            state: "stopped",
+            code: None,
+        }
+    }
 }
 
 /// Where a callback hands what it saw.
@@ -236,6 +294,10 @@ fn listen(
     const SESSION_KEY: windows::core::GUID =
         windows::core::GUID::from_u128(0x6c9e8b14_3f7a_4d52_a8c1_5e0b7d92f4a6);
 
+    // Kept so the thread can report what subscribing did, after the handle itself moved into the
+    // callback's context.
+    let reported = Arc::clone(&live);
+
     let session = FWPM_SESSION0 {
         sessionKey: SESSION_KEY,
         ..Default::default()
@@ -258,6 +320,8 @@ fn listen(
             code = format!("{status:#010x}"),
             "event monitor could not open WFP"
         );
+
+        reported.set_monitor(MonitorStatus::refused(format!("{status:#010x}")));
 
         return;
     }
@@ -334,6 +398,8 @@ fn listen(
             "event subscription refused"
         );
 
+        reported.set_monitor(MonitorStatus::refused(format!("{status:#010x}")));
+
         unsafe {
             let _ = FwpmEngineClose0(engine);
 
@@ -342,6 +408,8 @@ fn listen(
 
         return;
     }
+
+    reported.set_monitor(MonitorStatus::running());
 
     debug!("event monitor subscribed");
 
@@ -357,6 +425,8 @@ fn listen(
         // be reclaimed here.
         drop(Box::from_raw(context as *mut Sink));
     }
+
+    reported.set_monitor(MonitorStatus::stopped());
 
     debug!("event monitor unsubscribed");
 
@@ -843,5 +913,53 @@ mod tests {
         };
 
         assert_eq!(filetime_to_millis(&value), 0);
+    }
+
+    /// The point of the status: a refused feed carries the code with it, because "refused" on its
+    /// own is not something a reader can act on.
+    #[test]
+    fn a_refused_status_keeps_the_code_that_refused_it() {
+        let status = MonitorStatus::refused(format!("{:#010x}", 5));
+
+        assert_eq!(status.state, "refused");
+        assert_eq!(status.code.as_deref(), Some("0x00000005"));
+
+        let json = serde_json::to_value(&status).expect("serialize the status");
+
+        assert_eq!(json["state"], "refused");
+        assert_eq!(json["code"], "0x00000005");
+    }
+
+    /// A running feed has no code to report, and the page should not have to look for one.
+    #[test]
+    fn a_running_status_carries_no_code() {
+        let json = serde_json::to_value(MonitorStatus::running()).expect("serialize the status");
+
+        assert_eq!(json["state"], "running");
+        assert!(json.get("code").is_none(), "nothing refused it: {json}");
+    }
+
+    /// Before the thread has reported anything the state reads `starting`, which is neither a live
+    /// feed nor a failure.
+    #[test]
+    fn a_status_before_the_thread_reports_is_starting() {
+        let status = MonitorStatus::default();
+
+        assert_eq!(status.state, "starting");
+        assert!(status.code.is_none());
+    }
+
+    /// The counter answers "did the feed ever deliver?", so it counts what arrived rather than what
+    /// the capacity left in the log.
+    #[test]
+    fn delivered_counts_the_events_the_bound_dropped() {
+        let log = EventLog::new();
+
+        for index in 0..LOG_CAPACITY + 5 {
+            log.push(event(&format!("app{index}.exe")));
+        }
+
+        assert_eq!(log.snapshot().len(), LOG_CAPACITY);
+        assert_eq!(log.delivered(), (LOG_CAPACITY + 5) as u64);
     }
 }

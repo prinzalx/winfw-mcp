@@ -51,7 +51,7 @@ use crate::config::{Policy, Settings, Writes};
 use crate::export::{self, Area};
 use crate::learn::{Detected, Detector};
 use crate::mcp;
-use crate::monitor::{EventLog, NetEvent};
+use crate::monitor::{EventLog, MonitorStatus, NetEvent};
 use crate::paths::DataPaths;
 use crate::rules::{
     Action, Cidr, Direction, PortRange, Protocol, Rule, RuleFile, validate_pattern,
@@ -180,6 +180,20 @@ impl AppState {
     fn policy(&self) -> Policy {
         self.live.policy()
     }
+
+    /// What the event subscription reported, with the count the log holds.
+    ///
+    /// Both reports that answer "why is the connection list empty?" take it from here, so the
+    /// page and an MCP client cannot be told different things about the same feed.
+    fn monitor(&self) -> MonitorJson {
+        let status = self.live.monitor();
+
+        MonitorJson {
+            state: status.state,
+            code: status.code,
+            events: self.events.delivered(),
+        }
+    }
 }
 
 /// The two settings that may change while the process runs.
@@ -193,6 +207,9 @@ impl AppState {
 pub struct Live {
     learning: AtomicBool,
     deny: AtomicBool,
+    /// What the event subscription reported. A mutex rather than an atomic because the report
+    /// carries the code that refused it, and only the monitor thread ever writes it.
+    monitor: Mutex<MonitorStatus>,
 }
 
 impl Live {
@@ -200,6 +217,7 @@ impl Live {
         Self {
             learning: AtomicBool::new(learning),
             deny: AtomicBool::new(policy == Policy::Deny),
+            monitor: Mutex::new(MonitorStatus::default()),
         }
     }
 
@@ -227,6 +245,19 @@ impl Live {
     /// this run only, which is how the reference's pause button behaves too.
     pub fn toggle_learning(&self) -> bool {
         !self.learning.fetch_not(Ordering::SeqCst)
+    }
+
+    /// What the event subscription did about being asked to listen.
+    pub fn monitor(&self) -> MonitorStatus {
+        self.monitor
+            .lock()
+            .expect("monitor status lock poisoned")
+            .clone()
+    }
+
+    /// Publish what the subscription did. The monitor thread is the only writer.
+    pub fn set_monitor(&self, status: MonitorStatus) {
+        *self.monitor.lock().expect("monitor status lock poisoned") = status;
     }
 }
 
@@ -1118,6 +1149,7 @@ fn mcp_tool(
                     "filters": outcome.inventory.filters,
                     "reason": outcome.reason,
                 },
+                "monitor": state.monitor(),
             })))
         }
         "rules.list" => {
@@ -1394,6 +1426,21 @@ struct StateJson {
     events: Vec<NetEvent>,
     /// The applications waiting for a decision, newest first.
     detected: Vec<Detected>,
+    /// Whether the feed behind the events is running, with how much it delivered.
+    monitor: MonitorJson,
+}
+
+/// The monitor's state together with the count the log holds, so an empty list can be told apart
+/// from a feed that was never open.
+#[derive(Debug, Clone, Serialize)]
+struct MonitorJson {
+    /// `starting`, `running`, `refused` or `stopped`.
+    state: &'static str,
+    /// The code that refused the subscription, when one did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+    /// Events the callback handed over since the process started.
+    events: u64,
 }
 
 impl StateJson {
@@ -1418,6 +1465,7 @@ impl StateJson {
             store: store.clone(),
             events,
             detected,
+            monitor: state.monitor(),
         }
     }
 }
@@ -2501,6 +2549,49 @@ mod tests {
         assert_eq!(response.status, 200);
         assert!(body.contains("\"browser\""), "{body}");
         assert!(body.contains("\"rules\""), "{body}");
+    }
+
+    /// An empty connection list has to come with the reason for being empty, which is what the
+    /// monitor reports: a refused subscription is a supported state, and a page that hides it
+    /// reads as a quiet machine.
+    #[test]
+    fn the_state_endpoint_reports_the_monitor_and_what_it_delivered() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let body = |label: &str| {
+            let response = Server::route(
+                &server_state,
+                &worker,
+                &Request::new("GET", "/api/state", vec![]),
+            )
+            .expect(label);
+
+            String::from_utf8_lossy(&response.body).into_owned()
+        };
+
+        let before = body("state before the monitor reported");
+
+        assert!(before.contains("\"monitor\""), "{before}");
+        assert!(
+            before.contains("\"starting\""),
+            "nothing reported yet: {before}"
+        );
+
+        server_state
+            .live
+            .set_monitor(crate::monitor::MonitorStatus::refused(format!(
+                "{:#010x}",
+                5
+            )));
+
+        let after = body("state after a refusal");
+
+        assert!(after.contains("\"refused\""), "{after}");
+        assert!(
+            after.contains("0x00000005"),
+            "the code has to be named: {after}"
+        );
     }
 
     /// The state response carries the newest events first, so the panel renders in one request.

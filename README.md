@@ -63,17 +63,22 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.26.0**, in which the log becomes something a portable run can leave
-alone: every line goes to `logs\winfw-mcp.log` as well as to the console, and past a megabyte the
-file is rolled to `winfw-mcp.log.1` and writing starts over, so the data directory never holds
-more than two generations of it
-([data and configuration](docs/02-data-and-configuration.md#the-log-file)).
+The current release is **0.27.0**, in which the connection list explains itself: the event feed
+reports `running`, `refused` with the code that refused it, `starting` or `stopped`, next to the
+number of events it delivered, so an empty panel says whether the machine was quiet or the
+subscription never opened — which is what an unelevated run looks like
+[on the page](docs/05-web-ui.md#what-is-on-the-page) and over
+[MCP](docs/06-mcp-endpoint.md#tools) alike.
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
-the connection table was completed in **0.25.0**, so a line names the local endpoint as well as the
-destination and marks a connection that never left the machine; storage hardening (a versioned rule
-file, a `.bak` of every write, pattern validation) came in
-**0.24.0**; `--help` and `--version` in **0.23.0**; **0.22.0** added `volatile_filters`, which takes our filters out of the store on a clean stop
+the log learned to rotate in **0.26.0**, so every line reaches `logs\winfw-mcp.log` and the data
+directory never holds more than two generations of it
+([data and configuration](docs/02-data-and-configuration.md#the-log-file)); the connection table
+was completed in **0.25.0**, so a line names the local endpoint as well as the destination and
+marks a connection that never left the machine; storage hardening (a versioned rule file, a `.bak`
+of every write, pattern validation) came in
+**0.24.0**; `--help` and `--version` in **0.23.0**; **0.22.0** added `volatile_filters`, which
+takes our filters out of the store on a clean stop
 ([lifecycle and tray](docs/08-lifecycle.md#stopping)); a
 tray menu (`Open`, `Pause learning`, `Quit`) came in **0.21.0**; **0.20.0** made learning mode
 notice a destination an allowed application reached; **0.19.0** made a connection event say where it
