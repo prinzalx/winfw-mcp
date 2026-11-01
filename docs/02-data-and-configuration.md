@@ -43,7 +43,7 @@ the result is never more than two files.
 | `learn_mode` | whether learning mode collects applications; off means the Detected list stays empty while the connection log keeps filling |
 | `default_policy` | `allow` (default) or `deny`. `deny` puts an unconditional block at the bottom of the four authorization layers, so an application no rule mentions is denied rather than allowed; see [WFP internals](07-wfp-internals.md#the-default-deny-base) |
 | `volatile_filters` | `false` by default. `true` makes the server take our filters out of the store when it stops, so the tool is a firewall only while it runs; `false` keeps them installed after a quit (see [lifecycle](08-lifecycle.md#stopping)). Read at startup, so changing it takes a restart |
-| `theme` | presentation preference carried by the page |
+| `theme` | `light`, `dark` or `auto`, where `auto` follows the operating system; the page applies it live |
 | `mcp_writes` | how much the MCP endpoint may write: `none`, `rules` or `all` |
 | `active_profile` | the live profile name; empty selects `rules.toml` itself |
 
@@ -86,9 +86,8 @@ curl -X POST http://127.0.0.1:8788/api/settings \
 ```
 
 Every field is optional, and a field that is absent keeps its value, so a client flips one thing
-without having to know the rest. `theme` and `log_level` are accepted but only take effect on the
-next run: the first belongs to the browser, and the second is the filter `tracing` installed at
-startup. The answer is the same body `GET /api/state` returns, so a client sees what the server
+without having to know the rest. `log_level` is accepted but only takes effect on the
+next run, because the filter `tracing` installed at startup is not swapped out afterwards. The answer is the same body `GET /api/state` returns, so a client sees what the server
 actually settled on.
 
 Note what the endpoint does **not** accept: `port`, because the socket is already bound, and

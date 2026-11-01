@@ -40,7 +40,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -50,7 +50,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::config::{Policy, Settings, Writes};
+use crate::config::{Policy, Settings, Theme, Writes};
 use crate::export::{self, Area};
 use crate::learn::{Detected, Detector};
 use crate::mcp;
@@ -204,27 +204,34 @@ impl AppState {
     }
 }
 
-/// The two settings that may change while the process runs.
+/// The three settings that may change while the process runs.
 ///
 /// Everything else in `Settings` is read once at startup and cannot be honoured afterwards: the
-/// port is already bound, the log level is already installed, and the theme belongs to the browser.
-/// These two are consulted per connection and per store rebuild, so they live in atomics the
-/// monitor thread and the request threads both see. `settings` keeps the file-shaped copy, which is
-/// what gets written back to `config.toml`.
-#[derive(Debug, Default)]
+/// port is already bound and the log level is the filter `tracing` installed. The other three are
+/// consulted again on every read, so they live in atomics the monitor thread and the request
+/// threads both see. `settings` keeps the file-shaped copy, which is what gets written back to
+/// `config.toml`.
+#[derive(Debug)]
 pub struct Live {
     learning: AtomicBool,
     deny: AtomicBool,
+    /// Which colour scheme the page should show, as the index of a [`Theme`] variant.
+    ///
+    /// A theme changes nothing the server itself does; it is published here so that a settings
+    /// change is answered with the value the page will now render, rather than the one the file
+    /// held when the process started.
+    theme: AtomicU8,
     /// What the event subscription reported. A mutex rather than an atomic because the report
     /// carries the code that refused it, and only the monitor thread ever writes it.
     monitor: Mutex<MonitorStatus>,
 }
 
 impl Live {
-    pub fn new(learning: bool, policy: Policy) -> Self {
+    pub fn new(learning: bool, policy: Policy, theme: Theme) -> Self {
         Self {
             learning: AtomicBool::new(learning),
             deny: AtomicBool::new(policy == Policy::Deny),
+            theme: AtomicU8::new(theme.index()),
             monitor: Mutex::new(MonitorStatus::default()),
         }
     }
@@ -266,6 +273,24 @@ impl Live {
     /// Publish what the subscription did. The monitor thread is the only writer.
     pub fn set_monitor(&self, status: MonitorStatus) {
         *self.monitor.lock().expect("monitor status lock poisoned") = status;
+    }
+
+    /// Which colour scheme the page should show right now.
+    pub fn theme(&self) -> Theme {
+        Theme::from_index(self.theme.load(Ordering::SeqCst))
+    }
+
+    /// Publish a theme on its own, which is what a settings change that names only one does.
+    pub fn set_theme(&self, theme: Theme) {
+        self.theme.store(theme.index(), Ordering::SeqCst);
+    }
+}
+
+impl Default for Live {
+    /// The same theme `config.toml` is written with, so a state built without a settings file
+    /// cannot report a theme the tool would never have started with.
+    fn default() -> Self {
+        Self::new(false, Policy::default(), Theme::default())
     }
 }
 
@@ -1160,7 +1185,7 @@ fn tool_list() -> Vec<serde_json::Value> {
         ),
         (
             "settings.set",
-            "change learn_mode or default_policy; takes learn_mode, default_policy",
+            "change learn_mode, default_policy or theme; takes learn_mode, default_policy, theme",
         ),
         (
             "shutdown",
@@ -1238,6 +1263,7 @@ fn mcp_tool(
                 "port": state.settings.port,
                 "learn_mode": state.learn_mode(),
                 "default_policy": state.settings.default_policy.name(),
+                "theme": state.live.theme().name(),
                 "mcp_writes": state.settings.mcp_writes,
                 "profile": state.active_name(),
                 "rules": rules,
@@ -1582,13 +1608,23 @@ fn mcp_tool(
                 None => None,
             };
 
+            // Read the same way the policy is: a name an agent guesses wrong is a protocol error
+            // naming what it should have sent, not a theme written to the file unseen.
+            let theme = match call.string_arg("theme") {
+                Some(text) => Some(Theme::parse(&text).ok_or((
+                    mcp::INVALID_PARAMS,
+                    format!("'{text}' is not a theme, expected light, dark or auto"),
+                ))?),
+                None => None,
+            };
+
             let outcome = apply_settings(
                 state,
                 worker,
                 SettingsEdit {
                     learn_mode,
                     default_policy,
-                    theme: call.string_arg("theme"),
+                    theme,
                     log_level: call.string_arg("log_level"),
                 },
             )
@@ -1597,6 +1633,7 @@ fn mcp_tool(
             Ok(mcp::tool_json(serde_json::json!({
                 "learn_mode": state.learn_mode(),
                 "default_policy": state.policy().name(),
+                "theme": state.live.theme().name(),
                 "installed": outcome.installed,
                 "store": outcome.ok,
             })))
@@ -1644,6 +1681,9 @@ struct StateJson {
     /// a restart.
     volatile_filters: bool,
     log_level: String,
+    /// Which colour scheme the page should show. Reported from the live value rather than from the
+    /// settings snapshot, so a change made a moment ago is not answered with the old name.
+    theme: &'static str,
     profile: String,
     rules: RuleFile,
     store: StoreOutcome,
@@ -1687,6 +1727,7 @@ impl StateJson {
             default_policy: state.policy().name(),
             volatile_filters: state.settings.volatile_filters,
             log_level: state.settings.log_level.clone(),
+            theme: state.live.theme().name(),
             profile: state.active_name(),
             rules,
             store: store.clone(),
@@ -1774,7 +1815,7 @@ struct ProfileRename {
 struct SettingsEdit {
     learn_mode: Option<bool>,
     default_policy: Option<Policy>,
-    theme: Option<String>,
+    theme: Option<Theme>,
     log_level: Option<String>,
 }
 
@@ -1782,8 +1823,9 @@ struct SettingsEdit {
 /// the store.
 ///
 /// `learn_mode` and `default_policy` are consulted while the process runs, so they go into the
-/// atomics the monitor thread reads. `theme` belongs to the browser and `log_level` is what
-/// `tracing` installed at startup, so both are written for the next run and reported as such.
+/// atomics the monitor thread reads. `theme` takes effect at once too, because it is the page that
+/// renders it and the page reloads the state after every settings change. `log_level` is the filter
+/// `tracing` installed at startup, so it alone is written for the next run.
 fn apply_settings(
     state: &AppState,
     worker: &WfpWorker,
@@ -1815,6 +1857,7 @@ fn apply_settings(
         .context("write the settings file")?;
 
     state.live.set(next.learn_mode, next.default_policy);
+    state.live.set_theme(next.theme);
 
     let rules = state.rules.lock().expect("rules lock poisoned").clone();
 
@@ -2172,7 +2215,7 @@ mod tests {
     /// The tray's pause flips the flag and reports the new value, leaving the policy alone.
     #[test]
     fn toggling_learning_reports_what_it_became_and_keeps_the_policy() {
-        let live = Live::new(true, Policy::Deny);
+        let live = Live::new(true, Policy::Deny, Theme::Dark);
 
         assert!(!live.toggle_learning());
         assert_eq!(live.policy(), Policy::Deny);
@@ -2240,6 +2283,16 @@ mod tests {
             String::new(),
             Startup::unmeasured(),
         )
+    }
+
+    /// The same rules again with `mcp_writes = all`, which is what the settings tool asks for.
+    ///
+    /// `writable_state` stops at `rules`, so a settings call there is refused by the permission
+    /// gate before the body is ever read.
+    fn all_writes_state() -> AppState {
+        let mut server_state = writable_state();
+        server_state.settings.mcp_writes = Writes::All;
+        server_state
     }
 
     /// Whether the store accepted what a tool just wrote. A tool nests its own answer under
@@ -2661,6 +2714,128 @@ mod tests {
         assert!(
             !server_state.live.learning() && server_state.live.policy() == Policy::Deny,
             "the monitor has to see the change without a restart",
+        );
+    }
+
+    /// The theme is the one setting the page renders, so it has to arrive with the state rather
+    /// than live only in the file the page cannot read.
+    #[test]
+    fn the_state_endpoint_reports_the_theme() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains(r#""theme":"dark""#),
+            "the theme the settings file is written with: {body}",
+        );
+    }
+
+    /// A theme change is answered with the new name and lands in `config.toml`, which is what makes
+    /// it take effect in the browser without a restart while `log_level` still waits for one.
+    #[test]
+    fn a_theme_change_takes_effect_at_once_and_reaches_the_file() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/settings", br#"{"theme":"light"}"#.to_vec()),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains(r#""theme":"light""#),
+            "the page is told the new scheme: {body}",
+        );
+
+        let written =
+            std::fs::read_to_string(server_state.paths.config.clone()).expect("read the config");
+
+        assert!(
+            written.contains(r#"theme = "light""#),
+            "the choice has to survive a restart: {written}",
+        );
+
+        // `auto` is the value the live setting cannot hold the same way, because it is the number
+        // the fallback for an unknown value answers with. A change that reaches the file but not
+        // the answer would be invisible to every test that stops at "light".
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/settings", br#"{"theme":"auto"}"#.to_vec()),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains(r#""theme":"auto""#),
+            "following the operating system has to be reported as itself: {body}",
+        );
+    }
+
+    /// A theme the server cannot name is refused rather than written to the file, where it would
+    /// sit unreadable and make the next startup parse a value the page has no colours for.
+    #[test]
+    fn the_settings_endpoint_refuses_a_theme_it_cannot_read() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/settings", br#"{"theme":"neon"}"#.to_vec()),
+        );
+
+        assert!(response.is_err(), "a theme is one of three names");
+
+        assert_eq!(
+            server_state.live.theme(),
+            crate::config::Theme::Dark,
+            "a refused theme changes nothing",
+        );
+    }
+
+    /// The MCP route reads the theme the same way the browser does, so an agent that guesses a name
+    /// hears the range rather than watching the setting stay as it was.
+    #[test]
+    fn the_mcp_settings_tool_refuses_a_theme_it_cannot_read() {
+        let server_state = all_writes_state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"settings.set","arguments":{"theme":"neon"}}}"#
+                    .to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains("light, dark or auto"),
+            "the refusal names what to send: {body}",
+        );
+        assert!(
+            body.contains("-32602"),
+            "a name the tool cannot use is a protocol error: {body}",
         );
     }
 

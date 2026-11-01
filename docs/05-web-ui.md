@@ -20,9 +20,12 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   `Delete` work on the profile the selector holds, and `Delete` asks first because it takes the
   rules file with it. Renaming or deleting the unnamed `default` is refused: it is `rules.toml`
   itself rather than a file in `profiles\`.
-- **Header** line: address, learning mode, default policy. Learning mode and the default policy are
-  underlined because they are clickable — clicking one asks the server to switch it to the other
-  value, which writes `config.toml` and rebuilds the store in the same request.
+- **Header** line: address, learning mode, default policy, theme. Learning mode and the default
+  policy are underlined because they are clickable — clicking one asks the server to switch it to
+  the other value, which writes `config.toml` and rebuilds the store in the same request. The theme
+  is clickable too and cycles `light -> dark -> auto`, where `auto` follows the operating system.
+  Since **0.32.0** this is not decoration: the choice is applied to the page in the same request and
+  survives a reload, so a bright terminal and a dark browser stop fighting each other.
 - **Rules** table: enabled flag, name, action, pattern, protocol, direction, port, remote address,
   remove, share. Every field is edited in place and saved on change. Protocol and direction are
   dropdowns whose first entry is `any`, which is sent as no value at all; the port box takes `443`
@@ -55,7 +58,7 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 | `GET /api/state` | settings, rules, what the store reported, the state of the event feed and what the rebuild at startup found |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
-| `POST /api/settings` | change `learn_mode` or `default_policy` at runtime; `theme` and `log_level` are written for the next run |
+| `POST /api/settings` | change `learn_mode`, `default_policy` or `theme` at runtime; only `log_level` is written for the next run |
 | `POST /api/detected/dismiss` | drop a detected application or destination without deciding |
 | `POST /api/clear` | remove our filters from the store |
 | `POST /api/shutdown` | stop the server, which ends the process; the filters stay installed |

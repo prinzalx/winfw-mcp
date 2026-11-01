@@ -16,8 +16,12 @@
         --banner-line: #e2b877;
       }
 
+      /* The dark values appear twice on purpose: once for an operating system that asks for dark
+         while the setting leaves the choice alone, and once for a setting that says dark on a
+         machine that asks for light. Without the second block the setting could only ever follow
+         the system, which is the opposite of storing it. */
       @media (prefers-color-scheme: dark) {
-        :root {
+        :root:not([data-theme="light"]) {
           --bg: #14171a;
           --fg: #e6eaef;
           --muted: #9aa4af;
@@ -27,6 +31,17 @@
           --banner: #2a2115;
           --banner-line: #6b5326;
         }
+      }
+
+      :root[data-theme="dark"] {
+        --bg: #14171a;
+        --fg: #e6eaef;
+        --muted: #9aa4af;
+        --line: #2c3238;
+        --accent: #6ab0ff;
+        --deny: #ff6b6b;
+        --banner: #2a2115;
+        --banner-line: #6b5326;
       }
 
       body {
@@ -200,6 +215,8 @@
           <span id="learn-mode" class="toggle" title="click to toggle learning mode">off</span>
           &middot; default
           <span id="default-policy" class="toggle" title="click to toggle the default policy">allow</span>
+          &middot; theme
+          <span id="theme" class="toggle" title="click to cycle light, dark and auto">dark</span>
         </div>
       </div>
       <div class="status" id="status"></div>
@@ -364,6 +381,16 @@
       /* What the rebuild at startup found, next to the store's own report. It is only said once per
          load and only when the two counts differ: a first run had an empty store, and an unchanged
          restart has nothing to report. */
+      /* Which scheme the style sheet should use. Only the two names it knows get the attribute;
+         `auto` removes it, which is what leaves the decision to the media query. */
+      function renderTheme(theme) {
+        if (theme === "light" || theme === "dark") {
+          document.documentElement.dataset.theme = theme;
+        } else {
+          delete document.documentElement.dataset.theme;
+        }
+      }
+
       function renderStartup(startup) {
         if (!startup || !startup.measured || !startup.differs) {
           return;
@@ -737,6 +764,8 @@
         el("addr").textContent = location.host;
         el("learn-mode").textContent = state.learn_mode ? "on" : "off";
         el("default-policy").textContent = state.default_policy;
+        el("theme").textContent = state.theme;
+        renderTheme(state.theme);
         renderRules();
         renderDetected();
         renderBanner(state.store);
@@ -897,6 +926,21 @@
           status("default policy is " + next);
         } catch (error) {
           status("could not change the default policy: " + error.message);
+        }
+      });
+
+      // Three values rather than two, so a click walks the whole range rather than pinning the
+      // page to one of the fixed schemes.
+      el("theme").addEventListener("click", async () => {
+        const order = ["light", "dark", "auto"];
+        const at = order.indexOf(el("theme").textContent);
+        const next = order[(at + 1) % order.length];
+
+        try {
+          apply(await request("POST", "/api/settings", { theme: next }));
+          status("theme is " + next);
+        } catch (error) {
+          status("could not change the theme: " + error.message);
         }
       });
 

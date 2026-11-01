@@ -19,7 +19,11 @@ pub struct Settings {
     /// Collect connections that match no rule into the Detected list (PLAN.md section 3).
     pub learn_mode: bool,
     /// Presentation only, but stored so the browser and the file agree.
-    pub theme: String,
+    ///
+    /// The page follows this rather than the operating system unless it says `auto`, because a
+    /// setting that names one theme while the page shows another is the confusion this field exists
+    /// to avoid.
+    pub theme: Theme,
     /// How much the MCP endpoint may change (PLAN.md section 10).
     ///
     /// `none` is the default on purpose: an agent talking to a firewall it did not configure should
@@ -77,6 +81,66 @@ impl Policy {
     }
 }
 
+/// Which of the page's two colour schemes to show.
+///
+/// The page carries both schemes as CSS custom properties, so this is a switch rather than a
+/// palette: nothing about the layout depends on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    /// Follow the operating system, which is what the page does when it is told nothing.
+    Auto,
+    /// Always light.
+    Light,
+    /// Always dark. The default, and the value a config file written before this field meant
+    /// anything carries.
+    #[default]
+    Dark,
+}
+
+impl Theme {
+    /// The name as `config.toml` spells it and as the page shows it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    /// Read a name back, the way [`Policy::parse`] does it. A page or an agent that sends anything
+    /// else hears what the values are rather than watching nothing change.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+
+    /// The stable number an `AtomicU8` holds. Adding a variant means adding a number here, and
+    /// `from_index` clamps a value it does not know to the default.
+    pub(crate) fn index(&self) -> u8 {
+        match self {
+            Self::Auto => 0,
+            Self::Light => 1,
+            Self::Dark => 2,
+        }
+    }
+
+    /// Read back an [`index`](Self::index). A number from a future version falls back to the
+    /// default rather than panicking on a value the process cannot name.
+    pub(crate) fn from_index(index: u8) -> Self {
+        match index {
+            0 => Self::Auto,
+            1 => Self::Light,
+            2 => Self::Dark,
+            _ => Self::default(),
+        }
+    }
+}
+
 /// What the MCP endpoint is allowed to modify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -96,7 +160,7 @@ impl Default for Settings {
             port: 8788,
             log_level: "info".to_owned(),
             learn_mode: true,
-            theme: "dark".to_owned(),
+            theme: Theme::Dark,
             mcp_writes: Writes::None,
             active_profile: String::new(),
             volatile_filters: false,
@@ -131,6 +195,28 @@ impl Settings {
 mod tests {
     use super::*;
 
+    /// The live setting holds a theme as a number, and the fallback for a number it does not know
+    /// is the default rather than the first variant. Those two facts overlap at `0`, so a value
+    /// read back has to be tested for every variant rather than trusted to the order they are
+    /// declared in.
+    #[test]
+    fn every_theme_survives_the_number_the_live_setting_holds() {
+        for theme in [Theme::Auto, Theme::Light, Theme::Dark] {
+            assert_eq!(
+                Theme::from_index(theme.index()),
+                theme,
+                "{} does not survive its own number",
+                theme.name(),
+            );
+        }
+
+        assert_eq!(
+            Theme::from_index(9),
+            Theme::default(),
+            "a number from a future version falls back to the default",
+        );
+    }
+
     #[test]
     fn settings_survive_a_round_trip_through_disk() {
         let path = crate::testutil::scratch_dir("config").join("config.toml");
@@ -138,7 +224,7 @@ mod tests {
             port: 9001,
             log_level: "debug".to_owned(),
             learn_mode: false,
-            theme: "light".to_owned(),
+            theme: Theme::Light,
             mcp_writes: Writes::Rules,
             active_profile: "work".to_owned(),
             volatile_filters: true,

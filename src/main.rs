@@ -182,6 +182,7 @@ fn serve(
     let live = Arc::new(server::Live::new(
         settings.learn_mode,
         settings.default_policy,
+        settings.theme,
     ));
 
     let events = Arc::new(monitor::EventLog::new());

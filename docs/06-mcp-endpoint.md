@@ -25,7 +25,7 @@ client that asks for anything else is told so rather than silently ignored.
 | `export` | copy an area (`rules`, `config`, `detected`, `profiles`, `all`) into `export\` | yes |
 | `profiles.list` | the active profile and the stored profile names | no |
 | `profile.use` | switch the live profile (takes `name`) | yes |
-| `settings.set` | change `learn_mode` or `default_policy` (takes either, both optional) | yes |
+| `settings.set` | change `learn_mode`, `default_policy` or `theme` (all optional) | yes |
 | `shutdown` | stop the process; the filters stay in the firewall | yes |
 
 `rules.share` and `rules.decode` are the two directions of one string, which is how a rule travels

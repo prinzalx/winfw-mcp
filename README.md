@@ -63,12 +63,16 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.31.0**, in which the rebuild the server makes of the store at startup
-reports itself: the counts it answered are kept, and when the store held something other than what
-the rules describe, the page says so instead of the difference ending up in the log alone
-([lifecycle and tray](docs/08-lifecycle.md#starting)).
+The current release is **0.32.0**, in which the `theme` setting is no longer decoration: the page
+applies it, and the header cycles `light -> dark -> auto` with a click, where `auto` follows the
+operating system. The choice is written to `config.toml` and survives a reload, and the MCP
+`settings.set` tool reads it the same way the browser does
+([the web UI](docs/05-web-ui.md)).
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
+the rebuild the server makes of the store at startup reports itself since **0.31.0**, keeping the
+counts it answered so a store that held something other than what the rules describe is named on
+the page rather than in the log alone ([lifecycle and tray](docs/08-lifecycle.md#starting));
 an export covers the stored profiles since **0.30.0**, where the `all` area copies every profile
 file into `export\profiles\` and `export` takes a `profiles` area of its own
 ([the web UI](docs/05-web-ui.md));

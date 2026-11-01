@@ -74,12 +74,19 @@ Kept as asked, with the two audits now folded in below.
 
 ### 3.2 Settings
 
-- **`port`, `log_level` and `theme` are still file-only.** `POST /api/settings` exists since 0.13.0
+- **`port` and `log_level` are still file-only.** `POST /api/settings` exists since 0.13.0
   and so does the MCP `settings.set` tool, and `learn_mode` and `default_policy` take effect at
-  once. The other three are written to the file and only honoured on the next run: the port is
+  once. The other two are written to the file and only honoured on the next run: the port is
   already bound, and the log level is the filter `tracing` installed at startup.
-- **`theme` is decorative.** The field exists in config, is reported in the state, and appears nowhere
-  in `web/index.html`; the styling is fixed.
+- **A bad value in a settings body answers `500 Internal Server Error`.** A theme, policy or log
+  level the server cannot read is refused before anything is written, which is right, but
+  `status_text` has no branch for it and the client is told the server broke. Found by a live run of
+  0.32.0 and pre-existing: it has answered that way for `default_policy` since the route existed.
+  The fix is a status for a body the server could not read, not a change to the refusal.
+- ~~**`theme` is decorative.**~~ — closed in 0.32.0. The field existed in config, was reported in the
+  state, and appeared nowhere in `web/index.html`. It is now an enumerated setting (`light`, `dark`,
+  `auto`), the header cycles it with a click, and the page applies it: `data-theme` on the root for
+  the two fixed choices, removed for `auto`, which leaves the operating system in charge.
 - ~~**Logs do not rotate.**~~ — closed in 0.26.0. PLAN.md §2 calls `logs\` rotating, and it now does:
   tracing writes to the file and the console, the file rolls at a megabyte to `<name>.1`, and the
   startup lines the ad-hoc helper appended are `info!` lines like every other. What is left is the
@@ -347,9 +354,9 @@ Roughly by how much they cost to change later:
    is left.
 4. ~~**A settings write path** (§3.2)~~ — done in 0.13.0 for the two settings that matter at runtime.
    `POST /api/settings` and the MCP tool `settings.set` change `learn_mode` and `default_policy` on a
-   running process, write `config.toml`, and rebuild the store. What is left is small: `port` needs a
-   restart because the listener is already bound, and `log_level` and `theme` are written by the same
-   endpoint but only take effect on the next run.
+   running process, write `config.toml`, and rebuild the store. `theme` joined them in 0.32.0. What
+   is left is small: `port` needs a restart because the listener is already bound, and `log_level`
+   is written by the same endpoint but only takes effect on the next run.
 5. **The four bugs in §1**, all small.
 6. ~~**Storage hardening**~~ — done in 0.24.0: rule-string validation (an absolute path, no
    characters a path cannot hold), a previous-generation backup with a fallback on load, and a
@@ -682,3 +689,27 @@ and an empty profiles directory exporting nothing.
 
 Three tests: `differs` only when the counts differ, the state endpoint carrying the counts, and an
 unmeasured state saying so instead of claiming a diff.
+
+## 23. Theme round notes
+
+- The setting was already written, loaded and reported; what it never had was a reader. Making it
+  one turned out to be three separate things: a type that cannot hold a name the page cannot render,
+  a style sheet that answers to that type, and a way to change it without editing a file.
+- `theme` is an enum now rather than a `String`, for the reason the default policy has always had:
+  a free string lets `neon` into `config.toml`, where it does nothing and explains nothing. An
+  unknown name is refused at both entrances, and a name an older binary wrote is clamped to the
+  default rather than failing the load, because a theme is not worth refusing to start over.
+- The cycle lives in the page, not in Rust. A `next()` on the enum was written, then deleted: only
+  the browser knows what the user clicked last, and a server-side cycle would disagree with a second
+  tab the moment either was clicked.
+- `auto` is the absence of a decision rather than a third value in the style sheet, so it is
+  expressed by removing the `data-theme` attribute and letting `prefers-color-scheme` win. This is
+  why the dark rules are written twice, once under the media query and once for an explicit
+  `data-theme="dark"`: a chosen dark has to win over a light operating system.
+- The theme is held in an `AtomicU8` beside the other two live settings, which is the same shape and
+  the same reason: the state endpoint reads it on a different thread from the one that writes it. It
+  is a `Default` impl written by hand now rather than derived, because a derived default would be
+  `0`, and `0` is `auto`.
+- A test for the refusal over MCP needed a state with `mcp_writes = all` and initially had the
+  default, so it asserted the permission gate's message while believing it asserted the parser's.
+  The two refusals look identical in the body, which is worth remembering about the next one.
