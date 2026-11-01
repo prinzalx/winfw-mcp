@@ -43,7 +43,10 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 - **The feed's state**, next to that heading: `running, 128 events`, `no feed: 0x00000005`,
   `starting` or `stopped`. It is the answer to "is this list empty because nothing happened or
   because nothing was delivered?", which an unelevated run can only answer the second way.
-- **Actions**: Add rule, Apply to WFP, Clear our filters, Export, Import, Quit.
+- **Actions**: Add rule, Apply to WFP, Clear our filters, Export, Import, Restore, Quit.
+  Restore is the file half of an export: a file chooser takes a rules file back in, and the
+  interface asks first, because replacing the list is the one action on the page that can lose
+  rules rather than only fail to add them.
 - **Banner**: what the store reported. A refused store is shown as a banner with its reason rather
   than as an empty list. Under it, since **0.31.0**, what the rebuild at startup found: a line naming
   the filters the store held and the filters the rules describe, shown only when the two differ. An
@@ -65,6 +68,7 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 | `POST /api/export` | copy the rules, the config, the Detected list and the profiles into `export\` |
 | `POST /api/rules/share` | one rule as a Base64 string, for copy and paste |
 | `POST /api/rules/import` | append the rule a Base64 string carries |
+| `POST /api/rules/replace` | replace the whole rule list with the text of a rules file: the restore half of an export |
 | `GET /api/profiles` | the active profile and the names of the stored profiles |
 | `POST /api/profiles/switch` | make another profile live (an empty name selects `rules.toml`) |
 | `POST /api/profiles/create` | copy the live rules into a new profile and make it live; a name already taken is refused |
@@ -80,10 +84,14 @@ Export answers which files it copied and where, which is the manual backup path:
 copied into `export\` on demand. Since **0.30.0** the profiles come along too, into
 `export\profiles\` rather than next to `rules.toml`, because a set of equal files is impossible to
 tell apart in a flat listing; a profiles directory that is still empty exports nothing and leaves no
-directory behind. Import is deliberately narrow — it appends the one rule a share string carries,
-rather than replacing anything, so pasting a string cannot silently discard a rule set. An agent
-needs no page for the read direction: the MCP `rules.decode` tool answers with the rule a string
-carries, and appends it only when asked to with `add`.
+directory behind. Import has two directions since **0.33.0**. A share string still appends the one
+rule it carries rather than replacing anything, so pasting cannot silently discard a rule set. A
+whole file replaces the list: `Restore` on the page reads the chosen file in the browser and posts
+its text, and the MCP `rules.import` tool takes the same text. What comes back is read by the same
+reader that reads `rules.toml` at startup, so a version this build does not know, a field name it
+does not recognise or a pattern it cannot hold is refused before the file on disk is touched — and
+the generation it replaces is kept as the backup either way. `rules.decode` remains the read
+direction for a single rule, and appends it only when asked to with `add`.
 
 ## Stopping the page's server
 

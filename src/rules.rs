@@ -532,6 +532,15 @@ impl RuleFile {
         }
     }
 
+    /// Read a whole rule file from text, which is what an import hands over rather than a path.
+    ///
+    /// This is the same reader [`RuleFile::load_or_create`] uses for the file on disk, so a body
+    /// that would fail to start the tool fails an import too: the version, the field names and the
+    /// values a rule cannot hold are refused before anything is written.
+    pub fn from_text(text: &str) -> Result<Self> {
+        parse_rule_file(text.as_bytes()).context("parse the imported rules")
+    }
+
     pub fn save(&self, path: &Path) -> Result<()> {
         let disk = RuleFileDisk {
             version: RULE_FILE_VERSION,

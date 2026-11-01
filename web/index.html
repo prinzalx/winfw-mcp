@@ -272,6 +272,8 @@
       <button id="clear">Clear our filters</button>
       <button id="export">Export</button>
       <button id="import">Import</button>
+      <button id="restore">Restore</button>
+      <input type="file" id="restore-file" accept=".toml,text/plain" hidden />
       <button id="quit" title="Stop this tool; the rules stay in the firewall">Quit</button>
     </div>
 
@@ -892,6 +894,35 @@
         } catch (error) {
           status("could not import: " + error.message);
         }
+      });
+
+      // Restore is the file half of Export. The text is read in the browser and handed over as a
+      // string, because the server holds no path a browser could name, and the question comes
+      // first: this is the one action that can take rules away rather than fail to add them.
+      el("restore").addEventListener("click", () => el("restore-file").click());
+
+      el("restore-file").addEventListener("change", async () => {
+        const picked = el("restore-file").files[0];
+
+        if (!picked) {
+          return;
+        }
+
+        if (!confirm("Replace the rules on screen with " + picked.name + "?")) {
+          el("restore-file").value = "";
+          return;
+        }
+
+        try {
+          const text = await picked.text();
+
+          apply(await request("POST", "/api/rules/replace", { text }));
+          status("restored " + picked.name);
+        } catch (error) {
+          status("could not restore: " + error.message);
+        }
+
+        el("restore-file").value = "";
       });
 
       // Stopping ends the process, so the page says what happened rather than reloading a server

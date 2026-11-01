@@ -25,6 +25,7 @@
 //! | POST | `/api/export` | copy rules, config, the Detected list and the profiles into `export\` |
 //! | POST | `/api/rules/share` | one rule as a Base64 string, for copy and paste |
 //! | POST | `/api/rules/import` | append the rule a Base64 string carries |
+//! | POST | `/api/rules/replace` | replace the rules with a whole file's text, the restore half of an export |
 //! | POST | `/api/profiles/create` | create a profile from the current rules and switch to it |
 //! | POST | `/api/profiles/rename` | rename a profile, keeping it live when it was live |
 //! | POST | `/api/profiles/delete` | remove a profile, falling back to the default rules |
@@ -1034,6 +1035,37 @@ impl Server {
 
                 Response::json(200, &StateJson::new(state, &outcome))
             }
+            ("POST", "/api/rules/replace") => {
+                let body: Import = serde_json::from_slice(&request.body)
+                    .context("body must carry the rules file text")?;
+                let incoming = RuleFile::from_text(&body.text)?;
+
+                // Every pattern goes through the check a single rule goes through, because a file
+                // that was edited by hand after an export has not been read by anything since.
+                for rule in &incoming.rule {
+                    validate_pattern(&rule.pattern)?;
+                }
+
+                let applied = {
+                    let mut current = state.rules.lock().expect("rules lock poisoned");
+
+                    // The write keeps the generation it replaces, so a restore of the wrong file
+                    // is one more restore away from being undone.
+                    incoming
+                        .save(&state.rules_path())
+                        .context("write the rules file")?;
+                    *current = incoming;
+                    current.clone()
+                };
+
+                let outcome = worker.ask(StoreWork::Apply {
+                    rules: applied,
+                    known: state.detector.apps(),
+                    policy: state.policy(),
+                })?;
+
+                Response::json(200, &StateJson::new(state, &outcome))
+            }
             ("GET", "/api/profiles") => {
                 let body = serde_json::json!({
                     "active": state.active_name(),
@@ -1167,6 +1199,10 @@ fn tool_list() -> Vec<serde_json::Value> {
             "remove the rule at an index, write the file, rebuild the store",
         ),
         (
+            "rules.import",
+            "replace the whole rule list with the text of a rules file; takes text",
+        ),
+        (
             "detected.list",
             "the applications learning mode collected, newest first",
         ),
@@ -1201,6 +1237,7 @@ fn tool_list() -> Vec<serde_json::Value> {
                 "type": "object",
                 "properties": {
                     "index": { "type": "integer" },
+                    "text": { "type": "string" },
                     "share": { "type": "string" },
                     "add": { "type": "boolean" },
                     "app": { "type": "string" },
@@ -1480,6 +1517,55 @@ fn mcp_tool(
 
             Ok(mcp::tool_json(serde_json::json!({
                 "removed": removed,
+                "installed": outcome.installed,
+                "store": outcome.ok,
+            })))
+        }
+        "rules.import" => {
+            // The same permission as a rule edit. Replacing the list is the more frightening of
+            // the two over a transport that shows no diff, but it writes what the caller named
+            // rather than something it guessed, and the previous generation is kept on disk.
+            if state.settings.mcp_writes == Writes::None {
+                return Ok(mcp::tool_refusal(
+                    "rules.import refused: mcp_writes is none",
+                ));
+            }
+
+            let text = call.string_arg("text").ok_or((
+                mcp::INVALID_PARAMS,
+                "rules.import needs the text of a rules file".to_owned(),
+            ))?;
+
+            let incoming = RuleFile::from_text(&text)
+                .map_err(|error| (mcp::INVALID_PARAMS, format!("{error:#}")))?;
+
+            for rule in &incoming.rule {
+                validate_pattern(&rule.pattern)
+                    .map_err(|error| (mcp::INVALID_PARAMS, format!("{error:#}")))?;
+            }
+
+            let count = incoming.rule.len();
+
+            let applied = {
+                let mut current = state.rules.lock().expect("rules lock poisoned");
+
+                incoming
+                    .save(&state.rules_path())
+                    .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+                *current = incoming;
+                current.clone()
+            };
+
+            let outcome = worker
+                .ask(StoreWork::Apply {
+                    rules: applied,
+                    known: state.detector.apps(),
+                    policy: state.policy(),
+                })
+                .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+
+            Ok(mcp::tool_json(serde_json::json!({
+                "rules": count,
                 "installed": outcome.installed,
                 "store": outcome.ok,
             })))
@@ -1789,6 +1875,13 @@ struct ShareIndex {
 #[derive(Debug, Clone, Deserialize)]
 struct Share {
     share: String,
+}
+
+/// The body of `POST /api/rules/replace`: a whole rules file, as text.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Import {
+    text: String,
 }
 
 /// The body of `POST /api/profiles/switch`: which profile to make live. An empty name selects
@@ -3490,6 +3583,174 @@ mod tests {
             2,
             "the shared rule must be appended, not replace the existing one: {body}",
         );
+    }
+
+    /// A rules file handed over whole replaces the list rather than adding to it, which is what
+    /// turns an export into something a person can put back.
+    #[test]
+    fn a_whole_file_replaces_the_rule_list() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let text = r#"version = 1
+
+[[rule]]
+name = "one"
+action = "allow"
+pattern = "C:\\Windows\\one.exe"
+
+[[rule]]
+name = "two"
+action = "deny"
+pattern = "C:\\Windows\\two.exe"
+"#;
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules/replace",
+                serde_json::json!({ "text": text }).to_string().into_bytes(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert_eq!(response.status, 200, "{body}");
+        assert!(
+            body.contains(r#""name":"one""#),
+            "the file's rules are on screen: {body}"
+        );
+        assert!(
+            body.contains(r#""name":"two""#),
+            "the file's rules are on screen: {body}"
+        );
+
+        assert!(
+            !body.contains(r#""name":"browser""#),
+            "a replacement takes what the file does not name: {body}",
+        );
+
+        let written =
+            std::fs::read_to_string(server_state.rules_path()).expect("read the rules file");
+
+        assert!(
+            written.contains("one") && written.contains("two"),
+            "the replacement has to survive a restart: {written}",
+        );
+    }
+
+    /// A file this build cannot read is refused before the one on disk is touched, because the
+    /// point of a restore is not to lose the set it was meant to fix.
+    #[test]
+    fn a_whole_file_that_cannot_be_read_leaves_the_rules_alone() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules/replace",
+                serde_json::json!({ "text": "version = 99\n" })
+                    .to_string()
+                    .into_bytes(),
+            ),
+        );
+
+        assert!(
+            response.is_err(),
+            "a version this build does not know is not a rule list",
+        );
+
+        assert_eq!(
+            server_state.rules.lock().expect("rules lock").rule.len(),
+            1,
+            "a refused import changes nothing",
+        );
+    }
+
+    /// The MCP route replaces the list with the same text the page posts, so an agent can put a
+    /// file back without the browser.
+    #[test]
+    fn the_mcp_import_tool_replaces_the_rule_list() {
+        let server_state = writable_state();
+        let worker = WfpWorker::start();
+
+        let text = "version = 1\n\n[[rule]]\nname = \"one\"\naction = \"allow\"\npattern = \"C:\\\\Windows\\\\one.exe\"\n";
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "rules.import",
+                        "arguments": { "text": text },
+                    },
+                })
+                .to_string()
+                .into_bytes(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains(r#""rules":1"#),
+            "the tool answers with what the file held: {body}",
+        );
+        assert!(
+            !server_state
+                .rules
+                .lock()
+                .expect("rules lock")
+                .rule
+                .iter()
+                .any(|rule| rule.name == "browser"),
+            "the rule the page held is gone, because this replaces: {body}",
+        );
+    }
+
+    /// Without the write permission the tool refuses rather than parsing a body it will not use.
+    #[test]
+    fn the_mcp_import_tool_refuses_without_write_permission() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "rules.import",
+                        "arguments": { "text": "version = 1\n" },
+                    },
+                })
+                .to_string()
+                .into_bytes(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains("rules.import refused"), "{body}");
     }
 
     #[test]

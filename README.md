@@ -63,13 +63,16 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.32.0**, in which the `theme` setting is no longer decoration: the page
-applies it, and the header cycles `light -> dark -> auto` with a click, where `auto` follows the
-operating system. The choice is written to `config.toml` and survives a reload, and the MCP
-`settings.set` tool reads it the same way the browser does
-([the web UI](docs/05-web-ui.md)).
+The current release is **0.33.0**, in which an export can be put back: `Restore` on the page and
+the MCP `rules.import` tool take the text of a whole rules file and replace the live list with it,
+using the same reader that reads `rules.toml` at startup, so a file this build cannot read is
+refused before the file on disk is touched
+([the web UI](docs/05-web-ui.md#export-import-share)).
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
+the `theme` setting reached the page in **0.32.0**, where the header cycles `light -> dark -> auto`
+with a click and the choice is applied and survives a reload
+([the web UI](docs/05-web-ui.md));
 the rebuild the server makes of the store at startup reports itself since **0.31.0**, keeping the
 counts it answered so a store that held something other than what the rules describe is named on
 the page rather than in the log alone ([lifecycle and tray](docs/08-lifecycle.md#starting));

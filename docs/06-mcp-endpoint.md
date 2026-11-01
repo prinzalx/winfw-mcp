@@ -17,6 +17,7 @@ client that asks for anything else is told so rather than silently ignored.
 | `rules.list` | every rule, in file order | no |
 | `rules.share` | one rule as a Base64 string (takes `index`) | no |
 | `rules.decode` | read a Base64 share string back (takes `share`; with `add` the rule is appended) | no, yes with `add` |
+| `rules.import` | replace the whole rule list with the text of a rules file (takes `text`) | yes |
 | `rules.allow` | add an allow rule (takes `app`, optional `pattern`, `name`, `protocol`, `direction`, `port`, `remote`), and dismiss the Detected entry it decides | yes |
 | `rules.deny` | add a deny rule, dismissing the Detected entry it decides (same arguments) | yes |
 | `rules.remove` | remove the rule at an index, write the file, rebuild the store (takes `index`) | yes |

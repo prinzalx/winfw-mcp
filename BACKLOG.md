@@ -97,9 +97,12 @@ Kept as asked, with the two audits now folded in below.
 - ~~**No Profiles area in export.**~~ — closed in 0.30.0. `Area` took a `profiles` value and `all`
   walks into `export\profiles\`, so a backup of everything is everything again. What is left of the
   finding is the whole-file import in the next bullet, which export alone does not settle.
-- **Import appends one shared rule; it does not replace.** PLAN.md §2 describes import as "replace what
-  you have" and defers it. What exists is `POST /api/rules/import` appending one Base64-decoded rule.
-  There is no way to load a whole exported rules file back in.
+- ~~**Import appends one shared rule; it does not replace.**~~ — closed in 0.33.0 for the file
+  direction. PLAN.md §2 describes import as "replace what you have" and defers it. `POST
+  /api/rules/replace` (and the MCP `rules.import` tool) now take the text of a whole rules file,
+  read it with the same reader startup uses, and replace the live list with it, keeping the
+  generation they replaced as the backup. The share string keeps appending, because a pasted rule
+  and a restored file are two different intentions.
 - ~~**No decode direction over MCP.**~~ — closed in 0.29.0. `rules.decode` reads a share string back
   and writes it only when the caller asks with `add`, so the read stays available under the default
   `mcp_writes = none`. What is left is the whole-file import two bullets above, which one rule at a
@@ -713,3 +716,22 @@ unmeasured state saying so instead of claiming a diff.
 - A test for the refusal over MCP needed a state with `mcp_writes = all` and initially had the
   default, so it asserted the permission gate's message while believing it asserted the parser's.
   The two refusals look identical in the body, which is worth remembering about the next one.
+
+## 24. Whole-file import round notes
+
+- Export had no second half: a backup you cannot restore is a file you have to copy back by hand
+  with the tool stopped. `POST /api/rules/replace` and MCP `rules.import` close that.
+- The body is the file's **text**, not a path. A browser cannot name a path the server holds, and
+  sending text means the same route serves a page, an agent and a `curl --data-binary`.
+- The text goes through `RuleFile::from_text`, which is the reader startup uses, so the version
+  check, the unknown-field refusal and the value parsers are the same rules a file on disk is held
+  to. Validating with a different parser is how an import gets to write something the next start
+  cannot read.
+- Every pattern in the file is re-checked, not just the file's shape. A rules file exported by this
+  build passed the check when it was written, but a person who edits it by hand has not been read
+  by anything since, and a pattern the store cannot hold is exactly the mistake worth catching.
+- The page asks before it posts. Replacing the list is the one action on it that can take rules
+  away rather than only fail to add them, and a file chooser that fires on every selection needs
+  its value cleared afterwards or the same file chosen twice looks like nothing happened.
+- The share string keeps appending on purpose. A pasted rule and a restored file are different
+  intentions, and one route that guesses between them would be a third thing nobody asked for.
