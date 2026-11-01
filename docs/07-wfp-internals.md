@@ -116,6 +116,24 @@ way:
 
 The options are per session, so the monitor configures its own and leaves the machine alone.
 
+## Reading the endpoints of an event
+
+Each end of the connection lives in a union of its own in the event header — `Anonymous1` for the
+local address, `Anonymous2` for the remote one — and `ipVersion` selects which arm of it to read:
+one `u32` for v4, sixteen bytes for v6. The v4 arm is converted the same way the store writes a
+filter condition's address, so the address in the log and the address a rule matches are the same
+number read the same way.
+
+Whether either end exists at all is a separate marker in the header's `flags`, and that marker is
+what is believed. An arm nobody wrote still holds whatever the zeroed event put in it, and a zeroed
+v4 arm is `0.0.0.0` — a plausible-looking address that would be wrong to report. The same marker
+guards the two ports. A version of `FWP_IP_VERSION_NONE` names no address family at all, which is
+what a connectionless event looks like.
+
+The loopback marker is not in the header. It is `isLoopback` on the classify arms — the same
+pointers the deciding `filterId` is read from — so an event of another type has no marker to report
+and reads `false` rather than "unknown".
+
 ## Naming the filter that decided an event
 
 An event names the filter behind its verdict by a number and nothing else: `filterId` in the

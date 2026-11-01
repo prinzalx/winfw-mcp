@@ -326,8 +326,10 @@ Roughly by how much they cost to change later:
    installs under the id WFP reports against the rule it came from, the worker republishes that table
    on every rebuild, and the monitor resolves an event's `filterId` through it, so the page and the
    API can say "blocked by rule X" honestly. What is left is §4.3's last point (a class derived from
-   filter weight) and the fields a real connection table has. The remote address joined the record in
-   0.19.0; local address and port, user name and the loopback flag are still missing.
+   filter weight) and the two fields no event names directly. The remote address joined the record in
+   0.19.0 and the local endpoint with the loopback marker in 0.25.0, so every endpoint an event can
+   name is reported; the user name (the SID in the header, which needs a lookup per event) is what
+   is left.
 4. ~~**A settings write path** (§3.2)~~ — done in 0.13.0 for the two settings that matter at runtime.
    `POST /api/settings` and the MCP tool `settings.set` change `learn_mode` and `default_policy` on a
    running process, write `config.toml`, and rebuild the store. What is left is small: `port` needs a
@@ -507,3 +509,25 @@ Found while 0.24.0 ("harden the rule files") was built.
 - **Validation is deliberately absent on the file path.** An older binary may have written anything,
   and refusing to start over a pattern written years ago is worse than a rule that matches nothing.
   The check guards the door, not the archive.
+
+## 16. Connection table round notes (2026-11-01)
+
+Found while 0.25.0 ("finish the connection table") was built.
+
+- **A union arm is not an answer.** Both endpoints live in unions of their own (`Anonymous1` for
+  the local end, `Anonymous2` for the remote one), and the header says which of them it filled in
+  `flags`. Believing the arm instead of the marker is how an event that named no local address
+  printed `0.0.0.0`, because a zeroed v4 arm is exactly that. The reference reads the marker too.
+- **Loopback is not in the header.** It is `isLoopback` on the classify arms — the same pointers
+  the deciding `filterId` comes from — so an event of another type has no marker to report and
+  reads `false`. Deriving it from "local equals remote" would have been a guess, and a wrong one
+  for any connection where both ends were named.
+- **Two tests now report the code rather than the machine.** `a_detected_application_becomes_a_rule`
+  and `a_detected_destination_becomes_a_rule_that_reaches_it` asserted that a decided entry leaves
+  the Detected list, which is only true once the store has accepted the rule. Unelevated, the store
+  answers `0x80070005` and the entry stays — the documented behaviour — so the assertion now names
+  that condition instead of failing over it. The suite is green elevated and unelevated.
+- **Learning mode reads the remote end only, and that is worth a test.** The new field made the
+  question visible: an event whose local address is an unreached network and whose remote end is
+  empty must offer nothing, which is what `a_detected_destination_is_the_remote_end_and_never_the_local_one`
+  now pins down.

@@ -28,9 +28,11 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 - **Detected** table: the learning mode, with `allow`, `deny` and `dismiss` per row. An entry for a
   destination a covered application reached is marked `to <address>` and decides that destination
   alone.
-- **Recent connections**: fed over SSE, newest first. Each line names the destination it went to
-  and the rule the firewall blamed for its verdict — `by browser` for one of ours, `by other` for a
-  filter another firewall owns.
+- **Recent connections**: fed over SSE, newest first, as `local -> remote`. Each line names the
+  destination it went to and the rule the firewall blamed for its verdict — `by browser` for one of
+  ours, `by other` for a filter another firewall owns. A connection that never left the machine is
+  marked `loopback`. An endpoint the event named no address for is left out of the line; an address
+  with no port still shows the port.
 - **Actions**: Add rule, Apply to WFP, Clear our filters, Export, Import, Quit.
 - **Banner**: what the store reported. A refused store is shown as a banner with its reason rather
   than as an empty list.

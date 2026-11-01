@@ -29,6 +29,13 @@ pub struct NetEvent {
     pub time_ms: u64,
     /// The application path, exactly as the store reported it.
     pub app: String,
+    /// The local address in the text form a human reads, empty when the event carried none.
+    ///
+    /// A listener shows the address it bound to here, which is how `0.0.0.0` and a single
+    /// interface are told apart. For client traffic it is the source address the route picked.
+    pub local_addr: String,
+    /// Local port in host byte order, `0` when the event carried none.
+    pub local_port: u16,
     /// Remote port in host byte order, `0` when the event carried none.
     pub remote_port: u16,
     /// The remote address in the text form a human reads, empty when the event carried none.
@@ -38,6 +45,11 @@ pub struct NetEvent {
     pub remote_addr: String,
     /// IP protocol number: 6 is TCP, 17 is UDP.
     pub protocol: u8,
+    /// `true` when the traffic never left the loopback adapter.
+    ///
+    /// Only the classify arms of an event report this, and a dropped event that is not a classify
+    /// drop reports `false` rather than "unknown".
+    pub loopback: bool,
     /// `false` when the firewall blocked the connection.
     pub allowed: bool,
     /// How the event was classified, for the UI label.
@@ -377,21 +389,26 @@ fn listen(
         };
 
         // The event names the deciding filter by id, in whichever arm of the union its type
-        // selects. Both classify arms carry a `filterId`; the IPsec arm does not name one we
-        // installed, so everything else reports `0` and reads as "not ours".
-        let filter_id = unsafe {
+        // selects. Both classify arms carry a `filterId` and the loopback marker; the IPsec arm
+        // does not name a filter we installed, so everything else reports `0` and reads as "not
+        // ours".
+        let (filter_id, loopback) = unsafe {
             match event.r#type {
                 FWPM_NET_EVENT_TYPE_CLASSIFY_ALLOW => event
                     .Anonymous
                     .classifyAllow
                     .as_ref()
-                    .map_or(0, |allow| allow.filterId),
+                    .map_or((0, false), |allow| {
+                        (allow.filterId, allow.isLoopback.as_bool())
+                    }),
                 FWPM_NET_EVENT_TYPE_CLASSIFY_DROP => event
                     .Anonymous
                     .classifyDrop
                     .as_ref()
-                    .map_or(0, |drop| drop.filterId),
-                _ => 0,
+                    .map_or((0, false), |drop| {
+                        (drop.filterId, drop.isLoopback.as_bool())
+                    }),
+                _ => (0, false),
             }
         };
 
@@ -411,9 +428,12 @@ fn listen(
             seq: 0,
             time_ms: filetime_to_millis(&event.header.timeStamp),
             app: blob_to_string(&event.header.appId),
-            remote_port: event.header.remotePort,
-            remote_addr: remote_address(&event.header),
+            local_addr: event_address(&event.header, End::Local),
+            local_port: event_port(&event.header, End::Local),
+            remote_port: event_port(&event.header, End::Remote),
+            remote_addr: event_address(&event.header, End::Remote),
             protocol: event.header.ipProtocol,
+            loopback,
             allowed,
             kind: kind.to_string(),
             filter_id,
@@ -490,30 +510,95 @@ fn listen(
     let _ = shutdown.recv();
 }
 
-/// The remote end of an event as text.
+/// Which end of a connection a field of the event header belongs to.
 ///
-/// The address lives in a union selected by `ipVersion`, and the two arms are read differently:
-/// the v4 arm is one `u32` holding the octets in the order WFP stores a filter condition's address
-/// in, and the v6 arm is sixteen bytes in network order. A connectionless event names no version
-/// at all, and then there is no address to report.
+/// Both ends live in the header, and reading one rather than the other is a mistake nothing would
+/// catch later, so the readers that can serve either end take this instead of a boolean.
 #[cfg(windows)]
-fn remote_address(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum End {
+    Local,
+    Remote,
+}
+
+/// One end of an event as an address in text form, empty when the event did not name one.
+///
+/// Each end lives in a union of its own selected by `ipVersion`, and the two arms are read
+/// differently: the v4 arm is one `u32` holding the octets in the order WFP stores a filter
+/// condition's address in, and the v6 arm is sixteen bytes in network order. A connectionless
+/// event names no version at all, and then there is no address to report.
+///
+/// The header also says which ends it actually filled, and that marker is believed over the union
+/// contents: an arm left alone still holds whatever the zeroed event put in it, which would read
+/// as the perfectly plausible `0.0.0.0`.
+#[cfg(windows)]
+fn event_address(
     header: &windows::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_NET_EVENT_HEADER3,
+    end: End,
 ) -> String {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
-        FWP_IP_VERSION_V4, FWP_IP_VERSION_V6,
+        FWP_IP_VERSION_V4, FWP_IP_VERSION_V6, FWPM_NET_EVENT_FLAG_LOCAL_ADDR_SET,
+        FWPM_NET_EVENT_FLAG_REMOTE_ADDR_SET,
     };
+
+    let set_flag = match end {
+        End::Local => FWPM_NET_EVENT_FLAG_LOCAL_ADDR_SET,
+        End::Remote => FWPM_NET_EVENT_FLAG_REMOTE_ADDR_SET,
+    };
+
+    if header.flags & set_flag != set_flag {
+        return String::new();
+    }
 
     if header.ipVersion == FWP_IP_VERSION_V4 {
         // The same conversion the store writes a filter condition with, so what the log shows and
         // what a rule matches are the same number read the same way.
-        Ipv4Addr::from(unsafe { header.Anonymous2.remoteAddrV4 }).to_string()
+        let raw = unsafe {
+            match end {
+                End::Local => header.Anonymous1.localAddrV4,
+                End::Remote => header.Anonymous2.remoteAddrV4,
+            }
+        };
+
+        Ipv4Addr::from(raw).to_string()
     } else if header.ipVersion == FWP_IP_VERSION_V6 {
-        Ipv6Addr::from(unsafe { header.Anonymous2.remoteAddrV6 }.byteArray16).to_string()
+        let bytes = unsafe {
+            match end {
+                End::Local => header.Anonymous1.localAddrV6,
+                End::Remote => header.Anonymous2.remoteAddrV6,
+            }
+        };
+
+        Ipv6Addr::from(bytes.byteArray16).to_string()
     } else {
         String::new()
+    }
+}
+
+/// One end of an event as a port in host byte order, `0` when the event did not name one.
+///
+/// The port is a plain field rather than a union, but the header still says whether it was filled,
+/// and a listener that has not bound yet is a real case where it was not.
+#[cfg(windows)]
+fn event_port(
+    header: &windows::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_NET_EVENT_HEADER3,
+    end: End,
+) -> u16 {
+    use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
+        FWPM_NET_EVENT_FLAG_LOCAL_PORT_SET, FWPM_NET_EVENT_FLAG_REMOTE_PORT_SET,
+    };
+
+    let (set_flag, value) = match end {
+        End::Local => (FWPM_NET_EVENT_FLAG_LOCAL_PORT_SET, header.localPort),
+        End::Remote => (FWPM_NET_EVENT_FLAG_REMOTE_PORT_SET, header.remotePort),
+    };
+
+    if header.flags & set_flag == set_flag {
+        value
+    } else {
+        0
     }
 }
 
@@ -565,9 +650,12 @@ mod tests {
             seq: 0,
             time_ms: 0,
             app: app.to_owned(),
+            local_addr: String::new(),
+            local_port: 49_152,
             remote_port: 443,
             remote_addr: String::new(),
             protocol: 6,
+            loopback: false,
             allowed: true,
             kind: "allowed".to_owned(),
             filter_id: 0,
@@ -575,28 +663,106 @@ mod tests {
         }
     }
 
-    /// The address lives in a union selected by the version, and reading the wrong arm would
-    /// print garbage instead of the destination.
+    /// The two ends live in unions of their own, both selected by the version, and reading the
+    /// wrong arm would print the peer's address where the local one belongs.
     #[cfg(windows)]
     #[test]
-    fn the_remote_address_is_read_out_of_the_arm_the_version_selects() {
+    fn each_end_is_read_out_of_the_union_the_version_selects() {
         use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
-            FWP_BYTE_ARRAY16, FWP_IP_VERSION_V4, FWP_IP_VERSION_V6, FWPM_NET_EVENT_HEADER3,
+            FWP_BYTE_ARRAY16, FWP_IP_VERSION_V4, FWP_IP_VERSION_V6,
+            FWPM_NET_EVENT_FLAG_LOCAL_ADDR_SET as LOCAL_ADDR_SET,
+            FWPM_NET_EVENT_FLAG_REMOTE_ADDR_SET as REMOTE_ADDR_SET, FWPM_NET_EVENT_HEADER3,
+            FWPM_NET_EVENT_HEADER3_0, FWPM_NET_EVENT_HEADER3_1,
         };
 
-        let mut header = FWPM_NET_EVENT_HEADER3::default();
+        let mut header = FWPM_NET_EVENT_HEADER3 {
+            ipVersion: FWP_IP_VERSION_V4,
+            flags: LOCAL_ADDR_SET | REMOTE_ADDR_SET,
+            Anonymous1: FWPM_NET_EVENT_HEADER3_0 {
+                localAddrV4: u32::from_be_bytes([192, 168, 1, 12]),
+            },
+            Anonymous2: FWPM_NET_EVENT_HEADER3_1 {
+                remoteAddrV4: u32::from_be_bytes([93, 184, 216, 34]),
+            },
+            ..FWPM_NET_EVENT_HEADER3::default()
+        };
 
-        header.ipVersion = FWP_IP_VERSION_V4;
-        header.Anonymous2.remoteAddrV4 = u32::from_be_bytes([93, 184, 216, 34]);
-
-        assert_eq!(remote_address(&header), "93.184.216.34");
+        assert_eq!(event_address(&header, End::Local), "192.168.1.12");
+        assert_eq!(event_address(&header, End::Remote), "93.184.216.34");
 
         header.ipVersion = FWP_IP_VERSION_V6;
+        header.Anonymous1.localAddrV6 = FWP_BYTE_ARRAY16 {
+            byteArray16: [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+        };
         header.Anonymous2.remoteAddrV6 = FWP_BYTE_ARRAY16 {
             byteArray16: [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
         };
 
-        assert_eq!(remote_address(&header), "2001:db8::1");
+        assert_eq!(event_address(&header, End::Local), "2001:db8::2");
+        assert_eq!(event_address(&header, End::Remote), "2001:db8::1");
+    }
+
+    /// An address the header says it did not fill must read as absent rather than as the
+    /// `0.0.0.0` a zeroed union would otherwise report.
+    #[cfg(windows)]
+    #[test]
+    fn an_end_the_header_does_not_claim_has_no_address() {
+        use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
+            FWP_IP_VERSION_NONE, FWP_IP_VERSION_V4,
+            FWPM_NET_EVENT_FLAG_REMOTE_ADDR_SET as REMOTE_ADDR_SET, FWPM_NET_EVENT_HEADER3,
+            FWPM_NET_EVENT_HEADER3_1,
+        };
+
+        let mut header = FWPM_NET_EVENT_HEADER3 {
+            ipVersion: FWP_IP_VERSION_V4,
+            flags: REMOTE_ADDR_SET,
+            Anonymous2: FWPM_NET_EVENT_HEADER3_1 {
+                remoteAddrV4: u32::from_be_bytes([93, 184, 216, 34]),
+            },
+            ..FWPM_NET_EVENT_HEADER3::default()
+        };
+
+        assert_eq!(event_address(&header, End::Remote), "93.184.216.34");
+        assert_eq!(
+            event_address(&header, End::Local),
+            "",
+            "the local arm was never filled"
+        );
+
+        // A version that names no address family means no address, whatever the flags claim.
+        header.ipVersion = FWP_IP_VERSION_NONE;
+
+        assert_eq!(event_address(&header, End::Remote), "");
+    }
+
+    /// A port follows the same rule as an address: the header says whether it filled it, and a
+    /// socket that has not bound yet is reported as `0` rather than as a bound port.
+    #[cfg(windows)]
+    #[test]
+    fn a_port_is_only_reported_when_the_header_claims_it() {
+        use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
+            FWPM_NET_EVENT_FLAG_LOCAL_PORT_SET as LOCAL_PORT_SET,
+            FWPM_NET_EVENT_FLAG_REMOTE_PORT_SET as REMOTE_PORT_SET, FWPM_NET_EVENT_HEADER3,
+        };
+
+        let mut header = FWPM_NET_EVENT_HEADER3 {
+            localPort: 49_152,
+            remotePort: 443,
+            flags: LOCAL_PORT_SET | REMOTE_PORT_SET,
+            ..FWPM_NET_EVENT_HEADER3::default()
+        };
+
+        assert_eq!(event_port(&header, End::Local), 49_152);
+        assert_eq!(event_port(&header, End::Remote), 443);
+
+        header.flags = REMOTE_PORT_SET;
+
+        assert_eq!(event_port(&header, End::Remote), 443);
+        assert_eq!(
+            event_port(&header, End::Local),
+            0,
+            "the local port was never filled"
+        );
     }
 
     /// The table answers for the ids it holds and for nothing else: a miss is how the monitor

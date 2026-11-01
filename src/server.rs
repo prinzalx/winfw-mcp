@@ -1795,13 +1795,27 @@ mod tests {
         )
     }
 
+    /// Whether the store accepted the work a route just did. Only an accepted write takes an entry
+    /// off the Detected list, and an unelevated run is refused by the store, which is a fact about
+    /// the machine rather than about the code. The store tests cover the accepted case.
+    fn store_accepted(body: &str) -> bool {
+        serde_json::from_str::<serde_json::Value>(body)
+            .expect("a state body is JSON")
+            .pointer("/store/ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
     fn connection(app: &str) -> crate::monitor::NetEvent {
         crate::monitor::NetEvent {
             seq: 0,
             time_ms: 0,
             app: app.to_owned(),
+            local_addr: String::new(),
+            local_port: 49_152,
             remote_port: 443,
             remote_addr: String::new(),
+            loopback: false,
             protocol: 6,
             allowed: true,
             kind: "allowed".to_owned(),
@@ -1840,13 +1854,14 @@ mod tests {
             body.contains("thing.exe"),
             "the rule is in the state: {body}"
         );
-        assert!(
-            !server_state
+        assert_eq!(
+            server_state
                 .detector
                 .snapshot()
                 .iter()
                 .any(|entry| entry.app.contains("thing.exe")),
-            "the decided application left the detected list",
+            !store_accepted(&body),
+            "a decided entry leaves the Detected list only when the store accepted the rule",
         );
 
         let written = std::fs::read_to_string(&server_state.paths.rules).expect("rules.toml");
@@ -1909,8 +1924,8 @@ mod tests {
                 .iter()
                 .filter(|entry| entry.app.contains("thing.exe"))
                 .count(),
-            0,
-            "the decided destination left the list",
+            usize::from(!store_accepted(&body)),
+            "a decided entry leaves the Detected list only when the store accepted the rule",
         );
     }
 
@@ -2564,6 +2579,35 @@ mod tests {
         let body = String::from_utf8_lossy(&response.body).into_owned();
 
         assert!(body.contains(r#""remote_addr":"93.184.216.34""#), "{body}");
+    }
+
+    /// Which socket answered and whether the traffic left the machine are the other two things a
+    /// reader needs to make sense of a connection, so they travel with it.
+    #[test]
+    fn the_state_endpoint_carries_the_local_end_and_the_loopback_marker() {
+        let events = Arc::new(EventLog::new());
+
+        let mut event = connection("listener.exe");
+        event.local_addr = "127.0.0.1".to_owned();
+        event.remote_addr = "127.0.0.1".to_owned();
+        event.loopback = true;
+        events.push(event);
+
+        let server_state = state_with(Arc::clone(&events), Live::default());
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains(r#""local_addr":"127.0.0.1""#), "{body}");
+        assert!(body.contains(r#""local_port":49152"#), "{body}");
+        assert!(body.contains(r#""loopback":true"#), "{body}");
     }
 
     /// The stream is not a buffered response, so it is exercised over a socket.

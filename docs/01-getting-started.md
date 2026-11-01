@@ -28,16 +28,17 @@ cargo test
 cargo run
 ```
 
-Run the tests one at a time and elevated:
+Run the tests one at a time:
 
 ```
 cargo test -- --test-threads=1
 ```
 
-One test drives the real store through `WfpWorker`, and an unelevated process is refused there, so
-that test fails without administrator rights for reasons that have nothing to do with the code.
-Several test processes at once are worse than useless: they all write to the same live store, and
-the result then depends on which of them finished last.
+A few tests drive the real store through `WfpWorker`, and an unelevated process is refused there.
+That is a result the tests understand rather than one they fail over, so the suite is green either
+way — but elevation is what lets them touch the store, and an elevated run is the only one that
+proves the store path works. Several test processes at once are worse than useless: they all write
+to the same live store, and the result then depends on which of them finished last.
 
 ## Commands
 

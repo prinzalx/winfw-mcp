@@ -63,13 +63,14 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.24.0**, in which the storage got harder: a rule file names the version
-that wrote it, every write keeps the previous generation as `rules.toml.bak` and falls back to it if
-the file is unreadable, and a pattern that cannot be a path is refused rather than stored as a rule
-that matches nothing.
+The current release is **0.25.0**, in which the connection table is complete: a line now names the
+local endpoint as well as the destination, marks a connection that never left the machine, and an
+endpoint the event did not name is left blank rather than shown as the `0.0.0.0` an unread union
+holds.
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
-`--help` and `--version` came in **0.23.0**; **0.22.0** added `volatile_filters`, which takes our filters out of the store on a clean stop
+storage hardening (a versioned rule file, a `.bak` of every write, pattern validation) came in
+**0.24.0**; `--help` and `--version` in **0.23.0**; **0.22.0** added `volatile_filters`, which takes our filters out of the store on a clean stop
 ([lifecycle and tray](docs/08-lifecycle.md#stopping)); a
 tray menu (`Open`, `Pause learning`, `Quit`) came in **0.21.0**; **0.20.0** made learning mode
 notice a destination an allowed application reached; **0.19.0** made a connection event say where it

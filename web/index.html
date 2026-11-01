@@ -183,7 +183,7 @@
 
       ul.events li .meta {
         color: var(--muted);
-        white-space: nowrap;
+        text-align: right;
       }
 
       ul.events li.blocked .meta {
@@ -614,17 +614,37 @@
             ? " by other"
             : "";
 
+        // An endpoint is shown as address:port. An event that names no address still has a port
+        // worth showing, and an event that names neither has nothing to say about that end.
+        const endpoint = (addr, port) => {
+          if (addr) {
+            return addr + ":" + port;
+          }
+
+          return port ? "port " + port : "";
+        };
+
         // The destination is what tells two connections from one application apart, so it is
         // shown with the port rather than instead of it.
-        const target = event.remote_addr
-          ? event.remote_addr + ":" + event.remote_port
-          : "port " + event.remote_port;
+        const target = endpoint(event.remote_addr, event.remote_port);
+
+        // The local end says which socket answered, which is how a listener bound to every
+        // interface is told apart from one bound to a single address.
+        const source = endpoint(event.local_addr, event.local_port);
+
+        const where = source === "" ? target : source + " -> " + target;
 
         row.appendChild(
           element(
             "span",
             "meta",
-            event.kind + " " + when + " " + target + blame,
+            event.kind +
+              " " +
+              when +
+              " " +
+              where +
+              (event.loopback ? " loopback" : "") +
+              blame,
           ),
         );
 

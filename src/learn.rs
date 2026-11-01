@@ -238,8 +238,11 @@ mod tests {
             seq: 0,
             time_ms: seq_time,
             app: app.to_owned(),
+            local_addr: String::new(),
+            local_port: 49_152,
             remote_port: 443,
             remote_addr: String::new(),
+            loopback: false,
             protocol: 6,
             allowed: true,
             kind: "allowed".to_owned(),
@@ -299,6 +302,59 @@ mod tests {
 
         assert!(!covered);
         assert!(detector.snapshot().is_empty());
+    }
+
+    /// The question learning mode asks is where a connection went, so the destination it offers is
+    /// the remote end and never the local one: an event that names only a local address has nothing
+    /// to offer, however unusual that address is.
+    #[test]
+    fn a_detected_destination_is_the_remote_end_and_never_the_local_one() {
+        let detector = detector("detect-remote-not-local");
+        let covered = rules_reaching("\\device\\harddiskvolume3\\windows\\*", "10.0.0.0/24");
+        let app = "\\device\\harddiskvolume3\\windows\\a.exe";
+
+        let local_only = NetEvent {
+            local_addr: "93.184.216.34".to_owned(),
+            ..event(app, 10)
+        };
+
+        assert!(
+            !detector.observe(&local_only, &covered),
+            "no remote address, no destination",
+        );
+        assert!(detector.snapshot().is_empty());
+
+        let remote = NetEvent {
+            remote_addr: "93.184.216.34".to_owned(),
+            ..event(app, 20)
+        };
+
+        assert!(detector.observe(&remote, &covered));
+
+        let snapshot = detector.snapshot();
+
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].remote.as_deref(), Some("93.184.216.34"));
+    }
+
+    /// The loopback marker tells a reader that a connection never left the machine, and it decides
+    /// nothing on its own: a loopback destination no rule reaches is still worth asking about.
+    #[test]
+    fn a_loopback_connection_is_detected_by_its_destination_like_any_other() {
+        let detector = detector("detect-loopback-still-counts");
+        let covered = rules_reaching("\\device\\harddiskvolume3\\*", "10.0.0.0/24");
+
+        let entry = NetEvent {
+            remote_addr: "127.0.0.1".to_owned(),
+            loopback: true,
+            ..event("\\device\\harddiskvolume3\\b.exe", 10)
+        };
+
+        assert!(
+            detector.observe(&entry, &covered),
+            "the marker is not a filter"
+        );
+        assert_eq!(detector.snapshot()[0].remote.as_deref(), Some("127.0.0.1"));
     }
 
     /// An application a rule allows to one network is not decided about the next one, so the new

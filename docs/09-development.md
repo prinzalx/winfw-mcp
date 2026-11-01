@@ -32,10 +32,12 @@ WFP worker, but it decides nothing about the firewall.
 cargo test -- --test-threads=1
 ```
 
-Exactly one test process at a time, and elevated. Both halves of that sentence matter: see
-[getting started](01-getting-started.md#build-test-run). CI runs a plain `cargo build --all-targets`
-and `cargo test` on a Windows runner, which is elevated, so the store test reads real entries there
-instead of reporting access denied.
+Exactly one test process at a time, because the store tests share one live WFP store: see
+[getting started](01-getting-started.md#build-test-run). Elevation is not needed for a green run — a
+store that answers `0x80070005` is a result the tests understand, and the Detected-list tests assert
+what follows from it rather than failing over it. It is needed to see the store itself: on an
+elevated runner `cargo build --all-targets` and `cargo test` read and write real entries, and an
+elevated `--serve` is the only way the event subscription fires at all.
 
 `cargo fmt --check` is expected to be clean. Clippy is not part of CI, and has a handful of
 pre-existing warnings; new code is expected to add none.
@@ -65,6 +67,7 @@ their own.
 
 | Version | Milestone |
 |---|---|
+| 0.25.0 | The connection table is complete. An event now also carries the local endpoint and a `loopback` marker: each endpoint is read only when the header says it filled it, so an end the event did not name is empty rather than the `0.0.0.0` a zeroed union would otherwise report, and the loopback marker comes from the classify arm that names the deciding filter. The page shows `local -> remote`, marks a connection that never left the machine, and drops an endpoint it has nothing about |
 | 0.24.0 | Storage hardened (§4.4). A rule file names the version that wrote it (`version = 1`; an older file without the line still reads, a newer one is refused with both versions named), every rule-file write keeps the generation before it as `<name>.bak`, and a rule file that cannot be parsed at startup falls back to that backup with a warning rather than failing to start. A pattern is checked on the way in — an absolute path, no control character and none of `" < > |` — on the page, on the HTTP API, over MCP and on import, so a typo is a refusal rather than a rule that matches nothing |
 | 0.1.0 | Data directory, config and rules load, atomic writes |
 | 0.2.0 | WFP read path: engine handle, enumeration of the live store, degraded when unelevated |
