@@ -53,7 +53,7 @@ impl Command {
             [] => Ok(Self::default()),
             [flag] if flag == "--clear" => Ok(Self::Clear),
             [flag] if flag == "--serve" => Ok(Self::Serve),
-            [flag] => bail!("unknown argument '{flag}'; expected --clear or --serve"),
+            [flag] => bail!("unknown argument '{flag}'; expected --clear or --serve (see --help)"),
             _ => bail!("too many arguments; expected at most one flag"),
         }
     }
@@ -64,8 +64,15 @@ fn main() -> Result<()> {
 
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "winfw-mcp [ --serve | --clear ]\n\n    (no flag)  load the rules and install them in the live store\n    --serve   run the web server until stopped\n    --clear   remove our filters from the live store\n\nReading and writing the store needs elevation."
+            "winfw-mcp [ --serve | --clear ]\n\n    (no flag)      load the rules and install them in the live store\n    --serve        run the web server until the process is stopped\n    --clear        remove our filters from the live store\n    --help, -h     show this text\n    --version, -V  print the version\n\nReading and writing the store needs elevation."
         );
+
+        return Ok(());
+    }
+
+    if args.iter().any(|arg| arg == "--version" || arg == "-V") {
+        println!("winfw-mcp {}", env!("CARGO_PKG_VERSION"));
+
         return Ok(());
     }
 

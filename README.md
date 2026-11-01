@@ -63,14 +63,14 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.22.0**, in which `volatile_filters` arrived: a server run with the
-setting on takes our filters out of the store when it stops, so the tool is a firewall only while
-it runs. The persistent default — quitting keeps the rules — is untouched. See
-[lifecycle and tray](docs/08-lifecycle.md#stopping).
+The current release is **0.23.0**, in which the process answers `--help` and `--version`: both
+print and exit successfully, so the version of an installed binary can be read without elevation
+and without touching the live store.
 
 Earlier releases are logged in the [version history](docs/09-development.md#version-history):
-**0.21.0** grew the tray menu (`Open`, `Pause learning`, `Quit`); **0.20.0** made learning mode
+**0.22.0** added `volatile_filters`, which takes our filters out of the store on a clean stop
+([lifecycle and tray](docs/08-lifecycle.md#stopping)); a
+tray menu (`Open`, `Pause learning`, `Quit`) came in **0.21.0**; **0.20.0** made learning mode
 notice a destination an allowed application reached; **0.19.0** made a connection event say where it
-went.
-What is known to be missing or fragile is listed in the
+went. What is known to be missing or fragile is listed in the
 [backlog](BACKLOG.md), ranked in its last section.

@@ -45,6 +45,8 @@ the result then depends on which of them finished last.
 winfw-mcp            load rules.toml and install it in the live store, then exit
 winfw-mcp --serve    run the web server until stopped
 winfw-mcp --clear    remove our filters from the live store
+winfw-mcp --help     print the usage text (`-h`)
+winfw-mcp --version  print the version (`-V`)
 ```
 
 An unknown flag is an error rather than a shrug, so a mistyped option cannot silently install
