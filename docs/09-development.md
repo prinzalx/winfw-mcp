@@ -5,27 +5,40 @@
 ## Layout
 
 ```
-src/main.rs       argument parsing, startup, the one-shot store commands
-src/config.rs     settings
-src/paths.rs      the data directory and every path inside it
-src/rules.rs      rules.toml, the profile files, and the stamp that records who wrote them last
-src/store.rs      atomic file writes
-src/device.rs     device path <-> drive path
-src/learn.rs      the Detected list
-src/log.rs        the bounded log file, rolled at a megabyte
-src/monitor.rs    the net-event subscription and the event log
-src/server.rs     HTTP transport, the request guard, routes, the accept loop, the WFP worker
-src/mcp.rs        the JSON-RPC grammar of the MCP endpoint
-src/export.rs     export, Base64 share and import
-src/tray.rs       the notification-area icon and its message window
-src/wfp.rs        every Fwpm* call
-web/index.html    the single page, embedded in the binary
-assets/           the icon: `winfw-mcp.ico` and the script that generates it
-build.rs          the Windows resource: the icon and the version information
+src/main.rs              argument parsing, startup, the one-shot store commands
+src/config.rs            settings
+src/paths.rs             the data directory and every path inside it
+src/rules.rs             rules.toml, the profile files, and the stamp that records who wrote them last
+src/store.rs             atomic file writes
+src/device.rs            device path <-> drive path
+src/learn.rs             the Detected list
+src/log.rs               the bounded log file, rolled at a megabyte
+src/monitor.rs           the net-event subscription and the event log
+src/instance.rs          one instance at a time, and the port file it publishes
+src/export.rs            export, Base64 share and import
+src/mcp.rs               the JSON-RPC grammar of the MCP endpoint
+src/server/mod.rs        the accept loop, the connection handling, the SSE stream
+src/server/http.rs       request, response, headers, body parsing
+src/server/guard.rs      the session token and the Host, Origin and content-type checks
+src/server/state.rs      the shared state a request thread reads
+src/server/worker.rs     the WFP worker: the one thread that owns the engine handle
+src/server/routes.rs     the dispatcher and every route's handler
+src/server/profiles.rs   create, delete, rename and switch a profile
+src/server/settings.rs   a settings change written to `config.toml`
+src/server/mcp_tools.rs  the read-only MCP dispatcher over that state
+src/tray.rs              the notification-area icon and its message window
+src/wfp.rs               every Fwpm* call
+src/testutil.rs          a scratch directory for the tests
+web/index.html           the single page, embedded in the binary
+assets/                  the icon: `winfw-mcp.ico` and the script that generates it
+build.rs                 the Windows resource: the icon and the version information
 ```
 
-`src/server.rs` is a transport by rule: it reads and writes the files and forwards store work to the
-WFP worker, but it decides nothing about the firewall.
+The `server` directory is a transport by rule: it reads and writes the files and forwards store work
+to the WFP worker, but it decides nothing about the firewall. The split exists so that the two
+files worth reviewing on their own are small: `guard.rs`, which is the whole answer to *who may
+write*, and `mcp_tools.rs`, which holds no write access to rules, settings, profiles or the store at
+all. Nothing outside the directory names more than `crate::server::` re-exports.
 
 ## Tests
 
@@ -68,6 +81,7 @@ their own.
 
 | Version | Milestone |
 |---|---|
+| 0.38.1 | `src/server.rs` became the `src/server/` directory (§28, layout above), with no behaviour change. One job per file, `crate::server::` still the only path any caller needs, and the two files that matter for a review made small enough to read whole: `guard.rs` with the guard and nothing else, `mcp_tools.rs` with no write access to rules, settings, profiles or the store. Every route arm is a function of its own now, `route` only distributes, and the route table in the module comment finally lists all four routes it was missing |
 | 0.38.0 | The handbook is brought in line with 0.36.0 and 0.37.0, no behaviour change. Chapter 3 no longer offers `rules.decode` to an agent and no longer offers a profile switch over MCP, chapter 4 describes a Detected entry as decided on the page, chapter 5 lists `/favicon.ico` and qualifies what `GET /api/events` returns, chapter 8 drops `shutdown` from the MCP tool list, chapter 10 admits that an agent cannot see its own loopback traffic, and the README index rows say the same |
 | 0.37.0 | Only traffic that left the machine is shown (§12, chapters 5 and 7). A connection over a loopback address is dropped in the monitor's callback before the log, the seen list and the Detected list are touched, so the connection panel, the event counter, learning mode and MCP cannot disagree about it; an event with no remote address is kept, because an unfilled destination is not evidence of a local connection. A destination on the local segment is kept and marked `local network` with a checkbox on the page to hide those rows, and `debug_show_loopback` in `config.toml` keeps the loopback events for a diagnosis run |
 | 0.36.0 | The MCP endpoint is read-only and the HTTP API is guarded (§3.6, chapter 10). The nine writing MCP tools are gone from the code rather than gated: `mcp_writes` in `config.toml` retired with them, still accepted so an older file loads. Every route now checks `Host`, and every writing route additionally checks `Origin`, `content-type: application/json` and a session token that lives only in memory; `/mcp` gets no token and can reach no writing route. `rules.toml.stamp` records the fingerprint of the file the tool wrote last, so a hand edit made while the tool was closed is announced in a banner instead of adopted silently, and the same comparison while it runs notices an edit between two page loads |

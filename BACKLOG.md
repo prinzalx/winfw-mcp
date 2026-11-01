@@ -178,11 +178,11 @@ Kept as asked, with the two audits now folded in below.
   it for exactly that.
 - **The `mcp-template` structure was not carried over**: no contract document, no per-tool smoke
   tests, no skill file, no `tests/` directory.
-- **Doc drift, still open**: the route table in the `src/server.rs` module comment omits
+- **Doc drift, closed in 0.38.1**: the route table in the server module comment omitted
   `/api/settings`, `/api/profiles`, `/api/profiles/switch` and `/favicon.ico`, all four of which the
-  router answers today. It is fixed together with the move in §28, not before, so the table is not
-  edited twice. The other half of this finding — `src/export.rs:3` citing PLAN.md section 3 for what
-  is section 2 — is closed.
+  router answers. It waited for the move in §28 on purpose, so the table was not edited twice. The
+  other half of this finding — `src/export.rs:3` citing PLAN.md section 3 for what is section 2 —
+  was closed earlier.
 - **Doc drift, closed in 0.37.0**: chapter 7 still claimed the local endpoint and the loopback marker
   were "still only in the event and not in the log", which stopped being true in 0.25.0.
 - **Doc drift, closed in 0.38.0**: chapter 4 described `rules.allow` and `rules.deny` as things an
@@ -833,7 +833,7 @@ unmeasured state saying so instead of claiming a diff.
   read every response as JSON, so the share string failed to parse on its padding character. The page now
   answers according to the `content-type` it was given.
 
-## 28. Splitting `src/server.rs` (planned, to start after 0.38.0)
+## 28. Splitting `src/server.rs` (done in 0.38.1)
 
 Agreed 2026-11-02, deliberately *not* taken up while a feature round is open: the running work
 (read-only MCP, the guarded HTTP API, external traffic only) is finished, tested and released first,
@@ -921,3 +921,31 @@ so the split lands on a clean tree rather than in the middle of a diff.
   read that file instead of creating the defaults and compared `Some("none")` against `None`. The
   helper now removes the directory first, which is what its own doc comment always claimed. Tests
   still leave their directory behind to be inspected.
+
+## 31. Module split round notes (2026-11-02)
+
+- **`src/server.rs` is `src/server/` now**, nine files, and the move was the point: `guard.rs` is
+  278 lines and holds nothing but the guard, so the whole answer to *who may write* fits on two
+  screens, and `mcp_tools.rs` contains no `save(`, no `StoreWork::Apply`, no `StoreWork::Clear` and
+  no assignment to `.rules`, which is the mechanical form of "the endpoint reads".
+- **The tests were counted, not trusted.** 55 `#[test]` items in the old file, 55 in the new
+  directory, and every test body compared byte-for-byte against `git show HEAD:src/server.rs`
+  modulo indentation. 167 tests before, 167 after.
+- **Four deviations from the plan, all forced.** `worker.rs` also took `first_read_error` and
+  `summary`, the `cfg(windows)` helpers of `handle_work`. `http.rs` took two tests that check
+  `respond` and `BadRequest`, which the plan's list of test buckets did not mention. The
+  `include_str!`/`include_bytes!` paths went one level deeper. The route arms take only the
+  arguments each arm actually uses rather than a uniform `(state, worker, request)`, because the
+  uniform form warns about parameters it does not touch.
+- **The module comment still calls the module a transport.** §28 called that out as untrue, and it
+  was left alone because the rule for this round was *no improvements on the side*. It is a fair
+  description of `mod.rs` and not of `state.rs` or `worker.rs`; rewording it is a later, separate
+  edit.
+- **Noticed and deliberately not touched**, in the order they were found: the `#[allow(dead_code)]`
+  comment on `Request::new` claims the socket path uses `from_parts` when it calls `with_headers`;
+  `type WFPWorkerAlias = WfpWorker;` has exactly one user, the `worker` field of `Server`; `guard`'s
+  doc comment says "The three checks" while the function refuses on four grounds, since
+  `content-type` is a rejection of its own.
+- **One process lesson, written down because it cost a detour**: a batch of `cargo` commands fired
+  in parallel produced three different failing test counts from the same tree. `cargo` blocked on
+  each other's package-cache lock. Serial is not just the rule for the test *threads* here.

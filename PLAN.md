@@ -475,8 +475,8 @@ These are the ways an agent escapes its sandbox, and they apply to the web UI to
 
 Making the endpoint read-only closes one door and leaves the other open: a client on this machine can
 still `POST` to `127.0.0.1:8788`, and the process often runs elevated, so the write would happen with
-rights the client does not have. The guard in `src/server.rs` is the answer, and it is deliberately
-transport-only — the routes themselves did not change shape.
+rights the client does not have. The guard in `src/server/guard.rs` is the answer, and it is
+deliberately transport-only — the routes themselves did not change shape.
 
 - **Session token.** Sixteen random bytes as hex from `getrandom`, made at startup, held in memory,
   never written to a file and never logged. It reaches the browser through the URL the tray opens and

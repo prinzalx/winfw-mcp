@@ -1,0 +1,392 @@
+//! The state a request handler may touch: the authoritative rules, the settings that stay live,
+//! and the record the startup rebuild left behind.
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
+
+use serde::Serialize;
+use tracing::warn;
+
+use crate::config::{Policy, Settings, Theme};
+use crate::learn::Detector;
+use crate::monitor::{EventLog, MonitorStatus};
+use crate::paths::DataPaths;
+use crate::rules::{Fingerprint, RuleFile, write_stamp};
+
+use super::routes::MonitorJson;
+use super::worker::StoreOutcome;
+
+/// Everything a request handler may touch.
+///
+/// The rules are the in-memory copy that the request handlers keep authoritative: a change is
+/// applied to this value, written to disk, and only then pushed to the store, which is the order
+/// PLAN.md section 2 asks for.
+pub struct AppState {
+    pub(super) paths: DataPaths,
+    pub(super) settings: Settings,
+    pub(super) rules: Arc<Mutex<RuleFile>>,
+    /// The applications learning mode collected, waiting for a decision.
+    pub(super) detector: Arc<Detector>,
+    /// `learn_mode` and `default_policy` as they may change while the process runs. The monitor
+    /// thread reads the same pair, which is why they are atomics rather than fields of
+    /// `settings`.
+    pub(super) live: Arc<Live>,
+    /// The live connection feed, filled by the monitor thread.
+    pub(super) events: Arc<EventLog>,
+    /// The file the active rules are read from and written back to: `rules.toml` for the default
+    /// profile, `profiles\<name>.toml` otherwise. A switch changes it.
+    pub(super) active_file: Mutex<PathBuf>,
+    /// The active profile name, or empty for `rules.toml` itself.
+    pub(super) active_name: Mutex<String>,
+    /// Kept set while the process should keep accepting connections. `POST /api/shutdown` and the
+    /// tray's `Quit` both clear it, which is the only way either of them has of ending a process
+    /// whose main thread is parked in the accept loop.
+    pub(super) running: Arc<AtomicBool>,
+    /// What the rebuild at startup made of the store. Never changes afterwards: it is the record of
+    /// the difference the process found between the store and the rules file.
+    pub(super) startup: Startup,
+    /// The session token a writing request has to carry (PLAN.md section 11).
+    ///
+    /// It lives here and nowhere else: no file, no log, no answer on `/mcp`. The browser learns it
+    /// from the URL the tray opened, or from the state body when a human typed the address.
+    pub(super) token: String,
+    /// The contents of the rules file the tool wrote last, as a fingerprint.
+    ///
+    /// At startup this is the stamp the previous run left behind rather than the file on disk,
+    /// which is exactly what makes a hand edit made while the tool was closed show up as a
+    /// difference. Writing the file replaces the record, so the notice disappears with the edit
+    /// that caused it and needs no bookkeeping of its own.
+    rules_written: Mutex<Option<Fingerprint>>,
+}
+
+impl AppState {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        paths: DataPaths,
+        settings: Settings,
+        rules: Arc<Mutex<RuleFile>>,
+        detector: Arc<Detector>,
+        events: Arc<EventLog>,
+        live: Arc<Live>,
+        active_file: PathBuf,
+        active_name: String,
+        startup: Startup,
+        token: String,
+        rules_written: Option<Fingerprint>,
+    ) -> Self {
+        Self {
+            paths,
+            settings,
+            rules,
+            detector,
+            events,
+            live,
+            active_file: Mutex::new(active_file),
+            active_name: Mutex::new(active_name),
+            running: Arc::new(AtomicBool::new(true)),
+            startup,
+            token,
+            rules_written: Mutex::new(rules_written),
+        }
+    }
+
+    /// The handle the tray needs in order to stop the server. The same flag the routes set, so the
+    /// two ways of quitting cannot disagree about whether the process is on its way out.
+    pub fn stop_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.running)
+    }
+
+    /// Ask the process to stop, and report whether this call was the one that did it. A repeated
+    /// request gets `false`, which is how a client tells "I stopped it" from "it was already
+    /// on its way out".
+    pub(super) fn request_stop(&self) -> bool {
+        self.running
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// The file the active rules live in. Read on every save, because a switch changes it.
+    pub(super) fn rules_path(&self) -> PathBuf {
+        self.active_file
+            .lock()
+            .expect("rules path lock poisoned")
+            .clone()
+    }
+
+    /// The active profile name, or empty for `rules.toml`.
+    pub(super) fn active_name(&self) -> String {
+        self.active_name
+            .lock()
+            .expect("active name lock poisoned")
+            .clone()
+    }
+
+    /// The authoritative `learn_mode`: what the last `POST /api/settings` asked for, rather than
+    /// what `config.toml` said at startup.
+    pub(super) fn learn_mode(&self) -> bool {
+        self.live.learning()
+    }
+
+    /// The authoritative `default_policy`, with the same caveat.
+    pub(super) fn policy(&self) -> Policy {
+        self.live.policy()
+    }
+
+    /// Record that the rules file on disk is now the tool's own work.
+    ///
+    /// Called after every write the tool does, so the next comparison measures the difference
+    /// against what we wrote rather than against whatever a reader left behind. Writing the stamp
+    /// is best effort: a stamp that cannot be written costs a lost notice, not a lost rule.
+    pub(super) fn note_rules_written(&self) {
+        let file = self.rules_path();
+
+        match Fingerprint::of_file(&file) {
+            Ok(fingerprint) => {
+                *self
+                    .rules_written
+                    .lock()
+                    .expect("rules fingerprint lock poisoned") = fingerprint;
+                write_stamp(&file, fingerprint);
+            }
+            Err(error) => {
+                warn!(reason = %format!("{error:#}"), "could not fingerprint the rules file")
+            }
+        }
+    }
+
+    /// Whether the rules file on disk is not the one the tool wrote.
+    ///
+    /// A file that has gone away counts as changed, because the rules the page shows are the ones in
+    /// memory while the file that describes them is missing.
+    pub(super) fn rules_changed_outside(&self) -> bool {
+        let current = Fingerprint::of_file(&self.rules_path()).unwrap_or(None);
+        let written = self
+            .rules_written
+            .lock()
+            .expect("rules fingerprint lock poisoned");
+
+        current != *written
+    }
+
+    /// What the event subscription did about being asked to listen.
+    ///
+    /// Both reports that answer "why is the connection list empty?" take it from here, so the
+    /// page and an MCP client cannot be told different things about the same feed.
+    pub(super) fn monitor(&self) -> MonitorJson {
+        let status = self.live.monitor();
+
+        MonitorJson {
+            state: status.state,
+            code: status.code,
+            events: self.events.delivered(),
+        }
+    }
+}
+
+/// The three settings that may change while the process runs.
+///
+/// Everything else in `Settings` is read once at startup and cannot be honoured afterwards: the
+/// port is already bound and the log level is the filter `tracing` installed. The other three are
+/// consulted again on every read, so they live in atomics the monitor thread and the request
+/// threads both see. `settings` keeps the file-shaped copy, which is what gets written back to
+/// `config.toml`.
+#[derive(Debug)]
+pub struct Live {
+    learning: AtomicBool,
+    deny: AtomicBool,
+    /// Which colour scheme the page should show, as the index of a [`Theme`] variant.
+    ///
+    /// A theme changes nothing the server itself does; it is published here so that a settings
+    /// change is answered with the value the page will now render, rather than the one the file
+    /// held when the process started.
+    theme: AtomicU8,
+    /// What the event subscription reported. A mutex rather than an atomic because the report
+    /// carries the code that refused it, and only the monitor thread ever writes it.
+    monitor: Mutex<MonitorStatus>,
+}
+
+impl Live {
+    pub fn new(learning: bool, policy: Policy, theme: Theme) -> Self {
+        Self {
+            learning: AtomicBool::new(learning),
+            deny: AtomicBool::new(policy == Policy::Deny),
+            theme: AtomicU8::new(theme.index()),
+            monitor: Mutex::new(MonitorStatus::default()),
+        }
+    }
+
+    pub fn learning(&self) -> bool {
+        self.learning.load(Ordering::SeqCst)
+    }
+
+    pub fn policy(&self) -> Policy {
+        if self.deny.load(Ordering::SeqCst) {
+            Policy::Deny
+        } else {
+            Policy::Allow
+        }
+    }
+
+    /// Publish both at once, as a settings change writes them.
+    pub fn set(&self, learning: bool, policy: Policy) {
+        self.learning.store(learning, Ordering::SeqCst);
+        self.deny.store(policy == Policy::Deny, Ordering::SeqCst);
+    }
+
+    /// Flip learning mode alone, which is what the tray's pause does, and report what it became.
+    ///
+    /// Unlike a settings change through the web this writes no file: a pause is meant to last for
+    /// this run only, which is how the reference's pause button behaves too.
+    pub fn toggle_learning(&self) -> bool {
+        !self.learning.fetch_not(Ordering::SeqCst)
+    }
+
+    /// What the event subscription did about being asked to listen.
+    pub fn monitor(&self) -> MonitorStatus {
+        self.monitor
+            .lock()
+            .expect("monitor status lock poisoned")
+            .clone()
+    }
+
+    /// Publish what the subscription did. The monitor thread is the only writer.
+    pub fn set_monitor(&self, status: MonitorStatus) {
+        *self.monitor.lock().expect("monitor status lock poisoned") = status;
+    }
+
+    /// Which colour scheme the page should show right now.
+    pub fn theme(&self) -> Theme {
+        Theme::from_index(self.theme.load(Ordering::SeqCst))
+    }
+
+    /// Publish a theme on its own, which is what a settings change that names only one does.
+    pub fn set_theme(&self, theme: Theme) {
+        self.theme.store(theme.index(), Ordering::SeqCst);
+    }
+}
+
+impl Default for Live {
+    /// The same theme `config.toml` is written with, so a state built without a settings file
+    /// cannot report a theme the tool would never have started with.
+    fn default() -> Self {
+        Self::new(false, Policy::default(), Theme::default())
+    }
+}
+
+/// What the rebuild at startup made of the store, kept for the page and for MCP `status`.
+///
+/// The store holds the filters the previous run left behind; the rules file describes the filters
+/// the user wants. When the two counts differ, something changed while the tool was not running,
+/// which PLAN.md section 6 asks to surface rather than only log. A refused store keeps its own
+/// counts at zero, because nothing was read and nothing was written either.
+#[derive(Debug, Clone, Serialize)]
+pub struct Startup {
+    /// Whether a startup rebuild was attempted at all. A state built in a test never touches the
+    /// store, and its banner must not claim a diff the process never measured.
+    pub(super) measured: bool,
+    /// Whether the store took the rebuild.
+    pub(super) ok: bool,
+    /// Our filters the previous run left in the store.
+    pub(super) removed: usize,
+    /// Filters the rules file describes.
+    pub(super) installed: usize,
+    /// Why the store refused, when it did.
+    pub(super) reason: Option<String>,
+    /// Whether the page has anything to say: the two counts differ. A first run, where the store
+    /// was empty, is news once; an unchanged restart is not.
+    pub(super) differs: bool,
+}
+
+impl Startup {
+    /// The answer a startup rebuild made.
+    pub(crate) fn from_outcome(outcome: &StoreOutcome) -> Self {
+        Self {
+            measured: true,
+            ok: outcome.ok,
+            removed: outcome.removed,
+            installed: outcome.installed,
+            reason: outcome.reason.clone(),
+            differs: outcome.ok && outcome.removed != outcome.installed,
+        }
+    }
+
+    /// The rebuild never reached the engine, so the counts stay at zero and the reason stands in
+    /// for them.
+    pub(crate) fn refused(reason: String) -> Self {
+        Self {
+            measured: true,
+            ok: false,
+            removed: 0,
+            installed: 0,
+            reason: Some(reason),
+            differs: false,
+        }
+    }
+
+    /// A state that did not come through a startup rebuild, which is every state a test builds.
+    #[cfg(test)]
+    pub(super) fn unmeasured() -> Self {
+        Self {
+            measured: false,
+            ok: false,
+            removed: 0,
+            installed: 0,
+            reason: None,
+            differs: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::worker::{InventorySummary, StoreOutcome};
+    use super::*;
+
+    /// The tray's pause flips the flag and reports the new value, leaving the policy alone.
+    #[test]
+    fn toggling_learning_reports_what_it_became_and_keeps_the_policy() {
+        let live = Live::new(true, Policy::Deny, Theme::Dark);
+
+        assert!(!live.toggle_learning());
+        assert_eq!(live.policy(), Policy::Deny);
+        assert!(live.toggle_learning());
+    }
+
+    /// The report of the startup rebuild is only worth a line when the store held something other
+    /// than what the rules describe. A refused store has no counts to compare, and a first run with
+    /// an empty store and an unchanged restart are both cases where nothing went wrong.
+    #[test]
+    fn a_startup_rebuild_claims_a_diff_only_when_the_counts_differ() {
+        let changed = StoreOutcome {
+            ok: true,
+            removed: 3,
+            installed: 5,
+            inventory: InventorySummary::default(),
+            reason: None,
+        };
+
+        assert!(Startup::from_outcome(&changed).differs);
+
+        let same = StoreOutcome {
+            installed: 3,
+            ..changed.clone()
+        };
+
+        assert!(
+            !Startup::from_outcome(&same).differs,
+            "an unchanged restart is not news",
+        );
+
+        let refused = StoreOutcome::refused(InventorySummary::default(), "access denied");
+
+        assert!(
+            !Startup::from_outcome(&refused).differs,
+            "a refused store has nothing counted",
+        );
+        assert!(
+            !Startup::unmeasured().differs,
+            "a state that never rebuilt must say nothing",
+        );
+    }
+}

@@ -37,7 +37,7 @@ being a secret and become a formality; the Host and Origin checks are still in p
 
 ## The guard
 
-Every request passes the guard in `src/server.rs` before a route sees it.
+Every request passes the guard in `src/server/guard.rs` before a route sees it.
 
 | Check | Applies to | Answer | Against |
 |---|---|---|---|

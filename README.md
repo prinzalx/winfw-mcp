@@ -65,18 +65,24 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.38.0**, a documentation release: the handbook was walked through end to
-end and the parts the last two releases left behind were corrected. Chapter 3, chapter 4, chapter 5
-and chapter 8 still described MCP tools that were removed in **0.36.0** (`rules.decode`,
-`rules.allow`, `rules.deny`, `rules.import`, `shutdown`) as things an agent can call, which is the
-kind of sentence that makes someone look for a tool that answers `-32601`. Chapter 5's route table
-gained `/favicon.ico`, chapter 10 now says what an agent can and cannot see since **0.37.0**, and the
-index names what each chapter answers.
+The current release is **0.38.1**, a restructuring with nothing to observe from the outside:
+`src/server.rs` became the `src/server/` directory, one job per file, so that the two files worth
+reviewing on their own are small enough to read whole. `guard.rs` is the entire answer to *who may
+write*, and `mcp_tools.rs` holds no write access to rules, settings, profiles or the store at all,
+which is the mechanical form of "the endpoint reads" ([development](docs/09-development.md#layout)).
 
-Before that, **0.37.0** made the connection views show only traffic that left the machine. A
-connection over a loopback address is now dropped in the monitor before it reaches the log, so the
-list, its counters, the Detected list and MCP cannot disagree about it, while a
-destination on the local segment is shown and marked `local network` with a filter of its own
+Before that, **0.38.0** was a documentation release: the handbook was walked through end to end and
+the parts the last two releases left behind were corrected. Chapter 3, chapter 4, chapter 5 and
+chapter 8 still described MCP tools that **0.36.0** removed (`rules.decode`, `rules.allow`,
+`rules.deny`, `rules.import`, `shutdown`) as things an agent can call, which is the kind of sentence
+that makes someone look for a tool that answers `-32601`. Chapter 5's route table gained
+`/favicon.ico`, chapter 10 now says what an agent can and cannot see since **0.37.0**, and the index
+names what each chapter answers.
+
+**0.37.0** made the connection views show only traffic that left the machine. A connection over a
+loopback address is now dropped in the monitor before it reaches the log, so the list, its counters,
+the Detected list and MCP cannot disagree about it, while a destination on the local segment is shown
+and marked `local network` with a filter of its own
 ([the web UI](docs/05-web-ui.md#connections-worth-showing),
 [WFP internals](docs/07-wfp-internals.md#the-event-stream)).
 
