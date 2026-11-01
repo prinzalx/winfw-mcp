@@ -23,6 +23,7 @@ client that asks for anything else is told so rather than silently ignored.
 | `export` | copy an area (`rules`, `config`, `detected`, `all`) into `export\` | yes |
 | `profiles.list` | the active profile and the stored profile names | no |
 | `profile.use` | switch the live profile (takes `name`) | yes |
+| `settings.set` | change `learn_mode` or `default_policy` (takes either, both optional) | yes |
 | `shutdown` | stop the process; the filters stay in the firewall | yes |
 
 ## Who may write
@@ -31,7 +32,7 @@ Reads are always allowed. Writes go through `mcp_writes` in `config.toml`, which
 default: an agent should be able to ask questions before anyone allows it to answer them.
 
 `rules` permits the tools that touch the rule list. `all` additionally permits the ones that rewrite
-the settings as well, which today means `profile.use`.
+the settings as well, which today means `profile.use` and `settings.set`.
 
 A refused write is not a transport error; it comes back as a normal tool result with `isError` set
 and the reason both as text and as structured content. That is what the MCP spec says about a tool

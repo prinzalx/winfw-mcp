@@ -47,7 +47,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::config::{Settings, Writes};
+use crate::config::{Policy, Settings, Writes};
 use crate::export::{self, Area};
 use crate::learn::{Detected, Detector};
 use crate::mcp;
@@ -91,6 +91,10 @@ pub struct AppState {
     rules: Arc<Mutex<RuleFile>>,
     /// The applications learning mode collected, waiting for a decision.
     detector: Arc<Detector>,
+    /// `learn_mode` and `default_policy` as they may change while the process runs. The monitor
+    /// thread reads the same pair, which is why they are atomics rather than fields of
+    /// `settings`.
+    live: Arc<Live>,
     /// The live connection feed, filled by the monitor thread.
     events: Arc<EventLog>,
     /// The file the active rules are read from and written back to: `rules.toml` for the default
@@ -112,6 +116,7 @@ impl AppState {
         rules: Arc<Mutex<RuleFile>>,
         detector: Arc<Detector>,
         events: Arc<EventLog>,
+        live: Arc<Live>,
         active_file: PathBuf,
         active_name: String,
     ) -> Self {
@@ -121,6 +126,7 @@ impl AppState {
             rules,
             detector,
             events,
+            live,
             active_file: Mutex::new(active_file),
             active_name: Mutex::new(active_name),
             running: Arc::new(AtomicBool::new(true)),
@@ -156,6 +162,57 @@ impl AppState {
             .lock()
             .expect("active name lock poisoned")
             .clone()
+    }
+
+    /// The authoritative `learn_mode`: what the last `POST /api/settings` asked for, rather than
+    /// what `config.toml` said at startup.
+    fn learn_mode(&self) -> bool {
+        self.live.learning()
+    }
+
+    /// The authoritative `default_policy`, with the same caveat.
+    fn policy(&self) -> Policy {
+        self.live.policy()
+    }
+}
+
+/// The two settings that may change while the process runs.
+///
+/// Everything else in `Settings` is read once at startup and cannot be honoured afterwards: the
+/// port is already bound, the log level is already installed, and the theme belongs to the browser.
+/// These two are consulted per connection and per store rebuild, so they live in atomics the
+/// monitor thread and the request threads both see. `settings` keeps the file-shaped copy, which is
+/// what gets written back to `config.toml`.
+#[derive(Debug, Default)]
+pub struct Live {
+    learning: AtomicBool,
+    deny: AtomicBool,
+}
+
+impl Live {
+    pub fn new(learning: bool, policy: Policy) -> Self {
+        Self {
+            learning: AtomicBool::new(learning),
+            deny: AtomicBool::new(policy == Policy::Deny),
+        }
+    }
+
+    pub fn learning(&self) -> bool {
+        self.learning.load(Ordering::SeqCst)
+    }
+
+    pub fn policy(&self) -> Policy {
+        if self.deny.load(Ordering::SeqCst) {
+            Policy::Deny
+        } else {
+            Policy::Allow
+        }
+    }
+
+    /// Publish both at once, as a settings change writes them.
+    pub fn set(&self, learning: bool, policy: Policy) {
+        self.learning.store(learning, Ordering::SeqCst);
+        self.deny.store(policy == Policy::Deny, Ordering::SeqCst);
     }
 }
 
@@ -626,6 +683,13 @@ impl Server {
 
                 Response::json(200, &state_json)
             }
+            ("POST", "/api/settings") => {
+                let edit: SettingsEdit = parse_or_default(&request.body)?;
+
+                let outcome = apply_settings(state, worker, edit)?;
+
+                Response::json(200, &StateJson::new(state, &outcome))
+            }
             ("POST", "/api/rules") => {
                 let rules: RuleFile = serde_json::from_slice(&request.body)
                     .context("body must be a rule file object")?;
@@ -646,7 +710,7 @@ impl Server {
                 let outcome = worker.ask(StoreWork::Apply {
                     rules,
                     known: state.detector.apps(),
-                    policy: state.settings.default_policy,
+                    policy: state.policy(),
                 })?;
                 let state_json = StateJson::new(state, &outcome);
 
@@ -692,7 +756,7 @@ impl Server {
                 let outcome = worker.ask(StoreWork::Apply {
                     rules: applied,
                     known: state.detector.apps(),
-                    policy: state.settings.default_policy,
+                    policy: state.policy(),
                 })?;
 
                 // Only after the store accepted the rule: a refused write leaves the entry on the
@@ -766,7 +830,7 @@ impl Server {
                 let outcome = worker.ask(StoreWork::Apply {
                     rules: applied,
                     known: state.detector.apps(),
-                    policy: state.settings.default_policy,
+                    policy: state.policy(),
                 })?;
 
                 Response::json(200, &StateJson::new(state, &outcome))
@@ -892,6 +956,10 @@ fn tool_list() -> Vec<serde_json::Value> {
             "switch the live profile; takes a name (empty selects rules.toml)",
         ),
         (
+            "settings.set",
+            "change learn_mode or default_policy; takes learn_mode, default_policy",
+        ),
+        (
             "shutdown",
             "stop the process; the filters stay in the firewall",
         ),
@@ -911,6 +979,11 @@ fn tool_list() -> Vec<serde_json::Value> {
                     "area": {
                         "type": "string",
                         "enum": ["rules", "config", "detected", "all"],
+                    },
+                    "learn_mode": { "type": "boolean" },
+                    "default_policy": {
+                        "type": "string",
+                        "enum": ["allow", "deny"],
                     },
                 },
             },
@@ -942,7 +1015,7 @@ fn mcp_tool(
 
             Ok(mcp::tool_json(serde_json::json!({
                 "port": state.settings.port,
-                "learn_mode": state.settings.learn_mode,
+                "learn_mode": state.learn_mode(),
                 "default_policy": state.settings.default_policy.name(),
                 "mcp_writes": state.settings.mcp_writes,
                 "profile": state.active_name(),
@@ -1028,7 +1101,7 @@ fn mcp_tool(
                 .ask(StoreWork::Apply {
                     rules: applied,
                     known: state.detector.apps(),
-                    policy: state.settings.default_policy,
+                    policy: state.policy(),
                 })
                 .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
 
@@ -1071,6 +1144,49 @@ fn mcp_tool(
 
             Ok(mcp::tool_json(serde_json::json!({
                 "active": state.active_name(),
+                "installed": outcome.installed,
+                "store": outcome.ok,
+            })))
+        }
+        "settings.set" => {
+            // Same gate as a profile switch: this rewrites `config.toml`.
+            if state.settings.mcp_writes != Writes::All {
+                return Ok(mcp::tool_refusal(
+                    "settings.set refused: mcp_writes is not all",
+                ));
+            }
+
+            let learn_mode = match call.arg("learn_mode") {
+                Some(value) => Some(value.as_bool().ok_or((
+                    mcp::INVALID_PARAMS,
+                    "learn_mode must be a boolean".to_owned(),
+                ))?),
+                None => None,
+            };
+
+            let default_policy = match call.string_arg("default_policy") {
+                Some(text) => Some(Policy::parse(&text).ok_or((
+                    mcp::INVALID_PARAMS,
+                    format!("'{text}' is not a policy, expected allow or deny"),
+                ))?),
+                None => None,
+            };
+
+            let outcome = apply_settings(
+                state,
+                worker,
+                SettingsEdit {
+                    learn_mode,
+                    default_policy,
+                    theme: call.string_arg("theme"),
+                    log_level: call.string_arg("log_level"),
+                },
+            )
+            .map_err(|error| (mcp::REFUSED, format!("{error:#}")))?;
+
+            Ok(mcp::tool_json(serde_json::json!({
+                "learn_mode": state.learn_mode(),
+                "default_policy": state.policy().name(),
                 "installed": outcome.installed,
                 "store": outcome.ok,
             })))
@@ -1137,8 +1253,8 @@ impl StateJson {
 
         Self {
             port: state.settings.port,
-            learn_mode: state.settings.learn_mode,
-            default_policy: state.settings.default_policy.name(),
+            learn_mode: state.learn_mode(),
+            default_policy: state.policy().name(),
             log_level: state.settings.log_level.clone(),
             profile: state.active_name(),
             rules,
@@ -1197,6 +1313,73 @@ struct ProfileSwitch {
     name: String,
 }
 
+/// The body of `POST /api/settings`. Every field is optional and an absent field keeps its value,
+/// so a client can flip one thing without having to know the rest.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsEdit {
+    learn_mode: Option<bool>,
+    default_policy: Option<Policy>,
+    theme: Option<String>,
+    log_level: Option<String>,
+}
+
+/// Write a settings change to `config.toml`, publish the parts that take effect now, and rebuild
+/// the store.
+///
+/// `learn_mode` and `default_policy` are consulted while the process runs, so they go into the
+/// atomics the monitor thread reads. `theme` belongs to the browser and `log_level` is what
+/// `tracing` installed at startup, so both are written for the next run and reported as such.
+fn apply_settings(
+    state: &AppState,
+    worker: &WfpWorker,
+    edit: SettingsEdit,
+) -> Result<StoreOutcome> {
+    let mut next = state.settings.clone();
+
+    // The snapshot in `settings` is taken at startup and does not follow a profile switch, so
+    // writing it back must not undo the profile the tool is actually on.
+    next.active_profile = state.active_name();
+
+    if let Some(learn_mode) = edit.learn_mode {
+        next.learn_mode = learn_mode;
+    }
+
+    if let Some(policy) = edit.default_policy {
+        next.default_policy = policy;
+    }
+
+    if let Some(theme) = edit.theme {
+        next.theme = theme;
+    }
+
+    if let Some(log_level) = edit.log_level {
+        next.log_level = log_level;
+    }
+
+    next.save(&state.paths.config)
+        .context("write the settings file")?;
+
+    state.live.set(next.learn_mode, next.default_policy);
+
+    let rules = state.rules.lock().expect("rules lock poisoned").clone();
+
+    let outcome = worker.ask(StoreWork::Apply {
+        rules,
+        known: state.detector.apps(),
+        policy: next.default_policy,
+    })?;
+
+    info!(
+        learn_mode = next.learn_mode,
+        default_policy = next.default_policy.name(),
+        store = %outcome.describe(),
+        "settings changed",
+    );
+
+    Ok(outcome)
+}
+
 /// Persist the current rules, point the tool at another profile, and rebuild the store.
 ///
 /// The rules being left are written back first, so a change made in the browser survives the
@@ -1238,7 +1421,7 @@ fn switch_profile(state: &AppState, worker: &WfpWorker, name: &str) -> Result<St
     worker.ask(StoreWork::Apply {
         rules: incoming,
         known: state.detector.apps(),
-        policy: state.settings.default_policy,
+        policy: state.policy(),
     })
 }
 
@@ -1402,10 +1585,10 @@ mod tests {
     use crate::rules::Rule;
 
     fn state() -> AppState {
-        state_with(Arc::new(EventLog::new()))
+        state_with(Arc::new(EventLog::new()), Live::default())
     }
 
-    fn state_with(events: Arc<EventLog>) -> AppState {
+    fn state_with(events: Arc<EventLog>, live: Live) -> AppState {
         let scratch = crate::testutil::scratch_dir("server");
         let paths = DataPaths::under(scratch.join("data"));
 
@@ -1428,6 +1611,7 @@ mod tests {
             })),
             Arc::new(detector),
             events,
+            Arc::new(live),
             active_file,
             String::new(),
         )
@@ -1555,7 +1739,94 @@ mod tests {
 
         assert!(
             body.contains(r#""name":"shutdown""#),
-            "a tool that is not listed cannot be discovered: {body}"
+            "a tool that is not listed cannot be discovered: {body}",
+        );
+        assert!(
+            body.contains(r#""name":"settings.set""#),
+            "a tool that exists must be in the list: {body}",
+        );
+    }
+
+    /// A settings change is written to `config.toml`, published to the atomics the monitor reads,
+    /// and answered with the state the server actually settled on.
+    #[test]
+    fn the_settings_endpoint_writes_the_file_and_takes_effect_at_once() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/settings",
+                br#"{"default_policy": "deny", "learn_mode": false}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains(r#""default_policy":"deny""#), "{body}");
+        assert!(body.contains(r#""learn_mode":false"#), "{body}");
+
+        let written =
+            std::fs::read_to_string(server_state.paths.config.clone()).expect("read the config");
+
+        assert!(
+            written.contains(r#"default_policy = "deny""#),
+            "the change must survive a restart: {written}",
+        );
+
+        assert!(
+            !server_state.live.learning() && server_state.live.policy() == Policy::Deny,
+            "the monitor has to see the change without a restart",
+        );
+    }
+
+    /// An unknown field in a settings body is refused rather than ignored, so a client that
+    /// misspells a setting learns about it instead of watching nothing happen.
+    #[test]
+    fn the_settings_endpoint_refuses_a_field_it_does_not_know() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/settings",
+                br#"{"defualt_policy": "deny"}"#.to_vec(),
+            ),
+        );
+
+        assert!(response.is_err(), "a typo must not be accepted silently");
+    }
+
+    /// The MCP gate is the same one a profile switch runs into: settings belong to `all`.
+    #[test]
+    fn the_mcp_settings_tool_refuses_without_write_permission() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/mcp",
+                br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"settings.set","arguments":{"default_policy":"deny"}}}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains("settings.set refused"), "{body}");
+        assert!(
+            server_state.live.policy() == Policy::Allow,
+            "a refused call must change nothing",
         );
     }
 
@@ -1805,7 +2076,7 @@ mod tests {
         events.push(connection("older.exe"));
         events.push(connection("newer.exe"));
 
-        let server_state = state_with(Arc::clone(&events));
+        let server_state = state_with(Arc::clone(&events), Live::default());
         let worker = WfpWorker::start();
 
         let response = Server::route(
@@ -1830,7 +2101,7 @@ mod tests {
         let events = Arc::new(EventLog::new());
         let server = Server::bind(
             0,
-            state_with(Arc::clone(&events)),
+            state_with(Arc::clone(&events), Live::default()),
             Arc::new(WfpWorker::start()),
         )
         .expect("bind");

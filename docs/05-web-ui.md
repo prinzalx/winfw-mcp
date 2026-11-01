@@ -13,6 +13,9 @@ actually got.
 ## What is on the page
 
 - **Profile** selector, which switches the live rule file.
+- **Header** line: address, learning mode, default policy. Learning mode and the default policy are
+  underlined because they are clickable — clicking one asks the server to switch it to the other
+  value, which writes `config.toml` and rebuilds the store in the same request.
 - **Rules** table: enabled flag, name, action, pattern, remove, share. Every field is edited in
   place and saved on change.
 - **Detected** table: the learning mode, with `allow`, `deny` and `dismiss` per row.
@@ -29,6 +32,7 @@ actually got.
 | `GET /api/state` | settings, rules and what the store reported |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application into a rule and rebuild the store |
+| `POST /api/settings` | change `learn_mode` or `default_policy` at runtime; `theme` and `log_level` are written for the next run |
 | `POST /api/detected/dismiss` | drop a detected application without deciding |
 | `POST /api/clear` | remove our filters from the store |
 | `POST /api/shutdown` | stop the server, which ends the process; the filters stay installed |

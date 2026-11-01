@@ -59,6 +59,16 @@ impl Policy {
             Self::Deny => "deny",
         }
     }
+
+    /// Read a name back. A client that sends anything else gets an error rather than a policy it
+    /// did not ask for, which is what the settings route reports to the browser.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "allow" => Some(Self::Allow),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
+    }
 }
 
 /// What the MCP endpoint is allowed to modify.

@@ -25,8 +25,8 @@ On the first run the binary creates its data directory and the files inside it:
 |---|---|
 | `port` | the loopback port the web server binds (8788 by default); if it is busy the server takes the next free one of the following eight instead of failing |
 | `log_level` | default tracing level; `RUST_LOG` overrides it for a single run |
-| `learn_mode` | whether learning mode collects applications; off means the Detected list stays empty while the connection log keeps filling, and changing it takes a restart |
-| `default_policy` | `allow` (default) or `deny`. `deny` puts an unconditional block at the bottom of the four authorization layers, so an application no rule mentions is denied rather than allowed; see [WFP internals](07-wfp-internals.md#the-default-deny-base). Changing it takes a restart |
+| `learn_mode` | whether learning mode collects applications; off means the Detected list stays empty while the connection log keeps filling |
+| `default_policy` | `allow` (default) or `deny`. `deny` puts an unconditional block at the bottom of the four authorization layers, so an application no rule mentions is denied rather than allowed; see [WFP internals](07-wfp-internals.md#the-default-deny-base) |
 | `theme` | presentation preference carried by the page |
 | `mcp_writes` | how much the MCP endpoint may write: `none`, `rules` or `all` |
 | `active_profile` | the live profile name; empty selects `rules.toml` itself |
@@ -44,6 +44,27 @@ because stdout belongs to the MCP stdio transport.
   outlive the process.
 - **Load once, write immediately.** All settings are read at startup; every change made in the web
   UI is written straight back to disk. No save button, no dirty state.
+
+## Changing a setting
+
+`learn_mode` and `default_policy` may be changed while the server runs, and both take effect
+immediately:
+
+```
+curl -X POST http://127.0.0.1:8788/api/settings \
+     -H 'Content-Type: application/json' \
+     -d '{"default_policy": "deny"}'
+```
+
+Every field is optional, and a field that is absent keeps its value, so a client flips one thing
+without having to know the rest. `theme` and `log_level` are accepted but only take effect on the
+next run: the first belongs to the browser, and the second is the filter `tracing` installed at
+startup. The answer is the same body `GET /api/state` returns, so a client sees what the server
+actually settled on.
+
+Note what the endpoint does **not** accept: `port`, because the socket is already bound, and
+`active_profile`, which has its own route (`POST /api/profiles/switch`) because switching a profile
+also rewrites the rules.
 
 ---
 

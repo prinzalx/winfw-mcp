@@ -20,5 +20,7 @@ jobs:
 
       - run: cargo build --all-targets
 
-      # --nocapture so the log shows whether the store was read or the run was skipped.
-      - run: cargo test -- --nocapture
+      # --nocapture so the log shows whether the store was read or the run was skipped, and
+      # --test-threads=1 because two tests write to the one live WFP store on the machine: run in
+      # parallel they clear each other's filters and the counts no longer add up.
+      - run: cargo test -- --nocapture -- --test-threads=1

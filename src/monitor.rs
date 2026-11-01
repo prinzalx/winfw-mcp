@@ -104,12 +104,11 @@ struct Sink {
     log: Arc<EventLog>,
     detector: Arc<crate::learn::Detector>,
     rules: Arc<Mutex<crate::rules::RuleFile>>,
-    /// `learn_mode` from the settings. Read once at startup, like every other setting, so the
-    /// callback does not have to reach for the config on every connection.
-    learning: bool,
-    /// `default_policy` from the settings, read the same way. A rebuild the callback queues has
-    /// to carry it, because a rebuild writes the whole store including the base filters.
-    policy: crate::config::Policy,
+    /// `learn_mode` and `default_policy` as they stand right now. A settings change made in the
+    /// browser lands here rather than in a copy taken at startup, and a rebuild the callback
+    /// queues has to carry the policy, because it writes the whole store including the base
+    /// filters.
+    live: Arc<crate::server::Live>,
     /// Hand a store rebuild to the WFP worker when an application turns up that no filter knows
     /// yet. The answer is not waited for: the next page load reads the store anyway.
     rebuild: Option<SyncSender<crate::server::WorkItem>>,
@@ -134,15 +133,12 @@ impl Monitor {
         log: Arc<EventLog>,
         detector: Arc<crate::learn::Detector>,
         rules: Arc<Mutex<crate::rules::RuleFile>>,
-        learning: bool,
-        policy: crate::config::Policy,
+        live: Arc<crate::server::Live>,
         rebuild: Option<SyncSender<crate::server::WorkItem>>,
     ) -> Self {
         let (shutdown, receiver) = channel();
 
-        let join = thread::spawn(move || {
-            listen(log, detector, rules, learning, policy, rebuild, receiver)
-        });
+        let join = thread::spawn(move || listen(log, detector, rules, live, rebuild, receiver));
 
         Self {
             shutdown: Some(shutdown),
@@ -167,8 +163,7 @@ fn listen(
     log: Arc<EventLog>,
     detector: Arc<crate::learn::Detector>,
     rules: Arc<Mutex<crate::rules::RuleFile>>,
-    learning: bool,
-    policy: crate::config::Policy,
+    live: Arc<crate::server::Live>,
     rebuild: Option<SyncSender<crate::server::WorkItem>>,
     shutdown: Receiver<()>,
 ) {
@@ -273,8 +268,7 @@ fn listen(
         log,
         detector,
         rules,
-        learning,
-        policy,
+        live,
         rebuild,
     })) as *mut c_void;
 
@@ -372,7 +366,7 @@ fn listen(
 
         let ruleset = sink.rules.lock().expect("rules lock poisoned").clone();
 
-        let detected = sink.learning && sink.detector.observe(&entry, &ruleset);
+        let detected = sink.live.learning() && sink.detector.observe(&entry, &ruleset);
 
         if (newly_seen || detected)
             && let Err(error) = sink.detector.save()
@@ -404,7 +398,7 @@ fn listen(
         let work = crate::server::StoreWork::Apply {
             rules: ruleset,
             known: sink.detector.apps(),
-            policy: sink.policy,
+            policy: sink.live.policy(),
         };
 
         // A full queue means a rebuild is already on its way, and that rebuild reads the rules
@@ -422,8 +416,7 @@ fn listen(
     _log: Arc<EventLog>,
     _detector: Arc<crate::learn::Detector>,
     _rules: Arc<Mutex<crate::rules::RuleFile>>,
-    _learning: bool,
-    _policy: crate::config::Policy,
+    _live: Arc<crate::server::Live>,
     _rebuild: Option<SyncSender<crate::server::WorkItem>>,
     shutdown: Receiver<()>,
 ) {

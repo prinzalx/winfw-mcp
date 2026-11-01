@@ -69,11 +69,10 @@ Kept as asked, with the two audits now folded in below.
 
 ### 3.2 Settings
 
-- **There is no write path for settings at all.** No `POST /api/settings` route, no settings control
-  in the page, no MCP tool to change one. The only place `Settings::save` is called from the server is
-  the profile switch. So `port`, `log_level`, `learn_mode`, `theme` and `default_policy` are file-only
-  and read-only in the UI, which contradicts PLAN.md §2's promise that every change in the web UI is
-  written through.
+- **`port`, `log_level` and `theme` are still file-only.** `POST /api/settings` exists since 0.13.0
+  and so does the MCP `settings.set` tool, and `learn_mode` and `default_policy` take effect at
+  once. The other three are written to the file and only honoured on the next run: the port is
+  already bound, and the log level is the filter `tracing` installed at startup.
 - **`theme` is decorative.** The field exists in config, is reported in the state, and appears nowhere
   in `web/index.html`; the styling is fixed.
 - **Logs do not rotate.** PLAN.md §2 calls `logs\` rotating. It is one append-only file with no size
@@ -291,13 +290,34 @@ Roughly by how much they cost to change later:
 
 1. **Default deny and its base filters** (§4.1) — done in 0.12.0 for the WFP half: the block, the
    loopback permits and the IPv6 permits are installed when `default_policy = "deny"`. What is left of
-   the item is making the policy changeable at runtime through the settings write path (item 4).
+   the item was making the policy changeable at runtime, which 0.13.0 closed with the settings write
+   path.
 2. **Remote destination, protocol, direction and address family** (§4.2) — a rule-shape change, and
    item 7 of the original list cannot be answered without it.
 3. **Which filter decided an event** (§4.3) — without provider attribution no honest "blocked by rule
    X" view is possible.
-4. **A settings write path** (§3.2) — currently three of four settings cannot be changed at all.
+4. ~~**A settings write path** (§3.2)~~ — done in 0.13.0 for the two settings that matter at runtime.
+   `POST /api/settings` and the MCP tool `settings.set` change `learn_mode` and `default_policy` on a
+   running process, write `config.toml`, and rebuild the store. What is left is small: `port` needs a
+   restart because the listener is already bound, and `log_level` and `theme` are written by the same
+   endpoint but only take effect on the next run.
 5. **The four bugs in §1**, all small.
 6. **Storage hardening**: rule-string validation, previous-generation backup, a version field
    (§4.4).
 7. **Runtime finishing touches**: single instance, volatile filter mode, tray menu, icons (item 5).
+
+## 7. Extension round notes (2026-11-01)
+
+Two things were found while the settings write path was built, both recorded here rather than fixed
+on the spot.
+
+- **`Settings` is a startup snapshot with one stale field.** `AppState::settings` is never updated
+  after startup, which is why `learn_mode` and `default_policy` now have their own atomics (`Live`).
+  `active_profile` is written back from the snapshot on every settings save, so `apply_settings`
+  has to copy `active_name()` into it by hand. A third runtime-mutable setting should join `Live`
+  rather than repeat that trick.
+- **A store rebuild answers with a refusal on an unelevated run.** `POST /api/settings` writes the
+  file first and then rebuilds the store, so on a machine where the process is not administrator
+  the file is changed and the route still reports an error. That matches what `POST /api/rules`
+  already does, but it means "settings changed" and "the store agrees" are not the same claim; the
+  banner is the only thing that tells them apart.

@@ -54,6 +54,12 @@
         font-size: 0.85rem;
       }
 
+      /* Two of the header values are settings, so they invite a click. */
+      .sub .toggle {
+        cursor: pointer;
+        text-decoration: underline dotted;
+      }
+
       .banner {
         background: var(--banner);
         border: 1px solid var(--banner-line);
@@ -191,8 +197,9 @@
         <h1>winfw-mcp</h1>
         <div class="sub">
           <span id="addr">localhost</span> &middot; learning mode
-          <span id="learn-mode">off</span> &middot; default
-          <span id="default-policy">allow</span>
+          <span id="learn-mode" class="toggle" title="click to toggle learning mode">off</span>
+          &middot; default
+          <span id="default-policy" class="toggle" title="click to toggle the default policy">allow</span>
         </div>
       </div>
       <div class="status" id="status"></div>
@@ -697,6 +704,28 @@
           status("stopped");
         } catch (error) {
           status("could not stop: " + error.message);
+        }
+      });
+
+      // Both header values are settings the server changes while it runs, so the shortest route to
+      // flipping one is to click the word you want the other one of.
+      el("learn-mode").addEventListener("click", async () => {
+        try {
+          apply(await request("POST", "/api/settings", { learn_mode: !learnMode }));
+          status("learning mode " + (learnMode ? "on" : "off"));
+        } catch (error) {
+          status("could not change learning mode: " + error.message);
+        }
+      });
+
+      el("default-policy").addEventListener("click", async () => {
+        const next = el("default-policy").textContent === "allow" ? "deny" : "allow";
+
+        try {
+          apply(await request("POST", "/api/settings", { default_policy: next }));
+          status("default policy is " + next);
+        } catch (error) {
+          status("could not change the default policy: " + error.message);
         }
       });
 

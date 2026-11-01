@@ -147,13 +147,19 @@ fn serve(
 
     // The monitor is started before the listener so the first page load already has a feed, even
     // if it is empty. It is held by this scope, which is what keeps the subscription open.
+    // The two settings that may change while the server runs live here, so the monitor's callbacks
+    // and `POST /api/settings` read and write the same pair.
+    let live = Arc::new(server::Live::new(
+        settings.learn_mode,
+        settings.default_policy,
+    ));
+
     let events = Arc::new(monitor::EventLog::new());
     let _monitor = monitor::Monitor::start(
         Arc::clone(&events),
         Arc::clone(&detector),
         Arc::clone(&rules),
-        settings.learn_mode,
-        settings.default_policy,
+        Arc::clone(&live),
         worker.handle(),
     );
 
@@ -183,6 +189,7 @@ fn serve(
         rules,
         detector,
         events,
+        live,
         active_rules,
         active_name,
     );
