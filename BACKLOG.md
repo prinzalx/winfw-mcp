@@ -287,8 +287,10 @@ address family, which an address decides for itself. Still missing:
   original list asks about in item 7, and it is the largest dimension left. It needs
   `FWP_V4_ADDR_AND_MASK`/`FWP_V6_ADDR_AND_MASK`, which the crate exports.~~ — done in 0.15.0,
   except **address ranges** (`10.0.0.1` to `10.0.0.9`), which the reference supports through a
-  `FWP_RANGE_TYPE` of `FWP_UINT32` or `FWP_BYTE_ARRAY16_TYPE`. Our `remote` takes one address or
-  one prefix, which covers the common case.
+  `FWP_RANGE_TYPE` of `FWP_UINT32` or `FWP_BYTE_ARRAY16_TYPE`.~~ — the span landed in **0.56.0**:
+  `remote` takes `10.0.0.1-10.0.0.9` as well as an address or a prefix, and the store gets a
+  `FWP_MATCH_RANGE` condition whose bounds are a `FWP_UINT32` pair or a `FWP_BYTE_ARRAY16_TYPE`
+  pair (§50).
 - **Local address** as a separate dimension.
 - ~~**Ports and port ranges** (`80`, `1024-2048`)~~ — done in 0.14.0.
 - **Multi-valued** remote and local lists inside one rule. Our four narrowing fields are
@@ -1429,3 +1431,29 @@ finding a profile manager does not settle.
   `/api/state`, which is the only place the list travels.
 - The Detected export needed no change and was checked rather than assumed: it copies the
   `learn.json` file, so a manual backup now carries every profile's list in one file. (2026-11-02)
+
+## 50. The span of addresses round notes
+
+Release 0.56.0 closed the last gap in the remote-address dimension (§4.2): `remote` now takes
+`10.0.0.1-10.0.0.9` besides an address and a prefix.
+
+- The text is told apart by the `-`, which no address text contains, so a rule file written before
+  this release reads exactly as it did and no version number had to move. The field became an enum
+  of a network and a span rather than a `Cidr` with an extra field, because the two shapes have
+  nothing in common: one is an address and a prefix, the other two addresses and no prefix.
+- The reference was read before the condition was written (`helper.c:1278`, `helper.c:1301`), and
+  it settles two questions the crate cannot answer. A v4 bound is the address byteswapped, which is
+  the number `u32::from_be_bytes` of the octets gives — the same convention the address-and-mask
+  condition already uses here, so a span and a prefix name the same bytes. A v6 bound is not a
+  number at all: it is a `FWP_BYTE_ARRAY16_TYPE` value pointing at the sixteen octets, which means
+  a v6 span nests a pointer inside the pointer WFP keeps to the range. Both bounds and the range
+  are held beside each other for the whole install, which is the same trap §8 and §9 recorded.
+- Both families were installed against the live store, elevated: `192.168.1.10-192.168.1.20` and
+  `2001:db8::1-2001:db8::ff`. That proves the store accepts the shapes; it does not prove the
+  comparison order WFP applies to them, which no test here can observe without generating traffic
+  through a filter. A live allow/deny check against a real connection is the honest follow-up.
+- A span that ends before it starts is refused where the text is read, along with a span across the
+  two families and an end that is not an address. The reference validates its address text the same
+  way — with a balloon tip — rather than installing a filter that can never match.
+- What a span does **not** buy: a multi-valued list (§4.2). A rule still holds one destination, so
+  two spans that are not contiguous still need two rules. (2026-11-02)
