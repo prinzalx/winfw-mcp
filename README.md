@@ -73,7 +73,14 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.64.1**: the tray icon says what it is doing. Hovering now reads
+The current release is **0.65.0**: the Detected list answers the questions asked most recently. The
+tab listed the twenty entries that were *collected* first, and an entry a repeat connection merely
+refreshes keeps its place, so a program running for a week had its newest question at the bottom of
+the list and never reached the page — blocked and undetected at the same time. The list is now
+ordered by the time it was last seen before it is cut, and `detected_total` counts every open entry,
+so a badge can read `47+` rather than a number that is quietly too small.
+
+Before it, **0.64.1**: the tray icon says what it is doing. Hovering now reads
 `winfw-mcp — protection on, learning on — http://127.0.0.1:8788/` and is refreshed every two
 seconds, every event the shell reports is logged so that "clicking does nothing" can be decided
 after the fact, and the right-button menu is tracked so it cannot close before it is read. Before

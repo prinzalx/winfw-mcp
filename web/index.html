@@ -775,6 +775,11 @@
       // name and pattern, which together identify a rule the way the table shows it.
       let truncations = new Map();
       let detected = [];
+
+      // The state answer carries at most twenty entries, so the badge cannot be built from the
+      // list alone: a queue of forty would be announced as twenty. The server answers the whole
+      // count beside the truncated list.
+      let detectedTotal = 0;
       // The newest events first, so a reload of the state and the stream feed the same list.
       let events = [];
       let learnMode = false;
@@ -1149,8 +1154,9 @@
 
         body.replaceChildren();
 
-        el("detected-count").textContent = String(detected.length);
-        el("detected-count").hidden = detected.length === 0;
+        el("detected-count").textContent =
+          detectedTotal > detected.length ? detectedTotal + "+" : String(detectedTotal);
+        el("detected-count").hidden = detectedTotal === 0;
 
         if (detected.length === 0) {
           body.appendChild(
@@ -1259,7 +1265,10 @@
           detectedTimer = null;
 
           try {
-            detected = (await request("GET", "/api/state")).detected;
+            const state = await request("GET", "/api/state");
+
+            detected = state.detected;
+            detectedTotal = state.detected_total || detected.length;
             renderDetected();
           } catch (error) {
             status("could not refresh the detected list: " + error.message);
@@ -1541,6 +1550,7 @@
         generation = state.generation;
         elevated = state.elevated;
         detected = state.detected;
+        detectedTotal = state.detected_total || detected.length;
         learnMode = state.learn_mode;
         protection = state.protection;
         el("addr").textContent = location.host;

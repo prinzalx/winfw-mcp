@@ -501,8 +501,13 @@ struct StateJson {
     store: StoreOutcome,
     /// The newest events first, so the panel shows the interesting end even when it is truncated.
     events: Vec<NetEvent>,
-    /// The applications waiting for a decision, newest first.
+    /// The applications waiting for a decision, newest activity first.
+    ///
+    /// At most `STATE_DETECTED` of them, which is why the count below is answered separately.
     detected: Vec<Detected>,
+    /// How many are waiting in all. Read off the list above it would stop at the cap, so a queue
+    /// of forty would be reported as twenty and the page would claim the tab holds everything.
+    detected_total: usize,
     /// Whether the feed behind the events is running, with how much it delivered.
     monitor: MonitorJson,
     /// What the rebuild at startup found, so the page can say what changed while it was closed.
@@ -566,7 +571,14 @@ impl StateJson {
         events.reverse();
         events.truncate(STATE_EVENTS);
 
+        // Newest activity first, and the newest `STATE_DETECTED` of them are answered. The list on
+        // disk is ordered by first sight and a refreshed entry keeps its place, so cutting it as it
+        // stands answers the twenty oldest questions of a process that has been running for a week
+        // and hides the one asking right now (§62.1). Rust's sort is stable, so entries sharing a
+        // timestamp keep the order they were collected in.
         let mut detected = state.detector.snapshot();
+        detected.sort_by_key(|entry| std::cmp::Reverse(entry.seen_ms));
+        let detected_total = detected.len();
         detected.truncate(STATE_DETECTED);
 
         // Counting against the same seen list the worker expands against, so the number on the
@@ -599,6 +611,7 @@ impl StateJson {
             store: store.clone(),
             events,
             detected,
+            detected_total,
             monitor: state.monitor(),
             startup: state.startup.clone(),
             rules_changed: state.rules_changed_outside(),
@@ -1641,6 +1654,77 @@ pattern = "C:\\Windows\\two.exe"
         assert_eq!(response.status, 200);
         assert!(body.contains("\"browser\""), "{body}");
         assert!(body.contains("\"rules\""), "{body}");
+    }
+
+    /// The Detected answer is ordered by the newest activity before it is cut, so a program that
+    /// has been asking since before the cap was reached is not the one that disappears (§62.1).
+    /// The list on disk is ordered by first sight and a refreshed entry keeps its place, which is
+    /// what the answer must not follow.
+    #[test]
+    fn the_state_endpoint_answers_with_the_newest_detected_entries() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let rules = server_state
+            .rules
+            .lock()
+            .expect("rules lock poisoned")
+            .clone();
+
+        // One entry more than the answer carries, collected oldest first, each asking at its own
+        // second. A new entry goes in at the front, so the list is newest first as it stands and
+        // the entry collected first sits at its end.
+        for index in 0..=STATE_DETECTED {
+            let mut event = connection(&format!("C:\\Tools\\tool{index}.exe"));
+            event.time_ms = 1_000 + u64::try_from(index).expect("an index fits a u64") * 1_000;
+
+            assert!(
+                server_state.detector.observe(&event, &rules),
+                "tool{index} is a new question"
+            );
+        }
+
+        // The entry at the end of the list asks again much later. Refreshing it does not move it,
+        // so cutting the list as it stands answers the 20 questions nobody is asking any more and
+        // hides this one.
+        let mut latest = connection("C:\\Tools\\tool0.exe");
+        latest.time_ms = 100_000;
+
+        assert!(
+            !server_state.detector.observe(&latest, &rules),
+            "a refreshed entry is not a new one"
+        );
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = json(&response);
+
+        assert_eq!(
+            body.pointer("/detected_total")
+                .and_then(serde_json::Value::as_u64),
+            Some(21),
+            "the badge counts the whole list: {body}"
+        );
+
+        let answered = body
+            .pointer("/detected")
+            .and_then(serde_json::Value::as_array)
+            .expect("a detected array");
+
+        assert_eq!(answered.len(), STATE_DETECTED, "the answer is cut");
+
+        assert_eq!(
+            answered[0]
+                .pointer("/app")
+                .and_then(serde_json::Value::as_str),
+            Some("C:\\Tools\\tool0.exe"),
+            "the newest question is answered rather than cut: {body}"
+        );
     }
 
     /// An empty connection list has to come with the reason for being empty, which is what the

@@ -453,11 +453,10 @@ Roughly by how much they cost to change later:
    the tray menu (`Open`, `Pause learning`, `Quit`) in 0.21.0 and volatile filter mode
    (`volatile_filters`, taken out on a clean stop) in 0.22.0. Log rotation, which was the last
    open part of it, landed in 0.26.0. Nothing of the item is left.
-8. **The Detected list is short in the answer, not in the data** (§62.1). `/api/state` truncates to
-   the twenty most recently *inserted* entries, so a program that has been connecting since before
-   that is blocked, present in `learn.json` and invisible to the page. Ordering the answer by
-   `seen_ms` is the cheap half; deciding whether the page should paginate the whole list is the part
-   that needs a thought.
+8. ~~**The Detected list is short in the answer, not in the data** (§62.1)~~ — done in 0.65.0. The
+   answer is ordered by `seen_ms` before it is cut, so the twenty entries the page shows are the
+   twenty that asked most recently, and `detected_total` counts the whole list so a badge can say
+   `47+`. Deciding whether the page should paginate the whole list instead is still open; see §64.
 9. **No test loads the page** (§62.2). A script that stopped parsing shipped for twelve releases, and
    the redesign of 0.64.0 carries the same risk: the suite greps a handful of strings out of
    `web/index.html`, which passes happily while the markup is broken. A test that parses the file and
@@ -1809,6 +1808,7 @@ explained; neither was changed by the redesign.
    extension plan: answer the newest twenty by `seen_ms` rather than by insertion order — cheap, and
    it also makes the list mean *what needs a decision lately* — or answer the whole list and let the
    page paginate, which is honest but grows the body on a busy machine.
+   *Closed in 0.65.0, which took the first of the two: see §64.*
 
 2. **The empty rules table was a dead script, not missing data.** At the time of the report
    `/api/state` answered `rules=2` (the two example rules), and the page assigns `state.rules.rule`
@@ -1867,3 +1867,36 @@ Still open, and the reason the owner's report may not reproduce:
   guarantees; whether the owner sees the menu on their shell is the next manual run.
 - 244 tests, `cargo fmt --check` clean, clippy still at the four known warnings, release build
   starts, page loads, network left unblocked.
+
+## 64. The Detected answer follows the newest activity (2026-11-02)
+
+0.65.0 closes §62.1. `StateJson::new` (`src/server/routes.rs`) now sorts the snapshot by `seen_ms`
+descending before it truncates to `STATE_DETECTED`, and answers `detected_total` next to
+`detected`. The sort is stable, so entries sharing a timestamp keep the order they were collected in.
+
+What the sort fixes is the case the report describes: `Detector::observe` refreshes an entry in place,
+so a program that has been running for a week has its newest question at the end of the list on disk.
+Cutting that list as it stands answered the twenty oldest questions and hid the one being asked now.
+
+Nothing about the collection changed. `Detector` still keeps insertion order, still caps the file at
+`DETECTED_CAP` entries, and `detected.list` over MCP still answers the whole snapshot, so the agent
+sees 100 entries while the page sees the newest 20. The cap values are untouched.
+
+Two things worth recording for the extension plan:
+
+1. **The page could paginate.** `detected_total` is the number a `Load all` button needs. The API has
+   no offset today, and the whole list is small enough that answering it would not be absurd — the
+   reason it is cut at all is the size of the body on a busy machine, not a limit of the data.
+2. **`/api/state` is polled every two seconds.** Sorting 100 entries on every poll costs nothing, but
+   it is worth remembering that the state answer is the hot path of the page.
+
+*Found on the way:* the 0.64.0 release had no row of its own in `CHANGELOG.md`. Its text had been
+appended to the 0.64.1 row behind a stray `|`, so the table rendered a third column and the release
+was not listed. The two rows are separate again; no wording changed.
+
+*Verified:* 245 tests (`cargo test -- --test-threads=1`), `cargo fmt --all -- --check` clean, clippy
+unchanged at the four known warnings, `cargo build --release` builds. The new test collects 21
+entries, refreshes the one at the end of the list with a much later timestamp, and asserts that the
+answer starts with it, carries 20 entries and reports `detected_total = 21`. Without the sort that
+entry is the one cut.
+
