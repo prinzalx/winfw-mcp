@@ -1233,6 +1233,7 @@ Open after the round:
 - The page shows the age as of the last state read; it does not tick on its own. A row that counts
   seconds up while you watch it is a nicer interaction and needs a timer the page does not have.
   (2026-11-02)
+
 ## 41. Rule reorder round notes
 
 Released in **0.47.0**. The rules table grew an order column; up and down send
@@ -1255,6 +1256,7 @@ Open after the round:
 
 - Two people with the page open can still overwrite each other (no generation counter yet, see
   §3.6); the move is as exposed as every other write in that respect. (2026-11-02)
+
 ## 42. Generation counter round notes
 
 Released in **0.48.0**. State answers carry `generation`; whole-list writes may name theirs and a
@@ -1280,6 +1282,7 @@ Open after the round:
 - `POST /api/detected` and `POST /api/rules/import` append to the server's own list and cannot
   contradict a client's copy, so they take no generation today. If a client ever edits a detected
   entry rather than accepting it, that route will want the same field. (2026-11-02)
+
 ## 43. Relaunch elevated round notes
 
 Released in **0.49.0**. `POST /api/relaunch` asks the shell for an elevated start of this
@@ -1457,3 +1460,23 @@ Release 0.56.0 closed the last gap in the remote-address dimension (§4.2): `rem
   way — with a balloon tip — rather than installing a filter that can never match.
 - What a span does **not** buy: a multi-valued list (§4.2). A rule still holds one destination, so
   two spans that are not contiguous still need two rules. (2026-11-02)
+
+## 51. The state of the remaining dimension list
+
+The address dimension was closed by 0.56.0, which is worth recording here because the list in §4.2
+is easy to read as "still wide open" and is not. What a rule can name today: one protocol (by name
+or number), one direction, one port or port range, and one remote destination as an address, a
+network or a span. What it still cannot:
+
+- **A local address.** The reference carries one, and WFP has the field
+  (`FWPM_CONDITION_IP_LOCAL_ADDRESS`), which is the shape a rule about a network interface would
+  want. The three text shapes are already written, so this is one field, one condition and one
+  page column.
+- **A list of any of them.** A rule holds exactly one value per dimension, so TCP *and* UDP leaves
+  the field out and two distant ports need two rules.
+- **A name.** `remote` refuses `example.com` and nothing resolves one, so a rule learned from an
+  event carries an address while the rule a person would write carries a name. The reference does
+  not resolve names in a filter either; it names applications, not destinations.
+
+Two of these are WFP work with the text format already settled; the third is a layer of its own,
+as §9 said. None of them was started, and no decision here is hard to reverse. (2026-11-02)
