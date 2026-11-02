@@ -73,9 +73,11 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.52.0**, and it changed no code: it closed a backlog item by reading the
-rule model, which turned out to make the case impossible here rather than unhandled. The last
-change of behaviour was **0.51.0**, where a rule learned to name any transport — `protocol` took
+The current release is **0.53.0**, and it changed no behaviour: two places where the documentation
+had drifted from the code were corrected, `src/main.rs` received its first tests, and the cap that
+keeps one wildcard rule from installing thousands of filters is tested now. Before it, **0.52.0**
+closed a backlog item by reading the rule model rather than changing it, and the last change of
+behaviour was **0.51.0**, where a rule learned to name any transport — `protocol` took
 only `tcp` and `udp` and now takes a protocol number from 1 to 255 as well, which is how a rule
 about GRE (47) or ESP (50) is written. Before that, a drive mounted after the tool started became
 findable (a path

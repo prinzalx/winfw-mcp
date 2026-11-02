@@ -1209,6 +1209,41 @@ mod tests {
         assert_eq!(both.len(), LAYERS.len());
     }
 
+    /// A broad pattern is capped, and the cap is silent: the store gets the applications up to the
+    /// limit and nothing says that the rest were left out. Without the cap one careless `*` turns
+    /// into thousands of filters in a store that is shared with everything else on the machine.
+    #[test]
+    fn a_wildcard_pattern_is_expanded_up_to_the_cap() {
+        let known: Vec<String> = (0..MAX_WILDCARD_MATCHES + 8)
+            .map(|index| crate::device::to_device_path(&format!("C:\\test\\app{index}.exe")))
+            .collect();
+
+        assert_eq!(
+            app_ids("C:\\test\\*.exe", &known).len(),
+            MAX_WILDCARD_MATCHES,
+            "the cap holds the expansion down",
+        );
+    }
+
+    /// An exact path has nothing to expand, so the applications this tool has seen are not looked
+    /// at — which is what lets a rule for one file install one filter set rather than a search.
+    #[test]
+    fn an_exact_pattern_ignores_the_applications_that_have_been_seen() {
+        let known: Vec<String> = (0..4)
+            .map(|index| crate::device::to_device_path(&format!("C:\\other\\app{index}.exe")))
+            .collect();
+
+        assert_eq!(app_ids(TEST_APP, &known).len(), 1);
+    }
+
+    /// A wildcard that has matched nothing so far still goes into the store as its own text. The
+    /// alternative is a rule that is installed as nothing at all, which the user cannot see in the
+    /// store and cannot explain.
+    #[test]
+    fn a_wildcard_that_matches_nothing_seen_yet_still_installs_its_pattern() {
+        assert_eq!(app_ids("C:\\test\\*.exe", &[]).len(), 1);
+    }
+
     /// The port a user means is the remote one on the way out and the local one on the way in.
     #[test]
     fn a_port_is_matched_on_the_side_the_connection_is_about() {

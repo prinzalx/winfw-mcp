@@ -81,13 +81,17 @@ on one machine may each run the tool, and each owns the rules in its own `%APPDA
 
 - **Left click** opens the browser on the UI. The URL is handed to the shell, which means the
   browser is the user's, not ours.
-- **Right click** opens a menu with `Open`, `Pause learning`, `Pause protection` and `Quit`.
-  `Open` does what a left click does. `Pause learning` and `Pause protection` flip a running flag
-  and write no file, so each pause lasts for this run only: a restart reads `config.toml` again and
-  the labels read `Pause` again. The menu is built when it opens, so a label always reflects the
-  flag the monitor or the worker reads; a change made in the web in between is picked up the next
-  time the menu opens. Both entries are the same request the page sends, so the tray is a client of
-  the API rather than a second way in. `Quit` is the same stop as below.
+- **Right click** opens a menu with `Open`, `Pause learning`, `Pause protection` and `Quit`, and
+  `Relaunch elevated` between the pauses and `Quit` while the process is not elevated. `Open` does
+  what a left click does. `Pause learning` and `Pause protection` flip a running flag and write no
+  file, so each pause lasts for this run only: a restart reads `config.toml` again and the labels
+  read `Pause` again. The menu is built when it opens, so a label always reflects the flag the
+  monitor or the worker reads; a change made in the web in between is picked up the next time the
+  menu opens. `Pause protection` and `Relaunch elevated` are the same requests the page sends, so the
+  tray is a client of the API rather than a second way in. `Pause learning` is the one entry the tray
+  applies itself: it flips the same running flag the settings route writes, without a request of its
+  own, which is invisible to the guard because nothing crosses the socket. `Quit` is the same stop as
+  below.
 - **A click on the start balloon only dismisses it.** Reporting that click needs the icon to be
   registered with a shell version, and the version also moves where the mouse events sit in the
   callback message. Keeping the click path where it is costs less than the balloon is worth, so the

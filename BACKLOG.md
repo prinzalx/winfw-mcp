@@ -202,6 +202,12 @@ Kept as asked, with the two audits now folded in below.
   it for exactly that.
 - **The `mcp-template` structure was not carried over**: no contract document, no per-tool smoke
   tests, no skill file, no `tests/` directory.
+- **Doc drift, closed in 0.53.0**: chapter 8 claimed every tray entry is the same request the page
+  sends, which made the tray wholly a client of the guarded API. `Pause learning` is not: it flips
+  the shared running flag in-process, so nothing crosses the socket and the guard never sees it.
+  That is not a hole — the flag is the same one the settings route writes — but the chapter said the
+  opposite of the truth, and the Layout in the development chapter had forgotten `src/elevated.rs`
+  since 0.49.0 added it.
 - **Doc drift, closed in 0.38.1**: the route table in the server module comment omitted
   `/api/settings`, `/api/profiles`, `/api/profiles/switch` and `/favicon.ico`, all four of which the
   router answers. It waited for the move in §28 on purpose, so the table was not edited twice. The
@@ -1356,3 +1362,23 @@ out to be impossible here, which is worth recording because the two readings lea
 - Note what this does **not** claim: that a pattern is validated when the file is read. It is not,
   and that is a decision written down in the data chapter, so a rule file an older binary wrote can
   always hold a value the current page would refuse. (2026-11-02)
+
+## 47. Documentation drift and the last untested files round notes
+
+This release changes no behaviour. It closes the distance between what the documentation claims and
+what the code does, and it takes the two files that had no tests at all into the suite:
+
+- Chapter 8 said every tray entry is a request the page sends. `Pause learning` is not: it calls
+  `Live::toggle_learning()` in-process, and the guard — which sits on the socket — never sees it.
+  Not a hole, since the flag is the same one the settings route writes, but the sentence had to go.
+- The Layout in the development chapter did not list `src/elevated.rs`, the file 0.49.0 added.
+- `src/main.rs` had no tests, although argument parsing decides what the process does to the live
+  store. Two tests now cover it: the one flag names the command, and an argument that is not one
+  known flag is refused rather than shrugged at — which is exactly what the parser's comment
+  promises and nothing had checked.
+- `app_ids` in the WFP layer had no tests for its cap on wildcard expansion, the thing that keeps
+  one `C:\test\*.exe` rule from installing thousands of filters in a store the whole machine
+  shares. Three tests now cover expansion up to the cap, the exact pattern that never looks at the
+  applications it has seen, and the wildcard that must install its pattern before the monitor has
+  seen anything — the last one matters because an empty expansion would install no filter at all
+  and leave a rule the store cannot explain. (2026-11-02)

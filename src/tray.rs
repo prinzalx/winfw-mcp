@@ -3,19 +3,24 @@
 //! PLAN.md section 1 asked for a start popup that says the tool is running and shows its address.
 //! That popup is the balloon the icon arrives with: it needs no window of its own, it closes
 //! itself, and it holds nobody up. Clicking the icon opens the browser on the UI, the right button
-//! offers `Open`, `Pause learning`, `Pause protection` and `Quit`, and nothing else happens at
-//! startup, so the tool stays out of the way until it is asked for.
+//! offers `Open`, `Pause learning`, `Pause protection` and `Quit` (plus `Relaunch elevated` while
+//! the process is not elevated), and nothing else happens at startup, so the tool stays out of the
+//! way until it is asked for.
 //!
 //! A tray icon is not a widget: `Shell_NotifyIconW` binds an icon to a *window* and delivers its
 //! clicks as messages to that window's procedure. So this module owns a message-only window and the
 //! thread that pumps its messages, which is also why the tray cannot live on one of the server's
 //! request threads.
 //!
-//! The right button opens a menu with `Open`, `Pause learning`, `Pause protection` and `Quit`. The
-//! learning pause flips the running [`live`](crate::server::Live) flag only and writes no file: it
+//! The right button opens a menu with `Open`, `Pause learning`, `Pause protection` and `Quit`, and
+//! `Relaunch elevated` before `Quit` while the process is unelevated. The protection pause and the
+//! relaunch are POSTs to the server's own routes, which is what keeps the tray a client of the
+//! guarded API rather than a second way in. The learning pause is the one entry the tray applies
+//! itself: it flips the running [`live`](crate::server::Live) flag and writes no file, so it
+//! reaches the same flag the settings route writes without sending a request of its own. It
 //! lasts for this run, which is what a pause means, and a settings change through the web remains
-//! the way to decide it permanently. The protection pause is not even flipped here — it is a POST
-//! to the server's own route, because that is the code that knows what pausing the firewall means.
+//! the way to decide it permanently. Protection is not even flipped here, because that is the code
+//! that knows what pausing the firewall means.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};

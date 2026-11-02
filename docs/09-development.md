@@ -15,6 +15,7 @@ src/learn.rs             the Detected list
 src/log.rs               the bounded log file, rolled at a megabyte
 src/monitor.rs           the net-event subscription and the event log
 src/instance.rs          one instance at a time, and the port file it publishes
+src/elevated.rs          whether this process is elevated, and the ask for an elevated restart
 src/export.rs            export, Base64 share and import
 src/mcp.rs               the JSON-RPC grammar of the MCP endpoint
 src/server/mod.rs        the accept loop, the connection handling, the SSE stream

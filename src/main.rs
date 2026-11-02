@@ -419,3 +419,35 @@ fn init_tracing(settings: &Settings, logfile: &std::path::Path) -> Option<LogFil
 
     Some(handle)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Command;
+
+    /// The single flag decides what the process does to the live store, so an unknown one has to
+    /// be an error rather than the default: applying filters nobody asked for is not a harmless
+    /// mistake, and it is the reason `parse` refuses instead of shrugging.
+    #[test]
+    fn the_one_flag_names_the_command() {
+        assert_eq!(Command::parse(&[]).expect("no flag"), Command::Apply);
+        assert_eq!(
+            Command::parse(&["--serve".to_owned()]).expect("--serve"),
+            Command::Serve,
+        );
+        assert_eq!(
+            Command::parse(&["--clear".to_owned()]).expect("--clear"),
+            Command::Clear,
+        );
+    }
+
+    #[test]
+    fn an_argument_that_is_not_one_known_flag_is_refused() {
+        let mistyped = Command::parse(&["--server".to_owned()])
+            .expect_err("--serve is the flag, --server is not");
+        assert!(mistyped.to_string().contains("--server"), "{mistyped}");
+
+        let doubled = Command::parse(&["--serve".to_owned(), "--clear".to_owned()])
+            .expect_err("two flags are not one command");
+        assert!(doubled.to_string().contains("too many"), "{doubled}");
+    }
+}
