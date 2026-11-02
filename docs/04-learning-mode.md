@@ -12,14 +12,14 @@ Learning mode collects applications, not connections. One executable that makes 
 connections to the same place is one decision. An application an enabled rule already covers is not
 collected at all, because a rule that blocks it is a decision that was already made.
 
-Since 0.20.0 a covered application is still noticed when it reaches a destination its own rules do
+A covered application is still noticed when it reaches a destination its own rules do
 not cover. An `allow` for `tool.exe` on `site1.com` no longer hides the first connection to
 `site2.com`: that appears as a second Detected entry, marked with `to <address>`, and its identity
 is the pair of application *and* destination. What counts as covered is decided per application, and
 an application with a rule that names no destination covers every address, so nothing new is ever
 reported for it.
 
-A connection that never left the machine is not collected either. Since **0.37.0** it is dropped in
+A connection that never left the machine is not collected either. It is dropped in
 the monitor before learning mode is asked about it, so an agent talking to this tool's own local web
 server does not add entries anyone has to dismiss
 ([WFP internals](07-wfp-internals.md#the-event-stream)).
@@ -38,11 +38,9 @@ A dismissed entry is only removed after the store accepted the write. A refused 
 entry on the list so the user can try again, which is why an unelevated run appears to ignore a
 decision rather than reporting it as broken.
 
-An agent deciding over MCP followed the same rule: `rules.allow` and `rules.deny` dismissed the entry
-they turned into a rule, and only once the store took the rule. Before 0.29.0 the browser dismissed
-and the endpoint did not, so the same application came back on the next connection while a human was
-looking at the page. Since 0.36.0 an agent does not decide at all: it reads `detected.list`, and the
-decision is made on the page.
+An agent decides nothing at all: it reads `detected.list`, and the decision is made on the page.
+The writing tools that once existed dismissed the entry only after they had turned it into a rule
+and the store had taken the rule.
 
 ## Edit before deciding
 

@@ -46,7 +46,7 @@ the result is never more than two files.
 | `default_policy` | `allow` (default) or `deny`. `deny` puts an unconditional block at the bottom of the four authorization layers, so an application no rule mentions is denied rather than allowed; see [WFP internals](07-wfp-internals.md#the-default-deny-base) |
 | `volatile_filters` | `false` by default. `true` makes the server take our filters out of the store when it stops, so the tool is a firewall only while it runs; `false` keeps them installed after a quit (see [lifecycle](08-lifecycle.md#stopping)). Read at startup, so changing it takes a restart |
 | `theme` | `light`, `dark` or `auto`, where `auto` follows the operating system; the page applies it live |
-| `mcp_writes` | retired in 0.36.0: the MCP endpoint is read-only. The key is still accepted so an older file loads, and the next save drops it |
+| `mcp_writes` | accepted but without effect: the MCP endpoint is read-only. An older `config.toml` still loads, and the next save drops the key |
 | `active_profile` | the live profile name; empty selects `rules.toml` itself |
 
 `RUST_LOG` overrides `log_level` from `config.toml` for a single run. Logging goes to stderr,

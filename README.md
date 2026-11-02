@@ -32,11 +32,13 @@ The documentation is split into chapters, so that each question has one place to
 | [6. The MCP endpoint](docs/06-mcp-endpoint.md) | JSON-RPC methods, the tool list, why the endpoint only reads |
 | [7. WFP internals](docs/07-wfp-internals.md) | elevation, our filters, applying, the event stream and what it keeps, filter attribution, threading |
 | [8. Lifecycle and tray](docs/08-lifecycle.md) | starting, the tray icon, stopping, what stays behind |
-| [9. Development](docs/09-development.md) | source layout, tests, the release process, version history |
+| [9. Development](docs/09-development.md) | source layout, tests, the release process |
 | [10. Security model](docs/10-security-model.md) | the session token, Host and Origin checks, what is protected, what an agent can see and what is not |
 
 Working documents next to this index: [PLAN.md](PLAN.md) is the plan and its rationale,
-[BACKLOG.md](BACKLOG.md) the collected follow-ups and audit findings.
+[BACKLOG.md](BACKLOG.md) the collected follow-ups and audit findings,
+[CHANGELOG.md](CHANGELOG.md) the release-by-release history,
+[SECURITY_REVIEW.md](SECURITY_REVIEW.md) the brief for an outside review of the request path.
 
 ## Status
 
@@ -67,74 +69,15 @@ and that is the one thing a firewall in front of an agent should not allow.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.39.0**, and it makes the first screen say something: a rules file that
-does not exist yet is created with two example rules — one allow, one deny — rather than empty, so
-the format is visible before there is anything to explain
-([rules and profiles](docs/03-rules-and-profiles.md#the-first-two-rules)). The same release made
-`log_level` a live setting: a change in the settings area takes effect in the running process, and
-the level in effect is reported in state rather than being readable only from the file
-([data and configuration](docs/02-data-and-configuration.md#the-log-file)).
+## Releases
 
-Before that, **0.38.1** was a restructuring with nothing to observe from the outside:
-`src/server.rs` became the `src/server/` directory, one job per file, so that the two files worth
-reviewing on their own are small enough to read whole. `guard.rs` is the entire answer to *who may
-write*, and `mcp_tools.rs` holds no write access to rules, settings, profiles or the store at all,
-which is the mechanical form of "the endpoint reads" ([development](docs/09-development.md#layout)).
+The current release is **0.40.0**, a documentation release. The handbook now reads like an
+operating manual rather than a development diary: version numbers are gone from the chapters
+and the release history has its own file, [CHANGELOG.md](CHANGELOG.md).
+[SECURITY_REVIEW.md](SECURITY_REVIEW.md) is a brief for an outside reviewer of the request
+path; the security chapter it reviews is
+[the security model](docs/10-security-model.md#the-guard).
 
-Before that, **0.38.0** was a documentation release: the handbook was walked through end to end and
-the parts the last two releases left behind were corrected. Chapter 3, chapter 4, chapter 5 and
-chapter 8 still described MCP tools that **0.36.0** removed (`rules.decode`, `rules.allow`,
-`rules.deny`, `rules.import`, `shutdown`) as things an agent can call, which is the kind of sentence
-that makes someone look for a tool that answers `-32601`. Chapter 5's route table gained
-`/favicon.ico`, chapter 10 now says what an agent can and cannot see since **0.37.0**, and the index
-names what each chapter answers.
-
-**0.37.0** made the connection views show only traffic that left the machine. A connection over a
-loopback address is now dropped in the monitor before it reaches the log, so the list, its counters,
-the Detected list and MCP cannot disagree about it, while a destination on the local segment is shown
-and marked `local network` with a filter of its own
-([the web UI](docs/05-web-ui.md#connections-worth-showing),
-[WFP internals](docs/07-wfp-internals.md#the-event-stream)).
-
-Earlier releases are logged in the [version history](docs/09-development.md#version-history):
-the MCP endpoint reads only since **0.36.0**, where the nine writing tools are gone from the code
-rather than switched off by a setting — an agent that can write a rule can open its own gate — and
-where the writing HTTP routes ask for a session token that never reaches a file while every route
-checks the `Host` header ([the web UI](docs/05-web-ui.md#who-may-write),
-[security model](docs/10-security-model.md));
-a boot-time start stopped outrunning the Base Filtering Engine in **0.35.0**, where the engine open
-retries five times over 3.7 seconds because the worker thread opens the engine once for the life of
-the process and a miss used to stand for the whole session
-([WFP internals](docs/07-wfp-internals.md#opening-the-engine-waits-for-the-service));
-the `theme` setting reached the page in **0.32.0**, where the header cycles `light -> dark -> auto`
-with a click and the choice is applied and survives a reload
-([the web UI](docs/05-web-ui.md));
-the rebuild the server makes of the store at startup reports itself since **0.31.0**, keeping the
-counts it answered so a store that held something other than what the rules describe is named on
-the page rather than in the log alone ([lifecycle and tray](docs/08-lifecycle.md#starting));
-an export covers the stored profiles since **0.30.0**, where the `all` area copies every profile
-file into `export\profiles\` and `export` takes a `profiles` area of its own
-([the web UI](docs/05-web-ui.md));
-an agent can edit the rule list instead of only lengthening it since **0.29.0**, where
-`rules.remove` takes the rule at an index out of the file and rebuilds the store, `rules.decode`
-reads a Base64 share string back and appends it only when told to with `add`, and
-`rules.allow` / `rules.deny` dismiss the Detected entry they decided
-([the MCP endpoint](docs/06-mcp-endpoint.md));
-profiles became manageable from the browser in **0.28.0**, where `New` copies the rules on screen
-into the new file and `Delete` falls back to `rules.toml` when it removes the live one
-([rules and profiles](docs/03-rules-and-profiles.md#profiles));
-the connection list learned to explain itself in **0.27.0**, reporting the state of the event feed
-next to the list so an empty panel says whether the machine was quiet or the subscription never
-opened; the log learned to rotate in **0.26.0**, so every line reaches `logs\winfw-mcp.log` and the
-data directory never holds more than two generations of it
-([data and configuration](docs/02-data-and-configuration.md#the-log-file)); the connection table
-was completed in **0.25.0**, so a line names the local endpoint as well as the destination and
-marks a connection that never left the machine; storage hardening (a versioned rule file, a `.bak`
-of every write, pattern validation) came in
-**0.24.0**; `--help` and `--version` in **0.23.0**; **0.22.0** added `volatile_filters`, which
-takes our filters out of the store on a clean stop
-([lifecycle and tray](docs/08-lifecycle.md#stopping)); a
-tray menu (`Open`, `Pause learning`, `Quit`) came in **0.21.0**; **0.20.0** made learning mode
-notice a destination an allowed application reached; **0.19.0** made a connection event say where it
-went. What is known to be missing or fragile is listed in the
+Every release since **0.1.0** is listed with what changed in the
+[changelog](CHANGELOG.md). What is known to be missing or fragile is collected in the
 [backlog](BACKLOG.md), ranked in its last section.

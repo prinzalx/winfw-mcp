@@ -8,7 +8,7 @@ this — a local agent, or a web page sitting in the same browser, must not be a
 firewall freedom. A tool that reaches out to the internet and then writes its own allow rule has
 answered its own question, and the firewall stops being a policy somebody decided.
 
-Since **0.36.0** that is enforced in two places: the MCP endpoint reads only, and the HTTP routes
+That is enforced in two places: the MCP endpoint reads only, and the HTTP routes
 that write carry a session token.
 
 ## The two surfaces
@@ -53,8 +53,26 @@ the other domain. Without that check such a page could read the whole state of t
 
 A missing `Host` header is let through. HTTP/1.1 asks every request for one and a browser always
 sends it, so the check can only ever catch a name that is wrong rather than a command line client
-that omitted it. The port is not compared: a request only reaches the process on the port it listens
-on, so a page with the wrong port never arrived in the first place.
+that omitted it. The port is not compared: a request only reaches the process on the port it
+listens on, so a page with the wrong port never arrived in the first place.
+
+The guard sees every request, `/mcp` included: `crate::server::guard` runs on the parsed request
+before `Server::route` is called, and the answer of a refused request is written and the connection
+closed without the route ever running. There is no second door — the accept loop has one handler —
+so "what is protected" has one answer:
+
+1. **Bind.** The socket is bound to `127.0.0.1`, so nothing on another machine reaches it at all;
+   `netstat` shows a loopback listener, not `0.0.0.0`.
+2. **One instance.** The mutex of [lifecycle](08-lifecycle.md#only-one-at-a-time) means there is
+   exactly one process answering, so no second server can be quietly started on the same port with
+   weaker checks.
+3. **Reads** — including `/mcp` and `/favicon.ico` — need only the loopback `Host`. A DNS-rebinding
+   page learns names and counts, nothing secret.
+4. **Writes** need `Host`, `Origin`, `content-type: application/json` and the token. A non-browser
+   process that never opened the page has no token; a page on another origin fails `Origin` or,
+   with a form post, `content-type`.
+5. **`/mcp` carries no token** and has no writing route to reach: it is read-only in the code, so
+   the one endpoint without a secret is the one that cannot change a file.
 
 ## What the fingerprint catches
 
@@ -95,8 +113,9 @@ string of a rule. To change anything it must ask the human, who uses the page. T
 design: the read side is automatable, and the write side keeps a person in it until there is a reason
 to say otherwise about a specific group of services and targets.
 
-One consequence of **0.37.0** belongs here, because it is a fact about what an agent can see rather
-than about what it may do. The connection feed holds only traffic that left the machine, so an agent
+One consequence of the connection filter belongs here, because it is a fact about what an
+agent can see rather than about what it may do. The connection feed holds only traffic that left
+the machine, so an agent
 looking for itself in `events.list` will not find its own requests to this tool's web server: they
 were loopback, and they are gone before the log. The agent's connections are the ones it does not
 have to explain to the firewall.

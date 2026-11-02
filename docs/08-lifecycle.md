@@ -16,7 +16,7 @@ the icon are appended to the log file in the data directory as well.
 
 Before the listener is bound, the server rebuilds the store from the rules it just read. Our filters
 are persistent, so without that step the store would keep whatever the previous run left in it, and
-a rule edited while the tool was closed would not be enforced until the next write. Since **0.31.0**
+a rule edited while the tool was closed would not be enforced until the next write. Today
 the answer of that rebuild is kept rather than only logged: `GET /api/state` and the MCP `status`
 tool carry a `startup` object with the filters the store held, the filters the rules describe, and a
 `differs` flag for the two having disagreed. The page shows a line about it under the store banner,
@@ -24,7 +24,7 @@ and stays quiet when nothing disagrees — an unchanged restart and a store the 
 nothing to report there, because a refusal has no counts to compare and is already named by the
 banner itself.
 
-A tool started by a boot rule can outrun the Base Filtering Engine, and since **0.35.0** it waits
+A tool started by a boot rule can outrun the Base Filtering Engine, and it waits
 rather than misses: the engine open retries five times over 3.7 seconds before the store is
 reported unavailable ([WFP internals](07-wfp-internals.md#opening-the-engine-waits-for-the-service)).
 
@@ -82,8 +82,8 @@ Both routes end the process rather than only the tray thread:
 
 The flag is `AppState::running`. The accept loop waits on it, and after it is cleared the loop waits
 a short grace period so the client that asked for the stop receives its reply before the process
-ends. The MCP endpoint no longer offers that action: `shutdown` was a writing tool and was removed
-in **0.36.0**, so an agent cannot stop the process and the page or the tray has to do it.
+ends. The MCP endpoint no longer offers that action: `shutdown` was a writing tool and is gone,
+so an agent cannot stop the process and the page or the tray has to do it.
 
 **Stopping keeps the rules.** The filters we install are persistent and outlive the process, so the
 firewall still enforces what `rules.toml` says after the tool is gone. `--clear` is what takes our

@@ -146,7 +146,7 @@ One rule can be turned into a Base64 string (`POST /api/rules/share`) and pasted
 `POST /api/rules/import` appends the rule such a string carries. This is the manual backup path for
 a single rule, next to the export of a whole area.
 
-Reading such a string back is the page's job. Since 0.36.0 the MCP endpoint is read-only, so an agent
+Reading such a string back is the page's job. The MCP endpoint is read-only, so an agent
 can be handed a share string and can report what the page makes of it, but it cannot decode or append
 one itself. On import the pattern is validated first, because a share string is Base64 around JSON a
 human may have edited.

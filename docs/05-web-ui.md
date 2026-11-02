@@ -24,7 +24,7 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   policy are underlined because they are clickable — clicking one asks the server to switch it to
   the other value, which writes `config.toml` and rebuilds the store in the same request. The theme
   is clickable too and cycles `light -> dark -> auto`, where `auto` follows the operating system.
-  Since **0.32.0** this is not decoration: the choice is applied to the page in the same request and
+  This is not decoration: the choice is applied to the page in the same request and
   survives a reload, so a bright terminal and a dark browser stop fighting each other.
 - **Rules** table: enabled flag, name, action, pattern, protocol, direction, port, remote address,
   remove, share. Every field is edited in place and saved on change. Protocol and direction are
@@ -48,17 +48,17 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   interface asks first, because replacing the list is the one action on the page that can lose
   rules rather than only fail to add them.
 - **Banner**: what the store reported. A refused store is shown as a banner with its reason rather
-  than as an empty list. Under it, since **0.31.0**, what the rebuild at startup found: a line naming
+  than as an empty list. Under it, what the rebuild at startup found: a line naming
   the filters the store held and the filters the rules describe, shown only when the two differ. An
   unchanged restart says nothing, and a refused store needs no second notice because the banner above
-  already names it. Since **0.36.0** a third notice appears when `rules.toml` on disk is not the file
+  already names it. A third notice appears when `rules.toml` on disk is not the file
   the tool itself wrote: someone edited it, restored a backup over it, or deleted it, and the rules
   the page shows are the ones in memory rather than the ones in the file. Saving a rule makes the
   file ours again and the notice goes away.
 
 ## Connections worth showing
 
-The list answers one question: what reached out. Since **0.37.0** a connection that never left the
+The list answers one question: what reached out. A connection that never left the
 machine is not on it at all. That is decided in the monitor rather than in the page, because the
 log, the counter next to the heading, the Detected list and everything an MCP client reads are fed
 from that one point — and because the log holds two hundred entries, a local agent talking to this
@@ -101,7 +101,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 
 ## Who may write
 
-Since **0.36.0** every request passes a guard before it reaches a route, and the guard distinguishes
+Every request passes a guard before it reaches a route, and the guard distinguishes
 reading from writing.
 
 | Check | Applies to | Answer | Why |
@@ -121,7 +121,7 @@ cannot change anything, and the MCP endpoint is configured with a URL rather tha
 `Host` check is not exempt, because that is exactly the check a read needs too. What this buys and
 what it does not is the subject of [the security model](10-security-model.md).
 
-A request body the server cannot read answers **400 Bad Request** since **0.34.0**, and only a
+A request body the server cannot read answers **400 Bad Request**, and only a
 body: a JSON syntax error, a field of the wrong type, a name outside an enum like a theme that is
 not `light`, `dark` or `auto`, a field the route does not know. Anything else that can fail — a
 store that refused the change, a file that would not write, an index past the end of the rule list
@@ -130,13 +130,13 @@ store that refused the change, a file that would not write, an index past the en
 ## Export, import, share
 
 Export answers which files it copied and where, which is the manual backup path: every area can be
-copied into `export\` on demand. Since **0.30.0** the profiles come along too, into
+copied into `export\` on demand. The profiles come along too, into
 `export\profiles\` rather than next to `rules.toml`, because a set of equal files is impossible to
 tell apart in a flat listing; a profiles directory that is still empty exports nothing and leaves no
-directory behind. Import has two directions since **0.33.0**. A share string still appends the one
+directory behind. Import has two directions. A share string still appends the one
 rule it carries rather than replacing anything, so pasting cannot silently discard a rule set. A
 whole file replaces the list: `Restore` on the page reads the chosen file in the browser and posts
-its text. Until **0.36.0** the MCP endpoint offered the same thing as `rules.import`, which is gone
+its text. The MCP endpoint once offered the same thing as `rules.import`, which is gone
 like the other writing tools. What comes back is read by the same reader that reads `rules.toml` at
 startup, so a version this build does not know, a field name it
 does not recognise or a pattern it cannot hold is refused before the file on disk is touched — and

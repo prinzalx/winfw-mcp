@@ -17,7 +17,7 @@ result. A refused provider store is not a reason to throw away the filters we di
 
 ## Opening the engine waits for the service
 
-Since **0.35.0** every long-running caller opens the engine through a retry: five attempts over
+Every long-running caller opens the engine through a retry: five attempts over
 3.7 seconds, with the waits ascending between them. The Base Filtering Engine can be briefly
 unavailable during boot, and the worker thread of the server opens the engine once and keeps the
 handle for its whole life — a run that started before the service was ready and gave up on the
@@ -134,13 +134,13 @@ The thread reports what subscribing did, because a refused subscription is a sup
 empty connection list needs a reason. It publishes `starting`, `running`, `refused` with the code
 that refused it, or `stopped` on the way out, and both reports read that together with how many
 events the log took in. An unelevated run therefore says `no feed: 0x00000005` rather than looking
-like a machine about to happen. Note what that count means since **0.37.0**: it counts what the
+like a machine about to happen. Note what that count means: it counts what the
 callback handed over, and the callback drops a connection that stayed on the machine before it hands
 anything over.
 
 ## What the callback keeps
 
-The callback is where an event is either dropped or copied out, and since **0.37.0** dropping is
+The callback is where an event is either dropped or copied out, and dropping is
 part of its job. A connection that never left the machine does not reach the log at all, which is
 the only way to keep it out of the log's bound, out of its counter, out of the seen list and out of
 the Detected list at the same time; filtering in the page would have left three of those four wrong.
@@ -209,7 +209,8 @@ The v4 number is read the same way the store writes an address condition (`u32::
 octets), which keeps the address in the log and the address a rule matches the same value read the
 same way. A connectionless event carries no version and reports no address.
 
-The local endpoint and the loopback marker arrived in **0.25.0**; the user name is still only in the
+The event log carries the local endpoint and a marker for connections that never left the machine;
+the user name is still only in the
 event and not in the log.
 
 ## Threading
