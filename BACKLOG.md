@@ -296,8 +296,13 @@ address family, which an address decides for itself. Still missing:
   that choice. We match only `ALE_APP_ID`.
 - **Per-application extras**: a file hash, a timer that allows or blocks for N seconds, and a
   "cannot be deleted" flag for system-critical entries.
-- A rule **with no applications is force-disabled** on load in the reference. We have no equivalent
-  sanity check.
+- ~~A rule **with no applications is force-disabled** on load in the reference. We have no
+  equivalent sanity check.~~ — closed by **0.52.0** without a code change, because the case cannot
+  arise here: a rule holds exactly one `pattern`, the field is required, and `validate_pattern`
+  refuses an empty one wherever a pattern arrives (§46). The residual case is a hand-edited
+  `pattern = ""`, which loads unchecked like every other pattern in the file and installs a filter
+  whose application condition is an empty blob, so it matches nothing. The rule ends up inert,
+  which is what disabling it would have achieved.
 
 ### 4.3 Blocked versus unruly
 
@@ -1333,3 +1338,21 @@ miss, throttled, which turned out to be the smaller change and needs no window a
 - What is deliberately **not** here: names for the other transports. `protocol = "esp"` is still
   refused, and the honest position is that a name list is only worth having complete, which is its
   own item in section 4. (2026-11-02)
+
+## 46. The rule that has no applications round notes
+
+This release changes no code. It closes an item that was written down as a missing check and turned
+out to be impossible here, which is worth recording because the two readings lead to different work:
+
+- The reference's rule holds a **set** of applications, so "empty set" is a state a file can be in,
+  and it disables such a rule on load rather than trusting it. Our rule holds exactly one
+  `pattern`, and the field has no serde default, so a file without it fails to load at all.
+- An empty string is a different case, and it was checked rather than assumed: `AppId::resolve("")`
+  falls back to a blob of the pattern's own wide text, which for the empty string is a blob of
+  size nought. That blob cannot equal the application id WFP reports for a real connection, so the
+  filter matches nothing and the rule is inert. The reference would have greyed it out; we install
+  something that never fires. Same outcome, one fewer concept. This was read out of the code rather
+  than observed in a live store, which is what an elevated run is for.
+- Note what this does **not** claim: that a pattern is validated when the file is read. It is not,
+  and that is a decision written down in the data chapter, so a rule file an older binary wrote can
+  always hold a value the current page would refuse. (2026-11-02)

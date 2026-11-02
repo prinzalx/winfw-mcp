@@ -73,9 +73,12 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.51.0**. A rule can name any transport: `protocol` took only `tcp` and
-`udp` and now takes a protocol number from 1 to 255 as well, which is how a rule about GRE (47) or
-ESP (50) is written. Before that, a drive mounted after the tool started became findable (a path
+The current release is **0.52.0**, and it changed no code: it closed a backlog item by reading the
+rule model, which turned out to make the case impossible here rather than unhandled. The last
+change of behaviour was **0.51.0**, where a rule learned to name any transport — `protocol` took
+only `tcp` and `udp` and now takes a protocol number from 1 to 255 as well, which is how a rule
+about GRE (47) or ESP (50) is written. Before that, a drive mounted after the tool started became
+findable (a path
 lookup that misses re-asks the system for the drive-to-device table and retries), an unelevated run
 learned to raise itself (`POST /api/relaunch` shows the UAC dialog and stops this process when the
 shell grants it), two pages open on the same rules list stopped overwriting each other silently (the
