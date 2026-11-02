@@ -38,9 +38,31 @@ pub(crate) struct StoreOutcome {
     pub(super) ok: bool,
     pub(super) removed: usize,
     pub(super) installed: usize,
+    /// The rules a rebuild found changed between the store and the file, named. Empty for every
+    /// piece of work other than a rebuild, and for a refused one.
+    pub(super) diff: RuleDiff,
     /// Providers, sublayers and filters we could read, or why we could not.
     pub(super) inventory: InventorySummary,
     pub(super) reason: Option<String>,
+}
+
+/// The rule names a rebuild found between the store and the rules file, as far as the store can
+/// tell: names the file gained, names it lost, and names whose permits and blocks differ.
+///
+/// An edit that keeps a rule's name, its action and its number of filters — a narrowed port, say
+/// — leaves the same trace in the store as no edit at all, and is not claimed here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct RuleDiff {
+    pub(super) added: Vec<String>,
+    pub(super) changed: Vec<String>,
+    pub(super) gone: Vec<String>,
+}
+
+impl RuleDiff {
+    /// Whether the diff has anything to say.
+    pub(super) fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.changed.is_empty() && self.gone.is_empty()
+    }
 }
 
 impl StoreOutcome {
@@ -50,6 +72,7 @@ impl StoreOutcome {
             ok: false,
             removed: 0,
             installed: 0,
+            diff: RuleDiff::default(),
             inventory,
             reason: Some(reason.into()),
         }
@@ -233,32 +256,26 @@ fn handle_work(
         ));
     };
 
-    let (_removed, _installed, result) = match work {
+    let result = match work {
         StoreWork::Apply {
             rules,
             known,
             policy,
-        } => {
-            let result = engine.apply(&rules, &known, policy).map(|applied| {
-                // The rebuild wrote the whole store, so its table replaces ours wholesale rather
-                // than being merged; a filter the rebuild dropped is no longer in the store.
-                *owners.lock().expect("owners lock poisoned") = applied.owners;
+        } => engine.apply(&rules, &known, policy).map(|applied| {
+            let diff = name_diff(&applied.removed_rules, &applied.installed_rules);
 
-                (applied.removed, applied.installed)
-            });
+            // The rebuild wrote the whole store, so its table replaces ours wholesale rather
+            // than being merged; a filter the rebuild dropped is no longer in the store.
+            *owners.lock().expect("owners lock poisoned") = applied.owners;
 
-            (0, 0, result)
-        }
-        StoreWork::Clear => {
-            let result = engine.clear().map(|removed| {
-                owners.lock().expect("owners lock poisoned").clear();
+            (applied.removed, applied.installed, diff)
+        }),
+        StoreWork::Clear => engine.clear().map(|removed| {
+            owners.lock().expect("owners lock poisoned").clear();
 
-                (removed, 0)
-            });
-
-            (0, 0, result)
-        }
-        StoreWork::Inventory => (0, 0, Ok((0, 0))),
+            (removed, 0, RuleDiff::default())
+        }),
+        StoreWork::Inventory => Ok((0, 0, RuleDiff::default())),
     };
 
     // Reading the counts after the change is what lets one response both confirm the operation
@@ -272,17 +289,19 @@ fn handle_work(
     match result {
         // An operation WFP accepted is still not a store we could read. Saying so keeps the banner
         // honest instead of celebrating counts of nothing.
-        Ok((removed, installed)) if unreadable => Ok(StoreOutcome {
+        Ok((removed, installed, diff)) if unreadable => Ok(StoreOutcome {
             ok: false,
             removed,
             installed,
+            diff,
             inventory,
             reason: first_read_error(&raw),
         }),
-        Ok((removed, installed)) => Ok(StoreOutcome {
+        Ok((removed, installed, diff)) => Ok(StoreOutcome {
             ok: true,
             removed,
             installed,
+            diff,
             inventory,
             reason: None,
         }),
@@ -297,11 +316,79 @@ fn handle_work(
                 ok: false,
                 removed: 0,
                 installed: 0,
+                diff: RuleDiff::default(),
                 inventory,
                 reason: Some(reason),
             })
         }
     }
+}
+
+/// Compare the filters a rebuild took out of the store with the rules it installed, by rule name.
+///
+/// The base filters of a deny policy are the policy's own plumbing rather than anyone's rule, so
+/// their names are never in the answer. Rule names do not have to be unique, so a name counts as
+/// changed when the number of permits and blocks under it differs between the two sides; the
+/// lists keep the order the rules file has.
+#[cfg(windows)]
+fn name_diff(removed: &[crate::wfp::RemovedFilter], installed: &[(String, bool)]) -> RuleDiff {
+    use std::collections::HashMap;
+
+    /// Permits and blocks per name, skipping the base filters on the store side.
+    fn tally<'a>(items: impl Iterator<Item = (&'a str, bool)>) -> HashMap<&'a str, (u32, u32)> {
+        let mut counts: HashMap<&str, (u32, u32)> = HashMap::new();
+
+        for (name, deny) in items {
+            let slot = counts.entry(name).or_default();
+
+            if deny {
+                slot.1 += 1;
+            } else {
+                slot.0 += 1;
+            }
+        }
+
+        counts
+    }
+
+    let old = tally(
+        removed
+            .iter()
+            .map(|filter| (filter.name.as_str(), filter.deny))
+            .filter(|(name, _)| !name.starts_with("base#")),
+    );
+    let new = tally(installed.iter().map(|(name, deny)| (name.as_str(), *deny)));
+
+    let mut diff = RuleDiff::default();
+
+    for (name, _) in installed {
+        match (old.get(name.as_str()), new.get(name.as_str())) {
+            (None, _) => {
+                if !diff.added.iter().any(|seen| seen == name) {
+                    diff.added.push(name.clone());
+                }
+            }
+            (Some(previous), Some(counts)) => {
+                if previous != counts && !diff.changed.iter().any(|seen| seen == name) {
+                    diff.changed.push(name.clone());
+                }
+            }
+            (Some(_), None) => {}
+        }
+    }
+
+    for filter in removed {
+        let name = filter.name.as_str();
+
+        if !name.starts_with("base#")
+            && !new.contains_key(name)
+            && !diff.gone.iter().any(|seen| seen == name)
+        {
+            diff.gone.push(name.to_owned());
+        }
+    }
+
+    diff
 }
 
 /// The first reason the store gave for refusing a read, which is the one worth showing.
@@ -335,6 +422,7 @@ fn handle_work(work: StoreWork) -> Result<StoreOutcome> {
         ok: false,
         removed: 0,
         installed: 0,
+        diff: RuleDiff::default(),
         inventory: InventorySummary::default(),
         reason: Some(format!("no WFP on this platform, asked for {work:?}")),
     })
@@ -344,6 +432,79 @@ fn handle_work(work: StoreWork) -> Result<StoreOutcome> {
 mod tests {
     use super::*;
     use crate::config::Policy;
+
+    #[cfg(windows)]
+    fn left(name: &str, deny: bool) -> crate::wfp::RemovedFilter {
+        crate::wfp::RemovedFilter {
+            name: name.to_owned(),
+            deny,
+        }
+    }
+
+    /// The finding this answers: the counts are equal, yet a rule flipped its action while the
+    /// tool was closed, and the name says so.
+    #[cfg(windows)]
+    #[test]
+    fn a_flipped_action_is_named_as_changed_though_the_counts_match() {
+        let diff = name_diff(
+            &[left("web server", true)],
+            &[("web server".to_owned(), false)],
+        );
+
+        assert_eq!(diff.changed, ["web server".to_owned()]);
+        assert!(diff.added.is_empty() && diff.gone.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn names_the_file_gained_are_added_and_names_it_lost_are_gone() {
+        let diff = name_diff(&[left("old rule", false)], &[("new rule".to_owned(), true)]);
+
+        assert_eq!(diff.added, ["new rule".to_owned()]);
+        assert_eq!(diff.gone, ["old rule".to_owned()]);
+        assert!(diff.changed.is_empty());
+    }
+
+    /// A wildcard rule installs one filter per application under the same name. The diff compares
+    /// rules, so one name is one entry however many filters stood behind it.
+    #[cfg(windows)]
+    #[test]
+    fn one_rule_installing_many_filters_is_named_once() {
+        let diff = name_diff(
+            &[],
+            &[
+                ("browser".to_owned(), false),
+                ("browser".to_owned(), false),
+                ("browser".to_owned(), false),
+            ],
+        );
+
+        assert_eq!(diff.added, ["browser".to_owned()]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_unchanged_rule_is_not_named_at_all() {
+        let diff = name_diff(
+            &[left("mail", false), left("mail", false)],
+            &[("mail".to_owned(), false), ("mail".to_owned(), false)],
+        );
+
+        assert!(diff.is_empty());
+    }
+
+    /// The base filters of a deny policy come and go with the policy, not with anyone's rules.
+    #[cfg(windows)]
+    #[test]
+    fn the_base_filters_are_never_named() {
+        let diff = name_diff(
+            &[left("base#loopback", false), left("base#block", true)],
+            &[("mail".to_owned(), false)],
+        );
+
+        assert_eq!(diff.added, ["mail".to_owned()]);
+        assert_eq!(diff.gone, Vec::<String>::new());
+    }
 
     fn apply() -> StoreWork {
         StoreWork::Apply {

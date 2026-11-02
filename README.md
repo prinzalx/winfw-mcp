@@ -73,13 +73,11 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.44.1**. An export now names the profile its rules came from: a rules,
-profiles or all export writes a one-line `profile.txt` beside the copied files, so a backup
-directory explains itself. The firewall can be paused — a header switch on the page and
-`Pause protection` in the tray menu take our filters out of the store and put them back, without
-writing a setting and without waiting for a restart. The flag lives in the worker that talks to the
-store, so a rule saved while the firewall is paused stays paused. A rule can carry a `comment`, and
-starting the tool says something — the tray icon arrives with a balloon naming the address. The
+The current release is **0.45.0**. When the tool starts it rebuilds the firewall store from the
+rules file, and it now *names* what changed while it was closed: rules added, rules removed, and
+rules whose action flipped, even when the filter counts come out equal. An export names the profile
+its rules came from in a one-line `profile.txt`, the firewall can be paused from the page or the
+tray, a rule can carry a `comment`, and starting the tool shows a balloon naming the address. The
 handbook reads like an operating manual rather than a development diary, and the release history has
 its own file, [CHANGELOG.md](CHANGELOG.md).
 [SECURITY_REVIEW.md](SECURITY_REVIEW.md) is a brief for an outside reviewer of the request

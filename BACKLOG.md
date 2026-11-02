@@ -75,9 +75,11 @@ Kept as asked, with the two audits now folded in below.
 - ~~**Reconcile on startup is missing in `--serve`.**~~ — closed in 0.31.0. PLAN.md §6 wants the WFP
   store reconciled against `rules.toml` at startup with the diff surfaced in the UI. The rebuild was
   always made; what was missing was its answer, which now travels to `/api/state` and MCP `status` as
-  a `startup` object and to the banner as a line. What is left of the finding is the *content* of that
-  diff: it compares counts, not rules, so a rule edited while the tool was closed that leaves the
-  filter count the same (an action flipped, a field narrowed) is rebuilt correctly but not named.
+  a `startup` object and to the banner as a line. The *content* of that diff followed in **0.45.0**:
+  it now names the rules the file gained, lost, or flipped, so a rule whose action changed while the
+  tool was closed is reported even when the counts come out equal. A field narrowed on a rule that
+  keeps its name, action and filter count still leaves no trace, which the `startup` prose now says
+  out loud rather than promising more than the store can tell.
 
 ### 3.2 Settings
 
@@ -1146,3 +1148,32 @@ Open after the round:
 
 - Nothing was opened. The rest of §3.7 (`winfw-core`, `quick-xml`, the `mcp-template` structure) is
   untouched and unchanged in rank. (2026-11-02)
+
+## 39. Startup diff names rules round notes
+
+Released in **0.45.0**. The startup banner names rules now, not only counts.
+
+The decisions the round made:
+
+- **Names come from the store, not from a second file.** The filters the previous run left behind
+  carry the rule's label in their *description* — the display name is the tool's own name on every
+  filter we add — so the rebuild can compare what it is about to install against what it is
+  removing without keeping any extra state on disk.
+- **The comparison is per rule, not per filter.** One name counts once however many filters stood
+  behind it; a wildcard rule that expanded to a dozen applications is one rule and is named once.
+  A name is `changed` when the number of permits and blocks under it differs between the two sides,
+  which is what catches a flipped action.
+- **The base filters are not rules.** A deny policy's own filters are named `base#…`, are removed
+  and reinstalled with every rebuild, and never appear in the diff.
+- **Equal counts with a named change is news too.** `differs` now means the counts disagree *or* a
+  name is in one of the three lists; the counts alone could not tell a restarted tool from a
+  reconfigured one.
+
+Open after the round:
+
+- An edit that keeps a rule's name, its action and its filter count — a narrowed port or remote —
+  leaves the same trace in the store as no edit at all, and the diff honestly does not claim it.
+  Naming that would mean comparing the conditions of every filter, which is a deeper read of the
+  store than this diff reaches. (2026-11-02)
+- The lists are uncapped. A rule set of hundreds edited by hand could produce a banner of hundreds
+  of names; a cap with a "…and N more" would only be worth it once somebody has one. (2026-11-02)

@@ -1303,6 +1303,9 @@ pattern = "C:\\Windows\\two.exe"
             ok: true,
             removed: 2,
             installed: 6,
+            added: vec!["new rule".to_owned()],
+            changed: Vec::new(),
+            gone: Vec::new(),
             reason: None,
             differs: true,
         };
@@ -1321,6 +1324,10 @@ pattern = "C:\\Windows\\two.exe"
         assert!(body.contains("\"startup\""), "{body}");
         assert!(body.contains("\"removed\":2"), "the store's count: {body}");
         assert!(body.contains("\"installed\":6"), "the rules' count: {body}");
+        assert!(
+            body.contains("\"added\":[\"new rule\"]"),
+            "the rule the file gained: {body}"
+        );
         assert!(body.contains("\"differs\":true"), "{body}");
     }
 

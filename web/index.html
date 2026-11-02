@@ -422,17 +422,30 @@
           return;
         }
 
-        el("banner").appendChild(
-          element(
-            "p",
-            "sub",
-            "At startup the store held " +
-              startup.removed +
-              " filters and the rules describe " +
-              startup.installed +
-              ".",
-          ),
-        );
+        var text =
+          "At startup the store held " +
+          startup.removed +
+          " filters and the rules describe " +
+          startup.installed +
+          ".";
+
+        /* Names as far as the store can tell: a rule that only lost a port looks unchanged here.
+           The counts alone could not tell a restarted tool from a reconfigured one. */
+        var named = [];
+        if (startup.added && startup.added.length) {
+          named.push("added " + startup.added.join(", "));
+        }
+        if (startup.changed && startup.changed.length) {
+          named.push("changed " + startup.changed.join(", "));
+        }
+        if (startup.gone && startup.gone.length) {
+          named.push("removed " + startup.gone.join(", "));
+        }
+        if (named.length) {
+          text += " While it was closed: " + named.join("; ") + ".";
+        }
+
+        el("banner").appendChild(element("p", "sub", text));
       }
 
       /* `rules.toml` is not ours any more: someone edited it, restored a backup, or the tool did not

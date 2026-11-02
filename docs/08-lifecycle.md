@@ -18,11 +18,15 @@ Before the listener is bound, the server rebuilds the store from the rules it ju
 are persistent, so without that step the store would keep whatever the previous run left in it, and
 a rule edited while the tool was closed would not be enforced until the next write. Today
 the answer of that rebuild is kept rather than only logged: `GET /api/state` and the MCP `status`
-tool carry a `startup` object with the filters the store held, the filters the rules describe, and a
-`differs` flag for the two having disagreed. The page shows a line about it under the store banner,
-and stays quiet when nothing disagrees — an unchanged restart and a store the tool refused both have
-nothing to report there, because a refusal has no counts to compare and is already named by the
-banner itself.
+tool carry a `startup` object with the filters the store held, the filters the rules describe, and
+three lists of rule names — `added`, `changed` and `gone` — for what the file gained, flipped or
+lost while the tool was closed. The names come from the filters the previous run left behind, which
+carry the rule's label, so a rule that appeared, vanished or flipped its action is named even when
+the filter counts come out equal. An edit that keeps a rule's name, its action and its number of
+filters — a narrowed port, say — leaves the same trace as no edit at all and is not claimed. The
+page shows this under the store banner and stays quiet when nothing disagrees — an unchanged restart
+and a store the tool refused both have nothing to report there, because a refusal has no counts to
+compare and is already named by the banner itself.
 
 A tool started by a boot rule can outrun the Base Filtering Engine, and it waits
 rather than misses: the engine open retries five times over 3.7 seconds before the store is

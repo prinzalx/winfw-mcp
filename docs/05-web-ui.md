@@ -52,10 +52,11 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   interface asks first, because replacing the list is the one action on the page that can lose
   rules rather than only fail to add them.
 - **Banner**: what the store reported. A refused store is shown as a banner with its reason rather
-  than as an empty list. Under it, what the rebuild at startup found: a line naming
-  the filters the store held and the filters the rules describe, shown only when the two differ. An
-  unchanged restart says nothing, and a refused store needs no second notice because the banner above
-  already names it. A third notice appears when `rules.toml` on disk is not the file
+  than as an empty list. Under it, what the rebuild at startup found: a line naming the filters the
+  store held and the filters the rules describe, followed by the rules the file gained, flipped or
+  lost while the tool was closed, shown only when there is a difference to report. An unchanged
+  restart says nothing, and a refused store needs no second notice because the banner above already
+  names it. A third notice appears when `rules.toml` on disk is not the file
   the tool itself wrote: someone edited it, restored a backup over it, or deleted it, and the rules
   the page shows are the ones in memory rather than the ones in the file. Saving a rule makes the
   file ours again and the notice goes away.

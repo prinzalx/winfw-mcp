@@ -131,9 +131,24 @@ pub struct Applied {
     pub removed: usize,
     /// Filters installed from the enabled rules, counted per layer.
     pub installed: usize,
+    /// What the rebuild took out of the store, named, so a startup diff can tell the user which
+    /// rules the previous run had left behind.
+    pub removed_rules: Vec<RemovedFilter>,
+    /// The rules the rebuild installed, as name and action pairs. The base filters of a deny
+    /// policy are not rules and are not in here.
+    pub installed_rules: Vec<(String, bool)>,
     /// Who is who in the store that is in there now, so an event naming one of these ids can be
     /// read back as the rule that decided it.
     pub owners: Owners,
+}
+
+/// One of our filters a rebuild took out of the store, reduced to what the rules file can be
+/// compared against: the rule's label, which the filters carry in their description rather than
+/// their display name, and whether the filter blocked rather than permitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedFilter {
+    pub name: String,
+    pub deny: bool,
 }
 
 /// Run one of the three enumeration sequences end to end and collect the display names.
@@ -322,13 +337,21 @@ impl Engine {
             self.ensure_provider()?;
             self.ensure_sublayer()?;
 
-            report.removed = self.remove_our_filters()?;
+            let taken = self.remove_our_filters()?;
+            report.removed = taken.len();
+            report.removed_rules = taken;
 
             let mut installed = 0;
             let mut owners = Owners::new();
 
             for rule in rules.rule.iter().filter(|rule| rule.enabled) {
                 installed += self.add_rule(rule, known, &mut owners)?;
+
+                // One entry per rule, not per filter: a wildcard rule installs many filters and
+                // the diff compares rules. The action rides along so a flipped rule is noticed.
+                report
+                    .installed_rules
+                    .push((rule.name.clone(), rule.action == Action::Deny));
             }
 
             if policy == Policy::Deny {
@@ -349,7 +372,7 @@ impl Engine {
         let mut removed = 0;
 
         self.transaction(|| {
-            removed = self.remove_our_filters()?;
+            removed = self.remove_our_filters()?.len();
             Ok(())
         })?;
 
@@ -443,13 +466,13 @@ impl Engine {
         Ok(())
     }
 
-    /// Delete every filter our provider owns, and report how many there were.
+    /// Delete every filter our provider owns, and report which they were.
     ///
     /// The enumeration is unfiltered and the provider is selected here rather than with a
     /// `FWPM_FILTER_ENUM_TEMPLATE0`: on a real store the template was rejected with
     /// `FWPM_E_INVALID_ENUM_TYPE`, and we already enumerate all filters for the inventory, so the
     /// extra entries cost nothing we were not already paying.
-    fn remove_our_filters(&self) -> Result<usize> {
+    fn remove_our_filters(&self) -> Result<Vec<RemovedFilter>> {
         let mut enum_handle = HANDLE::default();
 
         // SAFETY: a null template asks for every filter, and the out parameter is a valid handle
@@ -480,6 +503,7 @@ impl Engine {
             bail!("FwpmFilterEnum0 failed with 0x{status:08X}");
         }
 
+        let mut ours = Vec::new();
         let mut keys = Vec::new();
 
         if !entries.is_null() {
@@ -498,12 +522,30 @@ impl Engine {
                 // instead of in the template keeps the working enumeration path.
                 // SAFETY: the pointer is WFP-owned and either null or a readable GUID, which is
                 // what `as_ref` checks for.
-                let ours = match unsafe { filter.providerKey.as_ref() } {
+                let belongs = match unsafe { filter.providerKey.as_ref() } {
                     Some(key) => *key == PROVIDER_KEY,
                     None => false,
                 };
 
-                if ours {
+                if belongs {
+                    // The rule's label lives in the description, not the display name, which is
+                    // the tool's own name on every filter we add. A filter whose description is
+                    // gone was edited by someone else after us; naming it is then impossible, and
+                    // an empty name is the honest answer rather than a guess.
+                    let label = if filter.displayData.description.is_null() {
+                        String::new()
+                    } else {
+                        // SAFETY: the pointer is not null, and WFP guarantees a terminated wide
+                        // string there.
+                        unsafe { filter.displayData.description.to_string() }.unwrap_or_default()
+                    };
+
+                    ours.push(RemovedFilter {
+                        name: label,
+                        deny: filter.action.r#type == FWP_ACTION_BLOCK,
+                    });
+
+                    // The key is needed again below, so keep it next to the label.
                     keys.push(filter.filterKey);
                 }
             }
@@ -515,21 +557,17 @@ impl Engine {
         // SAFETY: the enum handle is still open and belongs to this engine.
         unsafe { FwpmFilterDestroyEnumHandle0(self.handle, enum_handle) };
 
-        let mut removed = 0;
-
-        for key in keys {
+        for key in &keys {
             // SAFETY: the key came out of the store a few instructions ago, and deleting one
             // filter by key does not invalidate the other keys we collected.
-            let status = unsafe { FwpmFilterDeleteByKey0(self.handle, &key) };
+            let status = unsafe { FwpmFilterDeleteByKey0(self.handle, key) };
 
             if status != 0 {
                 bail!("FwpmFilterDeleteByKey0 failed with 0x{status:08X}");
             }
-
-            removed += 1;
         }
 
-        Ok(removed)
+        Ok(ours)
     }
 
     /// Install one rule as one filter per application per layer. Which layers that is depends on

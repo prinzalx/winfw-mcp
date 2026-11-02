@@ -372,10 +372,18 @@ pub struct Startup {
     pub(super) removed: usize,
     /// Filters the rules file describes.
     pub(super) installed: usize,
+    /// Rules the file gained while the tool was closed. Names only, and only as far as the store
+    /// can tell: an edit that keeps a rule's name, its action and its filter count leaves the
+    /// same trace as no edit at all.
+    pub(super) added: Vec<String>,
+    /// Rules whose name stayed and whose action or filter count did not.
+    pub(super) changed: Vec<String>,
+    /// Rules the file lost while the tool was closed.
+    pub(super) gone: Vec<String>,
     /// Why the store refused, when it did.
     pub(super) reason: Option<String>,
-    /// Whether the page has anything to say: the two counts differ. A first run, where the store
-    /// was empty, is news once; an unchanged restart is not.
+    /// Whether the page has anything to say: the counts differ, or a name is in one of the three
+    /// lists. A first run, where the store was empty, is news once; an unchanged restart is not.
     pub(super) differs: bool,
 }
 
@@ -387,8 +395,12 @@ impl Startup {
             ok: outcome.ok,
             removed: outcome.removed,
             installed: outcome.installed,
+            added: outcome.diff.added.clone(),
+            changed: outcome.diff.changed.clone(),
+            gone: outcome.diff.gone.clone(),
             reason: outcome.reason.clone(),
-            differs: outcome.ok && outcome.removed != outcome.installed,
+            differs: outcome.ok
+                && (outcome.removed != outcome.installed || !outcome.diff.is_empty()),
         }
     }
 
@@ -400,6 +412,9 @@ impl Startup {
             ok: false,
             removed: 0,
             installed: 0,
+            added: Vec::new(),
+            changed: Vec::new(),
+            gone: Vec::new(),
             reason: Some(reason),
             differs: false,
         }
@@ -413,6 +428,9 @@ impl Startup {
             ok: false,
             removed: 0,
             installed: 0,
+            added: Vec::new(),
+            changed: Vec::new(),
+            gone: Vec::new(),
             reason: None,
             differs: false,
         }
@@ -421,7 +439,7 @@ impl Startup {
 
 #[cfg(test)]
 mod tests {
-    use super::super::worker::{InventorySummary, StoreOutcome};
+    use super::super::worker::{InventorySummary, RuleDiff, StoreOutcome};
     use super::*;
 
     /// The tray's pause flips the flag and reports the new value, leaving the policy alone.
@@ -443,6 +461,7 @@ mod tests {
             ok: true,
             removed: 3,
             installed: 5,
+            diff: RuleDiff::default(),
             inventory: InventorySummary::default(),
             reason: None,
         };
@@ -469,5 +488,32 @@ mod tests {
             !Startup::unmeasured().differs,
             "a state that never rebuilt must say nothing",
         );
+    }
+
+    /// Equal counts are no longer the whole news. A rule that flipped its action while the tool
+    /// was closed leaves the counts alone, and only the named diff tells the user the store was
+    /// rebuilt from something different than they left.
+    #[test]
+    fn a_startup_rebuild_with_equal_counts_but_a_named_change_is_news_too() {
+        let outcome = StoreOutcome {
+            ok: true,
+            removed: 4,
+            installed: 4,
+            diff: RuleDiff {
+                added: Vec::new(),
+                changed: vec!["web server".to_owned()],
+                gone: Vec::new(),
+            },
+            inventory: InventorySummary::default(),
+            reason: None,
+        };
+
+        let startup = Startup::from_outcome(&outcome);
+
+        assert!(
+            startup.differs,
+            "a named change is news without a count change"
+        );
+        assert_eq!(startup.changed, ["web server".to_owned()]);
     }
 }
