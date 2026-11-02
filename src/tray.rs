@@ -382,18 +382,18 @@ fn open_browser() {
 
 /// The authority and the session token of a tray URL.
 ///
-/// The tray URL is what the browser gets — `http://127.0.0.1:8788/?token=…` — and a request the
+/// The tray URL is what the browser gets — `http://127.0.0.1:8788/#token=…` — and a request the
 /// tray makes itself needs exactly two things out of it: where to connect, and what to write with.
 /// `None` for a URL that carries no token, which is the second instance's plain URL rather than
 /// this process's.
 fn split_url(url: &str) -> Option<(&str, &str)> {
     let rest = url.trim().strip_prefix("http://")?;
 
-    let (authority, query) = rest.split_once('/')?;
-    let query = query.strip_prefix('?').unwrap_or(query);
-    let query = query.split('&').next().unwrap_or_default();
+    let (authority, fragment) = rest.split_once('/')?;
+    let fragment = fragment.strip_prefix('#').unwrap_or(fragment);
+    let fragment = fragment.split('&').next().unwrap_or_default();
 
-    let token = query
+    let token = fragment
         .strip_prefix("token=")
         .filter(|token| !token.is_empty())?;
 
@@ -609,11 +609,11 @@ fn wide(value: &str) -> Vec<u16> {
 /// The text of the start balloon: the address, without the token the tray opens the browser with.
 ///
 /// The token is thirty-odd characters the user did not ask for and cannot type, and a balloon is
-/// readable for a few seconds. The address alone is what PLAN.md section 1 wants shown, and the page
-/// reads its token from its own first response, so the shorter text loses nothing.
+/// readable for a few seconds. The address alone is what PLAN.md section 1 wants shown, and the
+/// page gets its token from the fragment of the URL, so the shorter text loses nothing.
 #[cfg(windows)]
 fn balloon_text(url: &str) -> String {
-    url.split_once('?')
+    url.split_once(['?', '#'])
         .map_or_else(|| url.to_owned(), |(head, _)| head.to_owned())
 }
 
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn the_start_balloon_names_the_address_and_not_the_token() {
         assert_eq!(
-            balloon_text("http://127.0.0.1:8788/?token=0f3a"),
+            balloon_text("http://127.0.0.1:8788/#token=0f3a"),
             "http://127.0.0.1:8788/"
         );
         assert_eq!(
@@ -674,11 +674,11 @@ mod tests {
     #[test]
     fn a_tray_url_yields_the_authority_and_the_token() {
         assert_eq!(
-            split_url("http://127.0.0.1:8788/?token=0f3a"),
+            split_url("http://127.0.0.1:8788/#token=0f3a"),
             Some(("127.0.0.1:8788", "0f3a"))
         );
         assert_eq!(
-            split_url("http://localhost:8788/?token=0f3a"),
+            split_url("http://localhost:8788/#token=0f3a"),
             Some(("localhost:8788", "0f3a"))
         );
     }
@@ -687,7 +687,7 @@ mod tests {
     fn a_tray_url_without_a_token_has_nothing_to_write_with() {
         assert_eq!(split_url("http://127.0.0.1:8788"), None);
         assert_eq!(split_url("http://127.0.0.1:8788/"), None);
-        assert_eq!(split_url("http://127.0.0.1:8788/?token="), None);
+        assert_eq!(split_url("http://127.0.0.1:8788/#token="), None);
     }
 
     #[cfg(windows)]

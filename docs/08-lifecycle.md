@@ -43,8 +43,8 @@ PLAN.md section 1: a balloon whose title is the tool's name and whose text is th
 listens on. It answers the only question a double-click raises — where is the page? — without opening
 a window, without waiting for anybody, and without asking the shell for anything the tray is not
 already asking for. The text is the address alone; the session token the tray opens the browser with
-is thirty characters the user did not ask for and cannot type, and the page reads its token from its
-own first response anyway. A balloon the shell refuses is a debug line rather than a failure,
+is thirty characters the user did not ask for and cannot type, and it travels in the fragment of that
+URL, where the balloon has no reason to show it. A balloon the shell refuses is a debug line rather than a failure,
 because the icon is in the notification area either way, and a startup that shows nothing at all is
 what PLAN.md section 1 was written against.
 

@@ -507,12 +507,6 @@ struct StateJson {
     monitor: MonitorJson,
     /// What the rebuild at startup found, so the page can say what changed while it was closed.
     startup: Startup,
-    /// The secret a writing request has to carry, so that the page the tray opened can post.
-    ///
-    /// It is in the answer of a route every page load makes, which is what lets a tab the human
-    /// typed the address into learn it without the tray. A page that reached us under another name
-    /// is refused by the `Host` check before it could read this.
-    token: String,
     /// Whether `rules.toml` on disk is not the file this process wrote.
     ///
     /// True for a hand edit made while the tool was closed as well as for one made a moment ago,
@@ -572,7 +566,6 @@ impl StateJson {
             detected,
             monitor: state.monitor(),
             startup: state.startup.clone(),
-            token: state.token.clone(),
             rules_changed: state.rules_changed_outside(),
             generation: state.rules_generation(),
             elevated: crate::elevated::is_elevated(),
@@ -714,7 +707,7 @@ mod tests {
 
     use crate::monitor::EventLog;
     use crate::server::Live;
-    use crate::server::testsupport::{connection, state, state_with};
+    use crate::server::testsupport::{TEST_TOKEN, connection, state, state_with};
 
     use super::*;
 
@@ -930,10 +923,11 @@ mod tests {
         );
     }
 
-    /// The page can only send the token back if the state carries it, which is how a second tab
-    /// that was opened without `?token=` still learns how it may write.
+    /// The state is a read, and a read is answered to anyone on loopback. Were the token in its
+    /// body, `curl` on the same machine could read the secret and then write whatever it liked,
+    /// which is exactly the escape the fragment handoff is meant to close.
     #[test]
-    fn the_state_endpoint_carries_the_session_token() {
+    fn the_state_endpoint_carries_no_session_token() {
         let server_state = state();
         let worker = WfpWorker::start_enforcing();
 
@@ -947,8 +941,12 @@ mod tests {
         let body = String::from_utf8_lossy(&response.body).into_owned();
 
         assert!(
-            body.contains(r#""token":"test-token""#),
-            "the page reads the token out of the state: {body}",
+            !body.contains(TEST_TOKEN),
+            "the secret is not in a body anyone may read: {body}",
+        );
+        assert!(
+            !body.contains("\"token\""),
+            "not even as a field named token: {body}",
         );
     }
 

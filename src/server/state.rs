@@ -50,8 +50,9 @@ pub struct AppState {
     pub(super) startup: Startup,
     /// The session token a writing request has to carry (PLAN.md section 11).
     ///
-    /// It lives here and nowhere else: no file, no log, no answer on `/mcp`. The browser learns it
-    /// from the URL the tray opened, or from the state body when a human typed the address.
+    /// It lives here and nowhere else: no file, no log, and — since 0.58.0 — no answer body. The
+    /// browser learns it from the fragment of the URL the tray opened, and a request that wants to
+    /// write carries it back in a header.
     pub(super) token: String,
     /// The contents of the rules file the tool wrote last, as a fingerprint.
     ///

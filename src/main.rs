@@ -36,6 +36,15 @@ use crate::config::{Policy, Settings};
 use crate::paths::DataPaths;
 use crate::rules::RuleFile;
 
+/// The URL the tray opens: the page, plus the session token in the fragment.
+///
+/// The fragment is the whole point. A query would arrive on the wire with the document request and
+/// end up in the access log of anything in between, and the token would be one `curl` away from
+/// any process of the same user.
+fn tray_url(url: &str, token: &str) -> String {
+    format!("{url}/#token={token}")
+}
+
 /// What the process should do with the live store.
 ///
 /// The two one-shot operations are the two the web UI exposes as well; `Serve` is the mode the
@@ -291,11 +300,11 @@ fn serve(
 
     let server = server::Server::bind(port, state, Arc::clone(&worker))?;
 
-    // The token rides in the URL the tray opens, which is the only way it reaches the browser
-    // without ever being written to a file. A second instance opens the plain URL and the page
-    // reads the token out of the first state body instead.
+    // The token rides to the browser in the fragment of the URL the tray opens. A fragment is
+    // never sent over the wire, so the secret appears in no request, no log and no response body:
+    // a process on the same machine that reads `GET /api/state` with curl still does not know it.
     let url = format!("http://{}", server.addr());
-    let tray_url = format!("{url}/?token={token}");
+    let tray_url = tray_url(&url, &token);
 
     info!(url = %url, version = %env!("CARGO_PKG_VERSION"), "web UI ready");
 
@@ -453,7 +462,7 @@ fn init_tracing(settings: &Settings, logfile: &std::path::Path) -> Option<LogFil
 
 #[cfg(test)]
 mod tests {
-    use super::Command;
+    use super::{Command, tray_url};
 
     /// The single flag decides what the process does to the live store, so an unknown one has to
     /// be an error rather than the default: applying filters nobody asked for is not a harmless
@@ -487,5 +496,19 @@ mod tests {
 
         let alone = Command::parse(&["--import".to_owned()]).expect_err("--import needs a file");
         assert!(alone.to_string().contains("--import"), "{alone}");
+    }
+
+    /// The token reaches the browser in the fragment and nowhere else, so the URL the tray opens
+    /// has to carry it after the `#` — everything before that is what the server is asked for.
+    #[test]
+    fn the_tray_url_carries_the_token_in_the_fragment() {
+        let url = tray_url("http://127.0.0.1:8788", "0f3a");
+
+        assert_eq!(url, "http://127.0.0.1:8788/#token=0f3a");
+        assert_eq!(
+            url.split('#').next().expect("a fragment separator"),
+            "http://127.0.0.1:8788/",
+            "the part a browser sends is the page alone",
+        );
     }
 }

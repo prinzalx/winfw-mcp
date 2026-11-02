@@ -217,6 +217,13 @@
         color: var(--muted);
         font-size: 0.85rem;
       }
+
+      /* A header switch is a span rather than a button, so it has no disabled state of its own.
+         Without the pointer events a tab that may not write cannot click its way past the hint. */
+      .toggle[aria-disabled="true"] {
+        opacity: 0.5;
+        pointer-events: none;
+      }
     </style>
   </head>
   <body>
@@ -232,6 +239,12 @@
           <span id="default-policy" class="toggle" title="click to toggle the default policy">allow</span>
           &middot; theme
           <span id="theme" class="toggle" title="click to cycle light, dark and auto">dark</span>
+          &middot;
+          <span
+            id="read-only"
+            title="this tab has no session token, so it reads but does not write"
+            hidden
+          >read only &middot; open from the tray icon to make changes</span>
         </div>
       </div>
       <div class="status" id="status"></div>
@@ -340,6 +353,11 @@
         }
         if (text !== undefined) {
           node.textContent = text;
+        }
+        // Covers the buttons the tables and the banner build at render time: a tab without a token
+        // offers no write at all, `token` included, which is settled before the first render.
+        if (tag === "button" && token === "") {
+          node.disabled = true;
         }
 
         return node;
@@ -868,8 +886,8 @@
           return;
         }
 
-        const text =
-          var text = "";
+        var text = "";
+
         if (monitor.state === "running") {
           text = "running, " + monitor.events + " events";
           if (monitor.last_event_ms) {
@@ -892,12 +910,6 @@
       }
 
       function apply(state) {
-        // A tab that was opened by typing the address has no token in the URL and learns it here,
-        // before any button can be pressed.
-        if (token === "" && state.token) {
-          token = state.token;
-        }
-
         rules = state.rules.rule;
         generation = state.generation;
         elevated = state.elevated;
@@ -935,10 +947,52 @@
         }
       }
 
-      // The token is the point of the URL the tray opened. A tab the human typed the address into
-      // has none and gets it from the first state body, which is read before any button can be
-      // pressed.
-      let token = new URLSearchParams(window.location.search).get("token") ?? "";
+      // The token arrives in the fragment of the URL the tray opens, and a fragment is never sent
+      // over the wire, so the secret is in no request, no log and no response body. It lives in
+      // this variable alone: no storage and no cookie, because a reload of the tab is not meant to
+      // keep a write right it can no longer account for.
+      let token = new URLSearchParams(window.location.hash.slice(1)).get("token") ?? "";
+
+      // Taken out of the address again at once, so the bar shows the page rather than a secret, and
+      // so a copy of the address does not hand the token to whoever receives it.
+      if (window.location.hash !== "") {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+
+      // Every control on the page that sends a writing request. A tab without a token can read the
+      // whole state but may not change it, and saying so before the first click is kinder than
+      // answering 401 after it. The buttons the tables build are handled where they are made.
+      const WRITE_CONTROLS = [
+        "add",
+        "apply",
+        "clear",
+        "export",
+        "import",
+        "restore",
+        "restore-file",
+        "quit",
+        "profile",
+        "profile-new",
+        "profile-rename",
+        "profile-delete",
+        "learn-mode",
+        "default-policy",
+        "protection",
+        "theme",
+      ];
+
+      WRITE_CONTROLS.forEach((id) => {
+        const node = el(id);
+
+        if (node.tagName === "BUTTON" || node.tagName === "SELECT") {
+          node.disabled = token === "";
+        } else {
+          // A header switch is a span, so it has no disabled state; see the aria-disabled rule.
+          node.setAttribute("aria-disabled", token === "" ? "true" : "false");
+        }
+      });
+
+      el("read-only").hidden = token !== "";
 
       // The version of the rule list this page last saw. A whole-list write names it, and a 409
       // means someone else wrote while this page was open.

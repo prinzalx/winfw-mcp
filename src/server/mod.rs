@@ -564,4 +564,23 @@ mod tests {
             "fell forward to {bound} from a busy {port}"
         );
     }
+
+    /// The token reaches the page in the fragment of the URL and in no answer body, so the page has
+    /// to read it out of the fragment and take it out of the address again. Were either of the two
+    /// missing, the write right would be lost the moment the tray URL is opened.
+    #[test]
+    fn the_page_reads_the_token_from_the_fragment_and_hides_it_again() {
+        assert!(
+            INDEX_HTML.contains("window.location.hash"),
+            "the page has to read the fragment it is opened on",
+        );
+        assert!(
+            INDEX_HTML.contains("history.replaceState"),
+            "and take it out of the address again",
+        );
+        assert!(
+            !INDEX_HTML.contains("state.token"),
+            "it must not read a token out of the state body any more",
+        );
+    }
 }

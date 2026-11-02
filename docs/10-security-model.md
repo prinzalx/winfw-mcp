@@ -27,9 +27,16 @@ what the rules are, and it cannot stop the process either, because `shutdown` wa
 ## The session token
 
 Sixteen random bytes as hex, from `getrandom`, made when the process starts. It lives in memory and
-nowhere else: not in `config.toml`, not in a file beside it, not in the log. The browser learns it
-from the URL the tray opens — `http://127.0.0.1:8788/?token=…` — and a tab whose address was typed
-by hand takes it from the first `/api/state` body.
+nowhere else: not in `config.toml`, not in a file beside it, not in the log, and — since 0.58.0 —
+in no answer body either. The tray opens the browser on `http://127.0.0.1:8788/#token=…`, and a
+fragment is never sent over the wire: the document request the server answers is plain `GET /`, the
+secret appears in no request line, and no response carries it back.
+
+A tab that has no fragment — an address typed by hand, or a reload after the page took the fragment
+out of the address bar again — can still read everything but cannot write. The page says so, keeps
+the write controls disabled, and points at the tray icon. A reload therefore loses the write right,
+which is a decision rather than an oversight: the token lives in one variable in the page and in no
+storage, no cookie and no file.
 
 A note on the fallback. If the operating system refuses to hand out randomness at all, the server
 continues with a fixed, well-known token and logs a warning. In that situation the token has stopped
@@ -91,10 +98,11 @@ profile with no stamp of its own is compared against the file as it was found.
 Being honest here matters more than sounding secure.
 
 - **A process running as the same user is not an adversary this model defeats.** It can read the
-  port, call `/api/state`, read the token out of the body, and write whatever it likes. It can also
-  edit `rules.toml` directly, which the fingerprint notices but does not prevent. Protecting against
-  that would mean the tool being the only writer, and a portable tool that owns a file in the user's
-  AppData cannot say that.
+  port, call `/api/state` and see everything the page shows. Since 0.58.0 it can no longer *learn*
+  the token that way — the state body does not carry it — so `curl` cannot write, and cannot even
+  shut the tool down, without being told the token out of band. A determined process of the same
+  user can still read the browser's memory or its command line. And anyone of that user can edit
+  `rules.toml` directly, which the fingerprint notices but does not prevent.
 - **The token is not a secret from the machine, only from another origin.** The page that holds it is
   the page we opened. A cross-site page cannot read our responses — no `Access-Control-Allow-Origin`
   header is sent at all — and a `fetch` that sets `content-type: application/json` on another origin

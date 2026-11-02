@@ -28,6 +28,8 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   request. The theme cycles `light -> dark -> auto`, where `auto` follows the operating system.
   This is not decoration: the choice is applied to the page in the same request and
   survives a reload, so a bright terminal and a dark browser stop fighting each other.
+  On a tab the tray did not open, the same line ends with *read only · open from the tray icon to
+  make changes*, because a tab without a session token can ask questions but cannot answer them.
 - **Rules** table: order, enabled flag, name, action, pattern, protocol, direction, port, remote
   address, comment, remove, share. The order column moves a rule up or down with the same effect the
   file's order has on the filters. Every field is edited in place and saved on change. Protocol and
@@ -87,7 +89,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | Route | Purpose |
 |---|---|
 | `GET /` | the page itself |
-| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, the session token, how often the rules file has been written, whether the process is elevated, and whether `rules.toml` changed outside the tool |
+| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, how often the rules file has been written, whether the process is elevated, and whether `rules.toml` changed outside the tool |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
 | `POST /api/settings` | change `learn_mode`, `default_policy`, `theme` or `log_level` at runtime; all four take effect at once |
@@ -136,10 +138,14 @@ reading from writing.
 | `Content-Type: application/json` | writing routes | **415** | a form or a `text/plain` body is what a cross-site request is allowed to send without asking first |
 | `x-winfw-token` equals the token issued at startup | writing routes | **401** | the browser holds the token; a process that never saw it may not write |
 
-The token is sixteen random bytes rendered as hex, made when the process starts, held in memory only,
-and never written to a file or to the log. It reaches the browser in the URL the tray opens
-(`http://127.0.0.1:8788/?token=…`); a tab whose address was typed by hand has no token and takes it
-from the first `/api/state` body, which is read before any button can be pressed.
+The state body does not carry the token: a read is answered to anyone on loopback, and a process that
+learned the secret from a body it could read anyway could hand itself a write. The token is sixteen
+random bytes rendered as hex, made when the process starts, held in memory only,
+and never written to a file or to the log. It reaches the browser in the fragment of the URL the
+tray opens (`http://127.0.0.1:8788/#token=…`), a fragment the browser never sends, and the page
+takes it out of the address bar again as soon as it has read it. A tab with no fragment — an address
+typed by hand, or a reload — reads but cannot write: the write controls are disabled and the header
+says *open from the tray icon to make changes* rather than letting the first click answer 401.
 
 `GET`, `HEAD` and `POST /mcp` are exempt from the token, the origin and the content type: a read
 cannot change anything, and the MCP endpoint is configured with a URL rather than with a session. The

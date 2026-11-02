@@ -869,9 +869,10 @@ unmeasured state saying so instead of claiming a diff.
 - The `Host` check applies to reads, and that is the DNS-rebinding defence rather than tidiness. A page
   whose domain resolved to `127.0.0.1` after it loaded can read the whole state of the firewall if
   nothing looks at the name it asked for.
-- The token is memory-only, which is a decision with a cost: a tab opened by typing the address has no
-  token in its URL and has to learn it from the first state body. That is why the state carries it, and
-  why a second instance opening the plain URL still works.
+- ~~The token is memory-only, which is a decision with a cost: a tab opened by typing the address has
+  no token in its URL and has to learn it from the first state body. That is why the state carries it,
+  and why a second instance opening the plain URL still works.~~ — changed in 0.58.0: the state stopped
+  carrying it, and the tray hands it over in a URL fragment. See §53.
 - One claim worth not overselling: a process running as the same user can read the token from
   `/api/state` and write anything. The guard defeats a page that is not ours, not an attacker with the
   account. The fingerprint on `rules.toml` is what addresses the file being edited behind our back, and
@@ -1512,3 +1513,42 @@ of §3.7 that named a dependency the plan listed but the build did not use.
 - Not built: writing XML back out, an import button on the page, and a merge mode. `--import` replaces
   the rule file of the active profile and exits without touching the live store, so the person looks
   at the result on the page and applies it in their own time. (2026-11-02)
+
+## 53. The token leaves the state body round notes
+
+Release 0.58.0 closes §27's open end: `/api/state` is a read, a read is answered to anyone on
+loopback, and a secret handed out by a route anyone may read is one `curl` away from any process of
+the same user. That is exactly the agent that builds a tool and then opens its own gate.
+
+- The tray now opens `http://127.0.0.1:8788/#token=…`. A fragment is never put on the wire, so the
+  document request the server answers is plain `GET /`, and the secret appears in no request line,
+  no log line and no response body. Verified live: the body of `GET /api/state` holds no field named
+  `token` and none of its value, and a `POST /api/shutdown` without a token is answered 401.
+- The page reads the fragment, keeps the token in one variable, and removes the fragment again with
+  `history.replaceState`, so the address bar shows the page rather than the secret. No storage, no
+  cookie: a reload loses the write right, and that is the accepted cost of holding nothing on disk.
+- A tab without a token reads but does not write. Every control that sends a writing request is
+  built disabled — the buttons the tables make included — and the header ends with *read only · open
+  from the tray icon to make changes*, so the situation is said before the first click rather than
+  answered with a 401 after it. The header switches are spans, which have no disabled state, so they
+  carry `aria-disabled` and a rule that takes away their pointer events.
+- **The cost, stated plainly:** a script can no longer write at all. `curl` reads the state, cannot
+  learn the token from it, and therefore cannot call `/api/shutdown` either; stopping the tool from a
+  script that is not the tray means knowing the token out of band. Measured during this round with
+  the test server up: `curl -X POST /api/shutdown` answered 401 and the process stayed up.
+- Found on the way, and worth more than the change itself: **the page's script has not parsed since
+  `bbec5ea` ("Stamp the feed with when it last spoke", the release after 0.45.0).** That commit turned
+  a ternary into an `if` chain and left the original `const text =` line standing above the new
+  `var text = "";`, which is not JavaScript. Because the tests never load the page and the Rust side
+  answered correctly, nothing noticed: the static HTML rendered, so the page *looked* alive while no
+  script ran. `node --check` on the extracted script is now part of how this is verified, and a test
+  in `src/server/mod.rs` asserts the page reads the fragment and no longer reads `state.token`.
+- Not done, and deliberately: a token in a query parameter would also have worked and would survive a
+  reload, but it arrives on the wire, so the log of anything between the browser and us would carry
+  it. The debug switch that shows the raw request line is still the only place a fragment-less
+  request can be seen, and it is off by default.
+- One thing this round did **not** settle, and it should be said: the page is only checked by
+  `node --check` on the script extracted from it, which is a habit rather than a test. A broken page
+  sat unnoticed for twelve releases because the Rust side kept answering correctly and the static HTML
+  kept rendering. The route tests prove the server; nothing proves the page beyond the fact that it
+  parses. (2026-11-02)
