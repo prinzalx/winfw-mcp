@@ -583,4 +583,24 @@ mod tests {
             "it must not read a token out of the state body any more",
         );
     }
+
+    #[test]
+    fn the_page_names_the_default_policy_in_the_header() {
+        assert!(
+            INDEX_HTML.contains("id=\"policy-note\""),
+            "the policy has to have a place of its own in the header, not only in the settings",
+        );
+        assert!(
+            INDEX_HTML.contains("Programs without a rule are blocked"),
+            "deny has to be explained in plain text",
+        );
+        assert!(
+            INDEX_HTML.contains("they only appear in the Detected list"),
+            "and allow has to be explained as well",
+        );
+        assert!(
+            INDEX_HTML.contains("Unknown programs are blocked"),
+            "an empty rules list under deny has to warn about it",
+        );
+    }
 }

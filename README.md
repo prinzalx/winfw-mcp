@@ -73,25 +73,24 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.60.0**: a wildcard pattern that matches more applications than the cap of
-32 no longer stops matching in silence. The log names the rule, the pattern, the number of matches
-and the number installed, `/api/state` reports both numbers for every affected rule, and the page
-shows them under the pattern box — *pattern has 42 matches, only 32 installed*. Before it,
+The current release is **0.61.0**: the tool now starts as a firewall. `default_policy` defaults to
+`deny`, so an application no ALLOW rule mentions cannot connect, outbound or inbound, and the policy
+is stated in the page header instead of hiding in the settings — *Programs without a rule are
+blocked*. Loopback and the IPv6 base functions stay reachable, and Pause protection remains the
+not-a-firewall switch for anyone who locks themselves out. Before it,
 **0.59.0** ended a second start quietly: no browser, no token exchange, one warning in the log and a
 non-zero status. Before it, **0.58.0** moved the session token out of `/api/state` and into the URL
 fragment the tray opens, so a local process can no longer read the right to write off the state body
 with `curl`. Before those, **0.57.0** made a profile written by the C original readable: `--import
-<file>` takes the XML simplewall exports, turns the items of its two rule sections into rules of
-this tool, and replaces the rule file of the active profile with them; nothing reaches the live
-store, so the result is looked at on the page before anything is installed. **0.56.0**
+<file>` takes the XML simplewall exports and replaces the rule file of the active profile with
+them; nothing reaches the live store, so the result is looked at on the page first. **0.56.0**
 let a rule name a span of addresses — `remote` took one address or one network, and a network
 cannot cover nine hosts without also covering the fifteen around them, so `10.0.0.1-10.0.0.9` is
 now written, stored, shown and installed as a range condition. Before it, **0.55.0** made the
 Detected list follow the profile: an entry is a question about the rules that are live, so each
 profile keeps its own list, while the set of applications a wildcard expands against stays shared,
 because that is a fact about the machine. Before it, **0.54.0** named and tested the decision that
-tells the tool whether the shell granted an elevated restart, and **0.53.0** corrected two places
-where the documentation had drifted from the code. Earlier changes of behaviour: a rule learned to
+tells the tool whether the shell granted an elevated restart. Earlier changes of behaviour: a rule learned to
 name any transport (`protocol` takes a number from 1 to 255, which is how a rule about GRE (47) or
 ESP (50) is written, 0.51.0), a drive mounted after the tool started became findable (a lookup that
 misses re-asks the system for the drive-to-device table and retries, 0.50.0), an unelevated run

@@ -43,7 +43,7 @@ the result is never more than two files.
 | `log_level` | default tracing level; `RUST_LOG` overrides it for a single run, and a change over the API takes effect at once |
 | `debug_show_loopback` | `false` by default. Connections that never left the machine are dropped from the event feed; `true` keeps them for a diagnosis. Read at startup, so changing it takes a restart (see [WFP internals](07-wfp-internals.md#the-event-stream)) |
 | `learn_mode` | whether learning mode collects applications; off means the Detected list stays empty while the connection log keeps filling |
-| `default_policy` | `allow` (default) or `deny`. `deny` puts an unconditional block at the bottom of the four authorization layers, so an application no rule mentions is denied rather than allowed; see [WFP internals](07-wfp-internals.md#the-default-deny-base) |
+| `default_policy` | `deny` (default) or `allow`. `deny` puts an unconditional block at the bottom of the four authorization layers, so an application no rule mentions is denied rather than allowed; see [WFP internals](07-wfp-internals.md#the-default-deny-base) |
 | `volatile_filters` | `false` by default. `true` makes the server take our filters out of the store when it stops, so the tool is a firewall only while it runs; `false` keeps them installed after a quit (see [lifecycle](08-lifecycle.md#stopping)). Read at startup, so changing it takes a restart |
 | `theme` | `light`, `dark` or `auto`, where `auto` follows the operating system; the page applies it live |
 | `mcp_writes` | accepted but without effect: the MCP endpoint is read-only. An older `config.toml` still loads, and the next save drops the key |

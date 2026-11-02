@@ -25,6 +25,7 @@ These are not missing features; they are behaviour that differs from what the co
 | B2 | **`learn_mode` is inert.** The setting is read, stored and reported, but the monitor collects unconditionally, so `learn_mode = false` still fills the Detected list. **Fixed in 0.11.2** — the monitor now takes the setting and only offers events to the detector while learning is on; the connection log still fills either way. Verified with an elevated run: off → 21 events and an empty Detected list, on → the same traffic produces Detected entries. | fixed; `src/monitor.rs` (`Sink::learning`, gate in `on_event`), `src/main.rs` (`serve`) |
 | B3 | **A port conflict terminates the app.** `Server::bind` returned an error and `--serve` propagated it, while PLAN.md §9 asked for a fallback so a conflict does not kill the tray app. **Fixed in 0.11.3** — `Server::bind` now walks forward to the next free port of eight, warns in the log, and the tray opens the port it actually got. | fixed; `src/server.rs` (`Server::bind`, `PORT_ATTEMPTS`) |
 | B4 | **A wildcard rule silently missed applications until something wrote.** Expansion was rebuilt only when a write happened, from the applications the detector had seen; a one-shot run expanded against nothing. **Fixed in 0.11.4** — seen applications are recorded whatever `learn_mode` says, a newly seen application under an enabled pattern triggers a rebuild, the store is rebuilt from the rules at startup, and a one-shot `--apply` expands against the seen list on disk. | fixed; `src/learn.rs` (`seen`, `note_app`), `src/monitor.rs` (`on_event`), `src/main.rs` (`serve`, `sync_store`) |
+| B5 | **A rules file that cannot be parsed is replaced by its backup without a trace in the log.** `RuleFile::load_or_create` warns about the fallback, but the rules are read before `init_tracing` installs the subscriber, so the warning is dropped and the page then shows the backup's rules while the file on disk holds something else. Found while testing 0.61.0 with a hand-edited `rules.toml` whose Windows path was written with a single backslash, which TOML reads as an escape. | `src/main.rs` (load order), `src/rules.rs` (`load_or_create`) |
 
 There was also an open question behind B1: stopping the tool from the browser needed a route that
 did not exist, so stopping meant `taskkill`. It exists since 0.11.0 as `POST /api/shutdown`, is
@@ -240,8 +241,10 @@ this section comes from there. [verified that the file exists]
 The reference **is** default-deny, by base filters rather than by disabling anything: an unconditioned
 `FWP_ACTION_BLOCK` at `FWW_LOWEST` on the connect and the recv/accept layers (`wfp.c:1827-1838`).
 [verified] Since 0.12.0 our tool can install the same shape through `default_policy = "deny"` in
-`config.toml`; the default stays `allow`, where an application we say nothing about falls through to
-whatever the machine's other filters decide — in practice the Windows Firewall, which still runs.
+`config.toml`; since 0.61.0 it is also the **default**, so an application no ALLOW rule mentions is
+blocked, which is the behaviour of the reference. `allow` remains selectable in the file and on the
+page, and under it traffic we say nothing about falls through to whatever the machine's other filters
+decide — in practice the Windows Firewall, which still runs.
 
 Installed with the policy, and therefore no longer missing:
 
@@ -252,8 +255,8 @@ Installed with the policy, and therefore no longer missing:
 
 Still open, in descending order of how much they are worth:
 
-- **A setting the web UI can change.** The policy is read from `config.toml` at startup only; see the
-  settings write path in §3.2.
+- ~~A setting the web UI can change.~~ Closed: the header of the page switches the policy, writes
+  `config.toml` and rebuilds the store in one request.
 - **Stealth-mode filters** against port scanners (`wfp.c:1691-1741`).
 - **Boot-time filters** with `FWPM_FILTER_FLAG_BOOTTIME`, enforced before the BFE service starts
   (`wfp.c:1743-1787`). [verified]
@@ -1619,3 +1622,41 @@ changed is that a pattern over it says so in three places.
   `matches=42 installed=32` and reported the same in the state.
 - Two tests, 236 green, and the clippy count is back to the four groups it was, one of which the
   first draft of this change added and then removed by using `clamp`. (2026-11-02)
+
+## 57. Default deny became the default (2026-11-02)
+
+Point 4 of the five corrections. The order was the one the brief asked for: measure live first, flip
+afterwards.
+
+- Live, elevated, with `default_policy = "deny"`:
+  - **(a)** the page and `/api/health` stayed reachable, so a deny does not lock the UI out.
+  - **(b)** `C:/Windows/System32/curl.exe` with no rule was blocked, and a fresh entry appeared at the
+    top of the Detected list with `allowed = false` and `kind = "blocked"`; the connection table
+    attributed it to `base#block`.
+  - **(d)** an ALLOW rule for that application plus a rebuild let it connect again.
+  - **(e)** taking our filters out of the store restored connectivity, so the not-a-firewall switch
+    works under deny too.
+  - **(c) inbound was not verifiable on this host.** The base permit keys on
+    `FWP_CONDITION_FLAG_IS_LOOPBACK`, and a connection to the machine's own LAN address is flagged
+    loopback by WFP here, so a local client cannot tell "accepted on the LAN" apart from "accepted
+    because loopback". The evidence for the inbound side is the code plus the unit test that asserts a
+    `base#block` filter on each of the four authorization layers.
+- **The earlier "DNS does not resolve under deny" was the client, not the resolver.** With
+  `svchost.exe` allowed, a client that has a rule resolved a name and connected while a second client
+  without a rule was blocked in the same deny window. Nothing to fix; the security chapter now states
+  that a blocked client reports a timeout rather than a refusal.
+- `Settings::default()` is `Deny`, a `default_policy` stored in `config.toml` still wins, and the page
+  states the policy in the header in plain text for both values. An empty rules list under deny says so
+  in the rules table, because an empty table under deny looks like a dead internet rather than like a
+  decision.
+- A live incident worth writing down: a deny window ran while the user was at the machine, and nothing
+  outside the base permits worked until a rule existed. That is the feature, but it is the first time a
+  person met it, which is why the header line and the empty-list hint belong to this release rather
+  than to a later one.
+- Found on the way and entered as **B5**: the rules file is read before the tracing subscriber exists,
+  so the "read the backup instead" warning of a file that does not parse is lost, and the page then
+  shows rules that are not the ones in the file on disk. Found by a hand-edited file whose Windows path
+  was written with a single backslash, which TOML reads as an escape.
+- Two tests (the default value, the policy line on the page), 238 green, `cargo fmt --check` clean,
+  clippy still at its four warning groups. Docs: the config table, the rules chapter, the WFP chapter,
+  and a new section in the security model naming what default deny leaves open. (2026-11-02)

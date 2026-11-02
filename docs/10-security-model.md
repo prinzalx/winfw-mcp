@@ -123,6 +123,28 @@ Being honest here matters more than sounding secure.
   between an elevated and an unelevated run is about the live store, and it is described in
   [WFP internals](07-wfp-internals.md#reading-the-store-needs-elevation).
 
+## What default deny leaves open
+
+Since 0.61.0 the tool starts with `default_policy = "deny"`, which is what makes it a firewall rather
+than a logger: an application no ALLOW rule mentions cannot connect. Three limits of that belong
+here, because each of them has surprised someone.
+
+- **Applications are matched by path alone.** There is no service match and no package match, so
+  everything hosted by `svchost.exe` is one application to the firewall. DNS, DHCP and time sync run
+  there, and without a permit for `svchost.exe` no name resolves at all: the connection a blocked
+  client reports is a timeout, not a refusal. The price of the permit is the other direction: with
+  `svchost.exe` allowed, every service may use it.
+- **An interpreter is one application.** A rule for `python.exe`, `node.exe` or `powershell.exe`
+  permits every script that runs through it, whatever the script reaches for. The manual recommends
+  narrowing such a rule with a remote address or a port.
+- **Loopback is permitted by the base filters, not by a rule.** A connection that never left the
+  machine is allowed under deny, which is why the page still loads while everything external is
+  blocked.
+
+Getting out of a deny that is too tight does not need a rule edit: **Pause protection** in the tray or
+on the page takes our filters out of the store, which restores connectivity, and putting them back
+re-applies the policy.
+
 ## Where an agent can still get out
 
 An agent that talks MCP can read the rules, the detected list, the recent connections and the share

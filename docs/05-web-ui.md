@@ -21,7 +21,11 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   rules file with it. Renaming or deleting the unnamed `default` is refused: it is `rules.toml`
   itself rather than a file in `profiles\`.
 - **Header** line: address, protection, learning mode, default policy, theme. All four are
-  underlined because they are clickable. Protection reads **on** or **paused** and asks the server
+  underlined because they are clickable. Under it a single line names what the default policy means
+  for a program the rules say nothing about: under `deny` *Programs without a rule are blocked. Loopback
+  and the IPv6 base functions stay reachable.*, under `allow` that they may go out and only appear in
+  the Detected list. The policy belongs in the header and not only in the settings because it decides
+  whether an empty rules table is a fresh install or a closed firewall. Protection reads **on** or **paused** and asks the server
   to put our filters into the store or take them out, which is the pause the
   [lifecycle chapter](08-lifecycle.md#pausing-protection) describes. Learning mode and the default
   policy switch to the other value, which writes `config.toml` and rebuilds the store in the same

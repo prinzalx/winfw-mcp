@@ -54,13 +54,14 @@ pub struct Settings {
     ///
     /// Like `port` it is read once at startup, and changing it takes a restart.
     pub debug_show_loopback: bool,
-    /// What an application that no rule mentions should get: the Windows default (`allow`) or a
-    /// firewall (`deny`).
+    /// What an application that no rule mentions should get: a firewall (`deny`, the default) or
+    /// the Windows default (`allow`).
     ///
-    /// `deny` is the simplewall reading: every connection is blocked at the lowest weight and the
-    /// rules, the loopback permits and the IPv6 plumbing permits are what lets traffic through
-    /// again (BACKLOG section 4.1). `allow` keeps the machine exactly as it was, which is the
-    /// safe default for a tool that has just been installed next to a running Windows Firewall.
+    /// `deny` is the simplewall reading and the reason this tool exists: every connection is
+    /// blocked at the lowest weight and the rules, the loopback permits and the IPv6 plumbing
+    /// permits are what lets traffic through again (BACKLOG section 4.1). It is the default, which
+    /// means a first run blocks applications it has no rule for; `allow` keeps the machine exactly
+    /// as it was and is what a user who only wants a rule list next to the Windows Firewall picks.
     pub default_policy: Policy,
 }
 
@@ -69,9 +70,10 @@ pub struct Settings {
 #[serde(rename_all = "lowercase")]
 pub enum Policy {
     /// Install no base filter; whatever the rest of the machine decides, decides.
-    #[default]
     Allow,
-    /// Block everything at the lowest weight, so only rules and permits let traffic through.
+    /// Block everything at the lowest weight, so only rules and permits let traffic through. The
+    /// default: an application no rule mentions does not get to connect.
+    #[default]
     Deny,
 }
 
@@ -249,6 +251,30 @@ mod tests {
 
         assert!(path.is_file(), "the file should exist after the first run");
         assert_eq!(settings, Settings::default());
+    }
+
+    /// The whole point of the tool is on by default: an application no rule mentions does not get
+    /// to connect. A `config.toml` that names `allow` still wins, because a stored value is a
+    /// decision somebody made, but a first run and a file without the key both mean deny.
+    #[test]
+    fn the_default_policy_is_deny_and_a_stored_allow_is_read_back() {
+        assert_eq!(
+            Settings::default().default_policy,
+            Policy::Deny,
+            "a program without a rule is blocked by default",
+        );
+
+        let path = crate::testutil::scratch_dir("config-policy-allow").join("config.toml");
+
+        std::fs::write(&path, "default_policy = \"allow\"\n").expect("write the config");
+
+        assert_eq!(
+            Settings::load_or_create(&path)
+                .expect("load")
+                .default_policy,
+            Policy::Allow,
+            "a stored allow is honoured rather than overridden by the default",
+        );
     }
 
     /// The switch is off unless the file says otherwise, so a run shows external traffic by

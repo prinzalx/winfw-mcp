@@ -15,6 +15,10 @@ allow or deny a connection too.
 - **Portable.** No service, no installer, no registry state. One executable.
 - **Self-contained.** All settings, rules and logs live in `%APPDATA%\winfw-mcp`.
 - **English only.** Code, identifiers, UI strings and documentation.
+- **Distrustful from the first run.** The default policy is `deny`: a program no ALLOW rule mentions
+  cannot connect, so a fresh install looks like an empty rules table and a blocked internet until the
+  first entry of the Detected list is allowed. Loopback stays reachable, which is why the page still
+  loads. `allow` remains one click in the header away for anyone who prefers to watch first.
 
 ## Requirements
 

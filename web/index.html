@@ -251,6 +251,7 @@
             hidden
           >read only &middot; open from the tray icon to make changes</span>
         </div>
+        <div class="sub" id="policy-note"></div>
       </div>
       <div class="status" id="status"></div>
     </header>
@@ -344,6 +345,9 @@
       let detected = [];
       let learnMode = false;
       let protection = true;
+      // `allow` or `deny`, which the header spells out in a sentence because a firewall whose
+      // default is not obvious is a firewall that surprises its user.
+      let defaultPolicy = "deny";
       let source = null;
       let detectedTimer = null;
 
@@ -520,7 +524,15 @@
         if (rules.length === 0) {
           const row = element("tr");
 
-          row.appendChild(element("td", "empty", "No rules yet. Use “Add rule”."));
+          row.appendChild(
+            element(
+              "td",
+              "empty",
+              defaultPolicy === "deny"
+                ? "No rules yet. Unknown programs are blocked; allow them from the Detected list."
+                : "No rules yet. Use “Add rule”.",
+            ),
+          );
           body.appendChild(row);
 
           return;
@@ -949,7 +961,12 @@
         el("addr").textContent = location.host;
         el("protection").textContent = state.protection ? "on" : "paused";
         el("learn-mode").textContent = state.learn_mode ? "on" : "off";
+        defaultPolicy = state.default_policy;
         el("default-policy").textContent = state.default_policy;
+        el("policy-note").textContent =
+          state.default_policy === "deny"
+            ? "Programs without a rule are blocked. Loopback and the IPv6 base functions stay reachable."
+            : "Programs without a rule may go out; they only appear in the Detected list.";
         el("theme").textContent = state.theme;
         renderTheme(state.theme);
         renderRules();

@@ -231,9 +231,11 @@ owns the engine handle; request threads hand their work to it over a channel and
 ## What the reference does that we do not
 
 The C original always runs default-deny: base filters at the bottom of the store, plus explicit
-permits for loopback and ICMPv6 neighbour discovery so the machine stays reachable. Ours installs
-the same shape, but only when `default_policy = "deny"` is asked for; the default remains the friendlier
-`allow`, where traffic no rule mentions is left to the rest of the machine.
+permits for loopback and ICMPv6 neighbour discovery so the machine stays reachable. Since 0.61.0
+ours runs the same shape out of the box: `default_policy` defaults to `deny`, so an application no
+rule mentions cannot connect until the human allows it from the Detected list. `allow` remains
+selectable in `config.toml` and on the page, where traffic no rule mentions is left to the rest of
+the machine.
 
 That gap, and the other differences found while comparing, are collected in the
 [backlog](../BACKLOG.md).

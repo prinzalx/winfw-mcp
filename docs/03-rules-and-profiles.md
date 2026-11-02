@@ -127,8 +127,8 @@ are installed in file order.
 
 An application that appears in neither list is not allowed by us: the rules decide the applications
 they mention. With `default_policy = "deny"` that is enforced literally, down to a base block filter
-at the bottom of the store; with the default `allow` traffic no rule mentions is left to the rest of
-the machine. The base filters behind this are in
+at the bottom of the store; with `allow` selected in `config.toml` traffic no rule mentions is left
+to the rest of the machine. The base filters behind this are in
 [WFP internals](07-wfp-internals.md#the-default-deny-base).
 
 ## Wildcards
