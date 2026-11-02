@@ -43,7 +43,12 @@ pub struct Report {
 ///
 /// Repeated exports overwrite one another on purpose: the directory mirrors the current state
 /// rather than acting as a history, and the user copies it out whenever they want a snapshot.
-pub fn run(paths: &DataPaths, area: Area) -> Result<Report> {
+///
+/// A rules, profiles or all export also writes `profile.txt`, which names the profile the rules
+/// came from. An unnamed profile is written as `default`, the same name the UI shows, so a copy
+/// of the export dir can never be mistaken for the rules of some other profile. An export of only
+/// the config or the Detected list has no profile to name and writes no such file.
+pub fn run(paths: &DataPaths, area: Area, profile: &str) -> Result<Report> {
     std::fs::create_dir_all(&paths.export)
         .with_context(|| format!("create directory {}", paths.export.display()))?;
 
@@ -63,6 +68,19 @@ pub fn run(paths: &DataPaths, area: Area) -> Result<Report> {
 
     if matches!(area, Area::Profiles | Area::All) {
         many(&paths.profiles, &paths.export.join("profiles"), &mut files)?;
+    }
+
+    // Last, so `files` lists the data before the note about where it came from.
+    if matches!(area, Area::Rules | Area::Profiles | Area::All) {
+        let name = if profile.is_empty() {
+            "default"
+        } else {
+            profile
+        };
+        let file = paths.export.join("profile.txt");
+
+        store::write_atomic(&file, format!("{name}\n").as_bytes())?;
+        files.push(file.display().to_string());
     }
 
     Ok(Report {
@@ -178,9 +196,9 @@ mod tests {
         std::fs::write(&paths.rules, b"[rules]\n").expect("rules");
         std::fs::write(&paths.config, b"port = 8788\n").expect("config");
 
-        let report = run(&paths, Area::All).expect("export");
+        let report = run(&paths, Area::All, "").expect("export");
 
-        assert_eq!(report.files.len(), 2, "the Detected list does not exist");
+        assert_eq!(report.files.len(), 3, "the Detected list does not exist");
         assert!(paths.export.join("rules.toml").is_file());
         assert!(paths.export.join("config.toml").is_file());
         assert!(!paths.export.join("learn.json").is_file());
@@ -194,9 +212,9 @@ mod tests {
         std::fs::write(paths.profile_file("work"), b"[rules]\n").expect("work profile");
         std::fs::write(paths.profile_file("home"), b"[rules]\n").expect("home profile");
 
-        let report = run(&paths, Area::All).expect("export");
+        let report = run(&paths, Area::All, "").expect("export");
 
-        assert_eq!(report.files.len(), 2, "only the profiles are on disk");
+        assert_eq!(report.files.len(), 3, "only the profiles are on disk");
         assert!(paths.export.join("profiles").join("home.toml").is_file());
         assert!(paths.export.join("profiles").join("work.toml").is_file());
     }
@@ -209,9 +227,9 @@ mod tests {
         std::fs::write(&paths.rules, b"[rules]\n").expect("rules");
         std::fs::write(paths.profile_file("work"), b"[rules]\n").expect("work profile");
 
-        let report = run(&paths, Area::Profiles).expect("export");
+        let report = run(&paths, Area::Profiles, "work").expect("export");
 
-        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files.len(), 2, "the profile name file is added");
         assert_eq!(
             report.files[0],
             paths
@@ -229,9 +247,13 @@ mod tests {
         let paths = DataPaths::under(crate::testutil::scratch_dir("export-profiles-empty"));
         paths.ensure().expect("ensure");
 
-        let report = run(&paths, Area::Profiles).expect("export");
+        let report = run(&paths, Area::Profiles, "").expect("export");
 
-        assert!(report.files.is_empty());
+        assert_eq!(report.files.len(), 1, "only the profile name is written");
+        assert_eq!(
+            std::fs::read_to_string(paths.export.join("profile.txt")).expect("profile name"),
+            "default\n"
+        );
         assert!(!paths.export.join("profiles").exists());
     }
 
@@ -243,9 +265,37 @@ mod tests {
         std::fs::write(&paths.rules, b"[rules]\n").expect("rules");
         std::fs::write(&paths.config, b"port = 8788\n").expect("config");
 
-        let report = run(&paths, Area::Rules).expect("export");
+        let report = run(&paths, Area::Rules, "").expect("export");
+
+        assert_eq!(report.files.len(), 2, "the rules file and the profile name");
+        assert!(!paths.export.join("config.toml").is_file());
+    }
+
+    #[test]
+    fn an_export_names_the_profile_it_exported() {
+        let paths = DataPaths::under(crate::testutil::scratch_dir("export-profile-name"));
+        paths.ensure().expect("ensure");
+
+        std::fs::write(&paths.rules, b"[rules]\n").expect("rules");
+
+        run(&paths, Area::Rules, "work").expect("export");
+
+        assert_eq!(
+            std::fs::read_to_string(paths.export.join("profile.txt")).expect("profile name"),
+            "work\n"
+        );
+    }
+
+    #[test]
+    fn an_export_of_the_config_area_names_no_profile() {
+        let paths = DataPaths::under(crate::testutil::scratch_dir("export-config-only"));
+        paths.ensure().expect("ensure");
+
+        std::fs::write(&paths.config, b"port = 8788\n").expect("config");
+
+        let report = run(&paths, Area::Config, "work").expect("export");
 
         assert_eq!(report.files.len(), 1);
-        assert!(!paths.export.join("config.toml").is_file());
+        assert!(!paths.export.join("profile.txt").exists());
     }
 }

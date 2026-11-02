@@ -73,7 +73,9 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.43.0**. The firewall can be paused: a header switch on the page and
+The current release is **0.44.0**. An export now names the profile its rules came from: a rules,
+profiles or all export writes a one-line `profile.txt` beside the copied files, so a backup
+directory explains itself. The firewall can be paused — a header switch on the page and
 `Pause protection` in the tray menu take our filters out of the store and put them back, without
 writing a setting and without waiting for a restart. The flag lives in the worker that talks to the
 store, so a rule saved while the firewall is paused stays paused. A rule can carry a `comment`, and

@@ -90,7 +90,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | `POST /api/clear` | remove our filters from the store |
 | `POST /api/protection` | pause or resume: an empty body flips, `{"enabled":true}` asks for one of the two |
 | `POST /api/shutdown` | stop the server, which ends the process; the filters stay installed |
-| `POST /api/export` | copy the rules, the config, the Detected list and the profiles into `export\` |
+| `POST /api/export` | copy the rules, the config, the Detected list and the profiles into `export\`, and name the active profile in `profile.txt` |
 | `POST /api/rules/share` | one rule as a Base64 string, for copy and paste |
 | `POST /api/rules/import` | append the rule a Base64 string carries |
 | `POST /api/rules/replace` | replace the whole rule list with the text of a rules file: the restore half of an export |
@@ -138,7 +138,10 @@ Export answers which files it copied and where, which is the manual backup path:
 copied into `export\` on demand. The profiles come along too, into
 `export\profiles\` rather than next to `rules.toml`, because a set of equal files is impossible to
 tell apart in a flat listing; a profiles directory that is still empty exports nothing and leaves no
-directory behind. Import has two directions. A share string still appends the one
+directory behind. An export of the rules, the profiles or everything also writes `profile.txt`, a
+one-line note naming the profile the rules came from; the unnamed profile is written as `default`,
+the same name the page shows. An export of only the config or the Detected list has no profile to
+name and writes no such file. Import has two directions. A share string still appends the one
 rule it carries rather than replacing anything, so pasting cannot silently discard a rule set. A
 whole file replaces the list: `Restore` on the page reads the chosen file in the browser and posts
 its text. The MCP endpoint once offered the same thing as `rules.import`, which is gone

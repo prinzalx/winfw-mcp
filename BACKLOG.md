@@ -1097,7 +1097,35 @@ Nothing was opened by this round. Two things are worth writing down now that the
   machine whose firewall has been paused for a week looks like a machine whose firewall works. A
   tray tooltip, a second icon and a banner are all available; none of them is obviously right, so
   this waits for somebody to be annoyed by it.
-- **The export does not name the profile it came from.** `export\` holds `rules.toml`, `config.toml`,
-  `detected.json` and `profiles\`, and after a while nobody can say which profile a given directory
-  belongs to. A `profile.txt` beside them, or the active name inside a single manifest, would make an
-  exported directory self-describing. Not a bug: nothing reads the directory back except a human.
+- ~~**The export does not name the profile it came from.**~~ — closed in 0.44.0. `export\` held
+  `rules.toml`, `config.toml`, `learn.json` and `profiles\`, and after a while nobody could say
+  which profile a given directory belonged to. A rules, profiles or all export now also writes
+  `profile.txt` naming the active profile, the unnamed one written as `default`. Nothing reads the
+  directory back except a human, so this stays a note rather than a check.
+
+## 37. Export profile round notes
+
+Released in **0.44.0**. `export::run` took a third argument, the active profile name, and a rules,
+profiles or all export writes it to `export\profile.txt`. The caller is the export route, which
+already knew the name.
+
+The decisions the round made:
+
+- **`default` for the unnamed profile.** The rules of no named profile live in `rules.toml` and the
+  page calls them `default`, so the file says the same thing the user saw. An empty name would have
+  been accurate for a config file and useless for a human holding the export.
+- **The file is written, not copied.** Unlike the other exports it has no source on disk to read, and
+  writing it atomically like everything else keeps a half-written note from outliving a crash.
+- **Pushed last into `files`.** A backup listing should read as data first and the note about where
+  the data came from after it.
+- **Config-only and Detected-only exports write no note.** Neither area carries rules, so neither has
+  a profile to name, and a file that is always the same value would only invite the question of
+  which rules it referred to.
+
+Open after the round:
+
+- `profile.txt` names the profile but says nothing about *when* the export ran, so two directories
+  copied out on different days are still told apart by their timestamps. A timestamp line in the
+  same file, or a full manifest with the version of the tool, would close that. (2026-11-02)
+- Import still takes one shared rule or a whole rules file. Nothing in `export\` is read back by the
+  tool, which means the directory is a backup format rather than an interchange format. (2026-11-02)

@@ -19,7 +19,7 @@ On the first run the binary creates its data directory and the files inside it:
     profiles\            named profiles, one file each
     learn.json           collected Detected entries (learning mode)
     logs\                rotating log files
-    export\              destination for on-demand exports
+    export\              destination for on-demand exports, plus profile.txt naming the active profile
 ```
 
 ## The log file

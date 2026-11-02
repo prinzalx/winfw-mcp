@@ -237,7 +237,11 @@ fn post_protection(state: &AppState, worker: &WfpWorker, request: &Request) -> R
 fn post_export(state: &AppState, request: &Request) -> Result<Response> {
     // An empty body exports everything, which is what the button in the UI sends.
     let body: Backup = parse_or_default(&request.body)?;
-    let report = export::run(&state.paths, body.area.unwrap_or(Area::All))?;
+    let report = export::run(
+        &state.paths,
+        body.area.unwrap_or(Area::All),
+        &state.active_name(),
+    )?;
 
     Response::json(200, &report)
 }
