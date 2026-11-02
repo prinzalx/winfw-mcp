@@ -55,27 +55,36 @@ pumps its messages, which is also why the tray cannot live on one of the server'
 ## Only one at a time
 
 A second `--serve` does not start a second server. The name `Local\winfw-mcp.serve` is claimed with
-a mutex before anything is bound or rebuilt, and whoever loses it opens the browser on the instance
-that is already running and exits successfully:
+a mutex before anything is bound or rebuilt, and whoever loses it logs one line and ends with a
+non-zero status:
 
 ```
-INFO winfw_mcp: another instance is serving url=http://127.0.0.1:8788/
+WARN winfw_mcp: another instance is serving; this start stops here url=http://127.0.0.1:8788/
 ```
 
-That is the answer to a double double-click, and exit code `0` says so: the tool is running, which is
-what the second start was asking for.
+A second double-click is a mistake rather than a wish for a second firewall, so the second process
+opens no browser and hands nothing over. Bringing the running page to the front is the tray's job,
+and a process that ends here has no tray of its own yet.
 
 Two details make this work rather than look like it works:
 
-- **The URL opened is the running instance's.** A busy port makes a server fall forward to the next
-  free port, so the configured port is not necessarily the served one. The running instance records
-  the port it got in `server.port` in the data directory, and the second process reads that file.
-  An instance that stops takes the file with it.
-- **Only `--serve` is guarded.** A one-shot apply or clear is over in a moment, and the live store
-  serialises two overlapping transactions on its own, so there is nothing to protect there.
+- **The running instance's port is recorded.** A busy port makes a server fall forward to the next
+  free port, so the configured port is not necessarily the served one. The running instance writes
+  the port it got to `server.port` in the data directory and takes the file with it when it stops.
+  The second start names that port in its log line.
+- **Only `--serve` and `--takeover` are guarded.** A one-shot apply or clear is over in a moment,
+  and the live store serialises two overlapping transactions on its own, so there is nothing to
+  protect there.
 
 `Local\` scopes the name to the terminal-services session, which fits a per-user tool: two accounts
 on one machine may each run the tool, and each owns the rules in its own `%APPDATA%`.
+
+The one process that may have to wait for the name is the elevated newcomer of a relaunch. It starts
+while the old instance is still holding the name — the old process asks the shell first and stops
+only once the shell has said yes — so it runs as `--takeover` and waits up to five seconds for the
+name to be released. If the name is still held afterwards, it ends like any second start. The
+newcomer generates its own session token and shows its own tray, so a token is never handed from
+the old process to the new one.
 
 ## Clicking
 

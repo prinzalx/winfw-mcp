@@ -46,6 +46,8 @@ to the same live store, and the result then depends on which of them finished la
 ```
 winfw-mcp                   load rules.toml and install it in the live store, then exit
 winfw-mcp --serve           run the web server until stopped
+winfw-mcp --takeover        the same, but wait briefly for an instance that is stopping; a
+                            relaunch starts its elevated copy this way
 winfw-mcp --clear           remove our filters from the live store
 winfw-mcp --import <file>   read a simplewall profile into the active rule file, replacing it
 winfw-mcp --help            print the usage text (`-h`)
@@ -59,8 +61,9 @@ whether it is worth installing. What the shape of a profile does not fit is writ
 of the rule it came from, or reported as a note in the log when no rule came from it at all.
 
 An unknown flag is an error rather than a shrug, so a mistyped option cannot silently install
-filters nobody asked for. Only one `--serve` may run at a time: a second start finds the first,
-opens the browser on it, and exits. See [the lifecycle chapter](08-lifecycle.md#only-one-at-a-time).
+filters nobody asked for. Only one `--serve` may run at a time: a second start finds the name
+taken, logs one line, and ends with a non-zero status without opening anything. See
+[the lifecycle chapter](08-lifecycle.md#only-one-at-a-time).
 
 ## Elevation
 

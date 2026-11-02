@@ -41,7 +41,7 @@ Kept as asked, with the two audits now folded in below.
 
 | # | Item | Status |
 |---|---|---|
-| 1 | Single-instance check at startup | **closed in 0.16.0** — the first `--serve` claims a named mutex, a second start opens the browser on it and exits. See [the lifecycle chapter](docs/08-lifecycle.md#only-one-at-a-time). |
+| 1 | Single-instance check at startup | **closed in 0.16.0, changed in 0.59.0** — the first `--serve` claims a named mutex; a second start no longer opens the browser, it logs one line and ends with a non-zero status. See [the lifecycle chapter](docs/08-lifecycle.md#only-one-at-a-time). |
 | 2 | Re-audit every stage of PLAN.md | **done**, findings in §3 |
 | 3 | Compare every feature against simplewall | **done**, findings in §4 |
 | 4 | Rules and their storage are fragile around escaping | **answered** — TOML literal strings make escaping a non-problem (§4.4); what was fragile was the missing validation, the missing version and the missing backup, all closed in 0.24.0 |
@@ -377,9 +377,10 @@ Item 4 of the original list, and the news is mostly good:
 
 - **Single instance is solved in the reference** by a named mutant, and it brings the running window to
   the front instead of starting twice (`routine/src/rapp.c:403`). We closed this in 0.16.0 the same
-  way, with a named mutex rather than the port binding, and the second start opens the browser.
-  What is still open is the reference's *window restore*: a second start only shows a browser, it
-  cannot tell an already open tab to come forward.
+  way, with a named mutex rather than the port binding. Since 0.59.0 a second start no longer opens
+  a browser at all: it logs one line and exits with a non-zero status. The reference's *window
+  restore* is against the facts for a tool whose UI is a browser page nobody reloads, so it is
+  closed as not applicable rather than open.
 - **Volatile filters.** The reference defaults to persistent filters but offers a temporary mode where
   the persistent flag is simply not set, giving filters that die with the reboot. We always set the
   persistent flag, with no way out.
@@ -1552,3 +1553,30 @@ the same user. That is exactly the agent that builds a tool and then opens its o
   sat unnoticed for twelve releases because the Rust side kept answering correctly and the static HTML
   kept rendering. The route tests prove the server; nothing proves the page beyond the fact that it
   parses. (2026-11-02)
+
+## 54. The second start ends quietly round notes
+
+Release 0.59.0 closes the open half of §2 point 1. A second `--serve` used to open the browser on
+the running instance and exit with status `0`. Since there is no window to restore and nobody
+reloads the page, that browser was a new tab on every mistyped double-click, and a process that
+exits before the tray exists has no business opening a page at all.
+
+- A loser of the instance name now logs one `WARN` line naming the running URL and ends with a
+  non-zero status. No browser, no window, no token exchange. The exit is silent in the sense that
+  a release build has no console, so the log file is where the line goes.
+- The elevated relaunch is the one start that begins while the old instance still holds the name:
+  `post_relaunch` asks the shell for the elevated start first and stops this process only after the
+  shell said yes, so the newcomer can lose a race it should not lose. It is therefore started with
+  the new `--takeover` flag, which polls the name for up to five seconds before it counts as a
+  second start. The newcomer builds its own token and its own tray; no token crosses between the
+  two processes. Verified by reading the path end to end, and by a test that claims a name of its
+  own, releases it from a second thread, and asserts both halves: a name released during the
+  patience is claimed, a name held past it is not.
+- `server.port` is now written but read by nobody. It stays, because it is a cheap record of which
+  port the running instance got and the second start still names it in its log line. Removing it is
+  not worth a release of its own.
+- The reference's *window restore* (§4.5) is closed as not applicable rather than left open: with a
+  browser page as the UI there is no window of ours to bring forward.
+- Still open, and unchanged by this round: the guard proves a writing request came from a tab the
+  tray opened, but a process of the same user can inspect the browser process or its command line
+  and read the fragment there. (§53 says the same about `curl`.) (2026-11-02)

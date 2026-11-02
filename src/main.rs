@@ -58,6 +58,11 @@ enum Command {
     Clear,
     /// Run the web server until the process is stopped.
     Serve,
+    /// Run the web server, but wait briefly for the instance that a relaunch is stopping.
+    ///
+    /// The elevated newcomer of an elevated relaunch starts while the unelevated process still
+    /// holds the instance name, so it is given a few seconds before it counts as a second start.
+    Takeover,
     /// Read a profile written by the C original into the active rule file.
     Import(PathBuf),
 }
@@ -70,6 +75,7 @@ impl Command {
             [] => Ok(Self::default()),
             [flag] if flag == "--clear" => Ok(Self::Clear),
             [flag] if flag == "--serve" => Ok(Self::Serve),
+            [flag] if flag == "--takeover" => Ok(Self::Takeover),
             [flag, path] if flag == "--import" => Ok(Self::Import(PathBuf::from(path))),
             [flag] => bail!("unknown argument '{flag}'; expected --clear or --serve (see --help)"),
             _ => bail!("too many arguments; expected at most one flag"),
@@ -82,7 +88,7 @@ fn main() -> Result<()> {
 
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "winfw-mcp [ --serve | --clear | --import <profile.xml> ]\n\n    (no flag)      load the rules and install them in the live store\n    --serve        run the web server until the process is stopped\n    --clear        remove our filters from the live store\n    --import       read a simplewall profile into the active rule file, replacing it\n    --help, -h     show this text\n    --version, -V  print the version\n\nReading and writing the store needs elevation."
+            "winfw-mcp [ --serve | --takeover | --clear | --import <profile.xml> ]\n\n    (no flag)      load the rules and install them in the live store\n    --serve        run the web server until the process is stopped\n    --takeover     same, but wait briefly for an instance that is stopping (used by a relaunch)\n    --clear        remove our filters from the live store\n    --import       read a simplewall profile into the active rule file, replacing it\n    --help, -h     show this text\n    --version, -V  print the version\n\nReading and writing the store needs elevation."
         );
 
         return Ok(());
@@ -169,8 +175,10 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if command == Command::Serve {
-        return serve(paths, settings, rules, active_rules, log_filter);
+    if matches!(command, Command::Serve | Command::Takeover) {
+        let takeover = command == Command::Takeover;
+
+        return serve(paths, settings, rules, active_rules, log_filter, takeover);
     }
 
     // A one-shot run has no live monitor, but the applications a previous `--serve` run saw are on
@@ -198,6 +206,7 @@ fn serve(
     rules: RuleFile,
     active_rules: std::path::PathBuf,
     log_filter: Option<LogFilterHandle>,
+    takeover: bool,
 ) -> Result<()> {
     let port = settings.port;
     let active_name = settings.active_profile.clone();
@@ -207,16 +216,20 @@ fn serve(
     let token = server::session_token();
 
     // A second double-click must not mean a second server: two listeners, two tray icons and two
-    // processes rebuilding the one live store. Whoever loses the name opens the browser on the
-    // winner and is done, which is why this happens before a port is bound or the store is touched.
-    let Some(guard) = instance::claim(&paths)? else {
+    // processes rebuilding the one live store. Whoever loses the name is done, which is why this
+    // happens before a port is bound or the store is touched. It does not open a browser: bringing
+    // the running page to the front is the tray's job, and a process that ends here has no tray.
+    // The newcomer of a relaunch is the one exception that waits for the name.
+    let Some(guard) = (if takeover {
+        instance::claim_takeover(&paths)?
+    } else {
+        instance::claim(&paths)?
+    }) else {
         let url = instance::running_url(&paths.root.join(instance::PORT_FILE), port);
 
-        info!(url = %url, "another instance is serving");
+        warn!(url = %url, "another instance is serving; this start stops here");
 
-        tray::open_url(&url);
-
-        return Ok(());
+        bail!("another instance is serving on {url}");
     };
 
     // The rules and the detected applications are shared between the request threads and the
@@ -376,9 +389,10 @@ fn sync_store(rules: &RuleFile, command: Command, known: &[String], policy: Poli
         Command::Clear => engine.clear().map(|removed| {
             info!(removed, "our filters removed from WFP");
         }),
-        // Neither of these two reaches `sync_store`: `serve` returns into its own loop, and an
-        // import stops after writing the rule file. The arms only keep the match honest.
-        Command::Serve | Command::Import(_) => Ok(()),
+        // None of these three reaches `sync_store`: `serve` and `takeover` return into their own
+        // loop, and an import stops after writing the rule file. The arms only keep the match
+        // honest.
+        Command::Serve | Command::Takeover | Command::Import(_) => Ok(()),
     };
 
     if let Err(error) = outcome {
@@ -473,6 +487,10 @@ mod tests {
         assert_eq!(
             Command::parse(&["--serve".to_owned()]).expect("--serve"),
             Command::Serve,
+        );
+        assert_eq!(
+            Command::parse(&["--takeover".to_owned()]).expect("--takeover"),
+            Command::Takeover,
         );
         assert_eq!(
             Command::parse(&["--clear".to_owned()]).expect("--clear"),

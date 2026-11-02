@@ -78,7 +78,10 @@ pub fn relaunch_elevated() -> Result<()> {
             .encode_wide()
             .chain(std::iter::once(0))
             .collect::<Vec<_>>();
-        let arguments = wide("--serve");
+        // `--takeover` rather than `--serve`: this start happens while the process that asked for
+        // it still holds the instance name, and it should wait for that name instead of ending as
+        // a second start.
+        let arguments = wide("--takeover");
 
         // SAFETY: every pointer is a nul-terminated wide string we own for the duration of the
         // call, and the shell reads all of them before it returns. A null directory lets the new

@@ -9,9 +9,16 @@
 //! What is guarded is `--serve`, because that is the command that stays running. A one-shot apply
 //! or clear does not need the guard: it is over in a moment, and the store serialises two
 //! overlapping transactions on its own.
+//!
+//! A loser does not open the browser any more. It ends quietly with a non-zero status, and the page
+//! of the running instance stays the running instance's business. The one process that may have to
+//! wait for the name is the elevated newcomer of a relaunch: it starts while the old instance is
+//! still holding the name, so it is given a few seconds of patience before it counts as a second
+//! start.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use windows::Win32::Foundation::{
@@ -26,6 +33,14 @@ use windows::core::PCWSTR;
 /// data lives in that user's `%APPDATA%`, so two accounts on one machine may each run the tool, and
 /// neither has a claim on the other's store.
 const MUTEX_NAME: &str = "Local\\winfw-mcp.serve";
+
+/// The name an elevated newcomer of a relaunch waits on, and later claims.
+///
+/// The stopping instance releases [`MUTEX_NAME`] on exit. A second process that came up while that
+/// was in flight would count the held name as "someone else is serving" and end; to tell the two
+/// apart it holds `MUTEX_NAME + ".takeover"` for as long as it waits, so a third process that sees
+/// the primary name held and the takeover name free knows the name is only on its way out.
+const TAKEOVER_NAME: &str = "Local\\winfw-mcp.serve.takeover";
 
 /// The file the running instance writes the port it serves on to.
 ///
@@ -73,6 +88,16 @@ impl Drop for Guard {
     }
 }
 
+/// How long an elevated newcomer of a relaunch waits for the name the old instance still holds.
+///
+/// The old process stops as soon as the shell grants the elevated start, so the wait covers the
+/// time between "the shell said yes" and "the old accept loop left". It is bounded on purpose: if
+/// the name is still held after this, something else is serving and waiting longer changes nothing.
+const TAKEOVER_PATIENCE: Duration = Duration::from_secs(5);
+
+/// How often a waiting takeover looks at the name again.
+const TAKEOVER_POLL: Duration = Duration::from_millis(200);
+
 /// Try to become the running instance. `None` means another process already holds the name, so the
 /// caller should not start a second server.
 ///
@@ -81,6 +106,33 @@ pub fn claim(paths: &crate::paths::DataPaths) -> Result<Option<Guard>> {
     let port_file = paths.root.join(PORT_FILE);
 
     Ok(claim_name(MUTEX_NAME)?.map(|handle| Guard { handle, port_file }))
+}
+
+/// The same claim for the elevated newcomer of a relaunch: it waits up to [`TAKEOVER_PATIENCE`]
+/// for the name to be released before it reports itself as a second start.
+///
+/// While it waits it holds [`TAKEOVER_NAME`]. Without that marker a second double-click during the
+/// wait sees only a held [`MUTEX_NAME`], cannot tell "still serving" from "about to be free", and
+/// ends as a second start, which is exactly the race the wait is meant to close.
+///
+/// The name is polled rather than waited on with a object wait, because the old process releases it
+/// by exiting, and a poll of a mutex that is almost free is cheaper than plumbing a second
+/// synchronisation object through the startup.
+pub fn claim_takeover(paths: &crate::paths::DataPaths) -> Result<Option<Guard>> {
+    let port_file = paths.root.join(PORT_FILE);
+
+    // The marker is released the moment the primary name is ours; holding it longer would tell the
+    // next process "a takeover is in flight" after there is none.
+    let marker = claim_name(TAKEOVER_NAME)?;
+
+    let claimed = claim_name_waiting(MUTEX_NAME, TAKEOVER_PATIENCE, TAKEOVER_POLL)?;
+
+    if let Some(handle) = marker {
+        // SAFETY: the handle came from `claim_name` and is not used again.
+        let _ = unsafe { CloseHandle(handle) };
+    }
+
+    Ok(claimed.map(|handle| Guard { handle, port_file }))
 }
 
 /// The URL a second process should open, which is the running instance's rather than the configured
@@ -126,6 +178,23 @@ fn claim_name(name: &str) -> Result<Option<HANDLE>> {
     }
 
     Ok(Some(handle))
+}
+
+/// [`claim_name`] repeated until the name is free or the patience has run out.
+fn claim_name_waiting(name: &str, patience: Duration, poll: Duration) -> Result<Option<HANDLE>> {
+    let deadline = Instant::now() + patience;
+
+    loop {
+        if let Some(handle) = claim_name(name)? {
+            return Ok(Some(handle));
+        }
+
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+
+        std::thread::sleep(poll);
+    }
 }
 
 #[cfg(test)]
@@ -179,6 +248,42 @@ mod tests {
 
         // SAFETY: the handle came from `claim_name` and is not used again.
         let _ = unsafe { CloseHandle(third.expect("the handle claimed above")) };
+    }
+
+    /// A name that becomes free within the patience is claimed; one that stays held past the
+    /// patience is not. Both halves matter for the elevated relaunch: the newcomer must neither
+    /// give up on a name that is about to be free nor wait forever on a name that is not.
+    #[test]
+    fn a_waiting_claim_uses_the_patience_it_is_given() {
+        let held = claim_name(&name)
+            .expect("claim")
+            .expect("the name was free");
+
+        let patience = Duration::from_millis(600);
+        let poll = Duration::from_millis(50);
+
+        // A name held for the whole patience is a second start, not a wait.
+        let given_up = claim_name_waiting(&name, patience, poll).expect("claim");
+        assert!(given_up.is_none(), "the patience has an end");
+
+        // A name released shortly after the wait begins is claimed. The handle travels as a plain
+        // number, because a raw handle is not `Send` but this thread is its only owner.
+        let held_raw = held.0 as usize;
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            // SAFETY: the value is the handle `claim_name` returned, and it is closed exactly
+            // once, here.
+            let _ = unsafe { CloseHandle(HANDLE(held_raw as *mut _)) };
+        });
+
+        let claimed = claim_name_waiting(&name, Duration::from_secs(2), poll)
+            .expect("claim")
+            .expect("the name was released while waiting");
+
+        releaser.join().expect("the releaser thread");
+
+        // SAFETY: the handle came from `claim_name_waiting` and is not used again.
+        let _ = unsafe { CloseHandle(claimed) };
     }
 
     /// Dropping the guard takes the port file with it, so a stopped process does not leave a claim
