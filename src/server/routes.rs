@@ -50,6 +50,7 @@ impl Server {
             ("POST", "/api/rules/import") => post_rules_import(state, worker, request),
             ("POST", "/api/rules/replace") => post_rules_replace(state, worker, request),
             ("POST", "/api/rules/move") => post_rules_move(state, worker, request),
+            ("POST", "/api/relaunch") => post_relaunch(state),
             ("GET", "/api/profiles") => get_profiles(state),
             ("POST", "/api/profiles/create") => post_profiles_create(state, worker, request),
             ("POST", "/api/profiles/delete") => post_profiles_delete(state, worker, request),
@@ -204,6 +205,26 @@ fn post_shutdown(state: &AppState) -> Result<Response> {
     let stopping = state.request_stop();
 
     info!(first = stopping, "shutdown requested");
+
+    Response::json(200, &serde_json::json!({ "stopping": stopping }))
+}
+
+/// What `POST /api/relaunch` answers: the stop of this process after the shell granted an
+/// elevated start of it.
+///
+/// The elevated copy is a second `--serve` of the same executable, and it opens its own browser
+/// through its own tray. Whoever answers this page afterwards is the new process, which is why
+/// the answer is the same shape `POST /api/shutdown` gives.
+fn post_relaunch(state: &AppState) -> Result<Response> {
+    if crate::elevated::is_elevated() {
+        bail!("the tool is already elevated");
+    }
+
+    crate::elevated::relaunch_elevated()?;
+
+    let stopping = state.request_stop();
+
+    info!(first = stopping, "relaunch requested");
 
     Response::json(200, &serde_json::json!({ "stopping": stopping }))
 }
@@ -501,6 +522,10 @@ struct StateJson {
     /// generation is answered 409 rather than applied, which is what stops two open pages from
     /// overwriting each other silently.
     generation: u64,
+    /// Whether the process runs with an elevated token. The page offers the relaunch button from
+    /// this value rather than from whether the store opened, because the two fail for different
+    /// reasons.
+    elevated: bool,
 }
 
 /// The monitor's state together with the count the log holds, so an empty list can be told apart
@@ -550,6 +575,7 @@ impl StateJson {
             token: state.token.clone(),
             rules_changed: state.rules_changed_outside(),
             generation: state.rules_generation(),
+            elevated: crate::elevated::is_elevated(),
         }
     }
 }
@@ -1202,6 +1228,34 @@ pattern = "C:\\Windows\\two.exe"
             json(&response)["generation"].as_u64(),
             Some(generation + 1),
             "a write moves the counter",
+        );
+    }
+
+    /// An elevated process has nobody left to ask for elevation, and a route that spawned
+    /// anyway would leave a second tray icon arguing with the first about one store.
+    ///
+    /// The unelevated answer cannot be tested without asking the operating system for a UAC
+    /// dialog and leaving an elevated process behind, so it is not tested here.
+    #[test]
+    fn a_relaunch_when_already_elevated_is_refused() {
+        if !crate::elevated::is_elevated() {
+            return;
+        }
+
+        let server_state = state();
+
+        let error = match Server::route(
+            &server_state,
+            &WfpWorker::start_enforcing(),
+            &Request::new("POST", "/api/relaunch", Vec::new()),
+        ) {
+            Ok(_) => panic!("an elevated relaunch has nothing to ask for"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("elevated"),
+            "the refusal has to name the reason: {error}",
         );
     }
 

@@ -73,12 +73,13 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.48.0**. Two pages open on the same rules list no longer overwrite each
-other silently: the state reports a `generation`, a whole-list write can name the one it read, and a
-stale name is answered `409` with the current state rather than applied. Before that, the rules table
-learned to be reordered (an order column, and a rebuild that carries the move into the store), and
-the connection feed learned to say when it last spoke — `running, 128 events, last event 42s ago`.
-The startup diff names the rules added, removed or flipped while the tool was closed.
+The current release is **0.49.0**. An unelevated run can raise itself: `POST /api/relaunch` asks
+the shell for an elevated start (the UAC dialog) and stops this process when the shell grants it,
+so the degraded-store banner is now a button rather than advice. Before that, two pages open on the
+same rules list stopped overwriting each other silently (the state reports a `generation`, and a
+whole-list write that names a stale one is answered `409`), the rules table learned to be reordered,
+and the connection feed learned to say when it last spoke — `running, 128 events, last event 42s
+ago`. The startup diff names the rules added, removed or flipped while the tool was closed.
 An export names the profile its rules came from, the firewall can be paused from the page or the
 tray, and a rule can carry a `comment`. The handbook reads like an operating manual rather than a
 development diary, and the release history has its own file, [CHANGELOG.md](CHANGELOG.md).

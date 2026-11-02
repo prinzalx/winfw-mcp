@@ -4,6 +4,7 @@
 
 mod config;
 mod device;
+mod elevated;
 mod export;
 mod instance;
 mod learn;

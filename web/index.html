@@ -366,6 +366,15 @@
 
         banner.replaceChildren();
 
+        // The button is the action behind the prose: an unelevated process can ask the shell for
+        // an elevated start. Once granted, this page's server stops and the new one opens its own
+        // tab, so the page only has to say what it did.
+        const relaunch = () => {
+          request("POST", "/api/relaunch", {})
+            .then(() => status("relaunching elevated"))
+            .catch((error) => status("could not relaunch: " + error.message));
+        };
+
         if (store.ok) {
           const read = [];
 
@@ -402,6 +411,11 @@
             " Start this tool as administrator to read or change the live firewall.",
           ),
         );
+        if (!elevated) {
+          const button = element("button", null, "Relaunch elevated");
+          button.addEventListener("click", relaunch);
+          note.appendChild(button);
+        }
         banner.appendChild(note);
       }
 
@@ -874,6 +888,7 @@
 
         rules = state.rules.rule;
         generation = state.generation;
+        elevated = state.elevated;
         detected = state.detected;
         learnMode = state.learn_mode;
         protection = state.protection;
@@ -916,6 +931,10 @@
       // The version of the rule list this page last saw. A whole-list write names it, and a 409
       // means someone else wrote while this page was open.
       let generation = 0;
+
+      // Whether the server runs with an elevated token, which decides if the degraded banner
+      // offers the relaunch button at all.
+      let elevated = false;
 
       async function request(method, path, payload) {
         const headers = {};

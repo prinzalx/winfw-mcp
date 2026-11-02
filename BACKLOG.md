@@ -154,8 +154,9 @@ Kept as asked, with the two audits now folded in below.
   the older revisions to be loaded for older builds.
 - **UWP package display names are absent.** PLAN.md §5 allowed dropping them in v1, so this is an
   accepted deferral rather than an oversight.
-- **"Relaunch elevated" is prose, not an action.** The degraded-store banner tells the user to start
-  the tool as administrator, but there is no route to do it.
+- ~~**"Relaunch elevated" is prose, not an action.**~~ — closed by **0.49.0**:
+  `POST /api/relaunch` asks the shell for the elevated start, the banner carries the button, and
+  the tray menu offers the entry while the process is not elevated.
 - **Drive and device paths are resolved once.** The map is cached at startup and `WM_DEVICECHANGE` is
   not handled, so a volume mounted after start is not known. The module documents this itself
   (`src/device.rs:9-10`).
@@ -1249,3 +1250,30 @@ Open after the round:
 - `POST /api/detected` and `POST /api/rules/import` append to the server's own list and cannot
   contradict a client's copy, so they take no generation today. If a client ever edits a detected
   entry rather than accepting it, that route will want the same field. (2026-11-02)
+## 43. Relaunch elevated round notes
+
+Released in **0.49.0**. `POST /api/relaunch` asks the shell for an elevated start of this
+executable and stops this process when the shell grants it. The degraded-store banner carries a
+`Relaunch elevated` button while the process is not elevated, and the tray menu offers the entry
+only while it is worth offering.
+
+The decisions the round made:
+
+- **The verb is the elevation.** `ShellExecuteW` with `runas` is what shows the UAC dialog. A
+  refused dialog answers `ERROR_CANCELLED`, which the shell reports as status 5, and that is an
+  ordinary refusal: the process stays exactly where it was and the page says so.
+- **The stop is the flag shutdown already uses.** The accept loop ends after the answer is
+  written, so the client that caused the relaunch reads its `200` before the port goes quiet.
+- **The check is the token, not the store.** `TokenElevation` on the process token answers the
+  question the route answers. A store that merely failed to open does not claim to know whether a
+  relaunch would help, so the state now reports `elevated` next to the store report.
+- **The elevated copy is a second `--serve` of the same executable.** It takes the instance lock
+  after this process releases it and opens its own tab through its own tray, which is why the
+  answer has the shape `POST /api/shutdown` gives.
+
+Open after the round:
+
+- The relaunch carries `--serve` and nothing else. A user who started the tool through a shortcut
+  with arguments loses them; no such argument exists today.
+- The first instance owns the port until it exits, so a relaunch while an older process is wedged
+  leaves the new one to the port walk of eight. (2026-11-02)

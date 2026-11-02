@@ -87,7 +87,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | Route | Purpose |
 |---|---|
 | `GET /` | the page itself |
-| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, the session token, how often the rules file has been written, and whether `rules.toml` changed outside the tool |
+| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, the session token, how often the rules file has been written, whether the process is elevated, and whether `rules.toml` changed outside the tool |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
 | `POST /api/settings` | change `learn_mode`, `default_policy`, `theme` or `log_level` at runtime; all four take effect at once |
@@ -100,6 +100,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | `POST /api/rules/import` | append the rule a Base64 string carries |
 | `POST /api/rules/replace` | replace the whole rule list with the text of a rules file: the restore half of an export |
 | `POST /api/rules/move` | move one rule to another place in the list: `index` is where it sits, `to` is where it should end up |
+| `POST /api/relaunch` | ask the shell for an elevated start of this tool and stop this process; refused while the process is already elevated |
 | `GET /api/profiles` | the active profile and the names of the stored profiles |
 | `POST /api/profiles/switch` | make another profile live (an empty name selects `rules.toml`) |
 | `POST /api/profiles/create` | copy the live rules into a new profile and make it live; a name already taken is refused |

@@ -65,6 +65,10 @@ const MENU_PAUSE: usize = 0x102;
 #[cfg(windows)]
 const MENU_PROTECTION: usize = 0x103;
 
+/// The entry that asks the server to stop and be replaced by an elevated start. Only offered
+/// while the process is not elevated, because a process cannot raise itself twice.
+const MENU_RELAUNCH: usize = 0x104;
+
 /// The icon in the notification area, plus the thread that answers its clicks.
 pub struct Tray {
     /// The tray thread, as soon as it has its window. A thread id is a number rather than a handle,
@@ -391,31 +395,32 @@ fn split_url(url: &str) -> Option<(&str, &str)> {
     Some((authority, token))
 }
 
-/// Ask the running server to flip protection, over loopback.
+/// Send one writing request to the server over loopback and report whether it answered 200.
 ///
 /// The tray is a client of the API exactly like the page is, which is deliberate: the flag, the
 /// store work and the log line all live in the one route, so the menu cannot end up disagreeing
 /// with the server about what the firewall is doing. A tray that rebuilt the store itself would be
 /// a second implementation of the same decision, and the one the tests do not reach.
 #[cfg(windows)]
-fn post_protection() {
+fn api_post(path: &str, body: &str) -> bool {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
     use std::time::Duration;
-    use tracing::{info, warn};
+    use tracing::warn;
 
     let url = UI_URL.lock().expect("url lock poisoned").clone();
 
     let Some((authority, token)) = split_url(&url) else {
         warn!(url = %url, "the tray could not read the server address");
 
-        return;
+        return false;
     };
 
     let request = format!(
-        "POST /api/protection HTTP/1.1\r\nHost: {authority}\r\nOrigin: http://{authority}\
+        "POST {path} HTTP/1.1\r\nHost: {authority}\r\nOrigin: http://{authority}\
          \r\nContent-Type: application/json\r\nx-winfw-token: {token}\
-         \r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+         \r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len(),
     );
 
     let answer = TcpStream::connect(authority).and_then(|mut stream| {
@@ -436,14 +441,20 @@ fn post_protection() {
     });
 
     match answer {
-        Ok(line) if line.starts_with("HTTP/1.1 200") => {
-            info!("the tray switched protection through the API");
+        Ok(line) if line.starts_with("HTTP/1.1 200") => true,
+        Ok(line) => {
+            warn!(
+                status = line.trim(),
+                "the server refused the tray's request"
+            );
+
+            false
         }
-        Ok(line) => warn!(
-            status = line.trim(),
-            "the server refused the tray's protection request"
-        ),
-        Err(error) => warn!(reason = %error, "the tray could not reach the server"),
+        Err(error) => {
+            warn!(reason = %error, "the tray could not reach the server");
+
+            false
+        }
     }
 }
 
@@ -498,6 +509,10 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
         )
         .ok();
 
+        if !crate::elevated::is_elevated() {
+            AppendMenuW(menu, MF_STRING, MENU_RELAUNCH, w!("Relaunch elevated")).ok();
+        }
+
         AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()).ok();
         AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Quit")).ok();
 
@@ -543,7 +558,20 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
         }
 
         if choice.0 == MENU_PROTECTION as i32 {
-            post_protection();
+            api_post("/api/protection", "{}");
+
+            return;
+        }
+
+        if choice.0 == MENU_RELAUNCH as i32 {
+            // The route stops the server when the shell granted the elevated start. The accept
+            // loop ends with it, but this thread answers the icon on its own message loop, so it
+            // leaves that loop only once the server actually agreed.
+            if api_post("/api/relaunch", "{}") {
+                info!("the tray asked for an elevated relaunch");
+
+                PostQuitMessage(0);
+            }
 
             return;
         }
