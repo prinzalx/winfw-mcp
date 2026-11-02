@@ -137,7 +137,7 @@ fn main() -> Result<()> {
     // A one-shot run has no live monitor, but the applications a previous `--serve` run saw are on
     // disk, and those are what a wildcard rule has to be expanded against.
     let known = match command {
-        Command::Apply => learn::Detector::load(&paths.learn)
+        Command::Apply => learn::Detector::load(&paths.learn, "")
             .map(|detector| detector.apps())
             .unwrap_or_default(),
         _ => Vec::new(),
@@ -183,7 +183,7 @@ fn serve(
     // The rules and the detected applications are shared between the request threads and the
     // monitor's callbacks, which is what the locks are for.
     let rules = Arc::new(std::sync::Mutex::new(rules));
-    let detector = Arc::new(learn::Detector::load(&paths.learn)?);
+    let detector = Arc::new(learn::Detector::load(&paths.learn, &active_name)?);
 
     // The worker is started before the monitor so a callback can hand the store a rebuild when an
     // application turns up that no filter knows about yet. It is started after `live` because it is

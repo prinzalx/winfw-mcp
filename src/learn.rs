@@ -52,13 +52,25 @@ pub struct Detected {
 /// The file on disk. A wrapper struct keeps the format extensible without a rename later.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct LearnFile {
+    /// The Detected list of the default profile in files written before 0.55.0. Loading moves it
+    /// into `profiles` under the empty name, so a file written since then carries no `entry` at
+    /// all, which is what `skip_serializing_if` expresses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     entry: Vec<Detected>,
+    /// Every profile's Detected list, keyed by profile name; the empty name is the default
+    /// profile. The list of the profile that is live is always present, so an entry is collected
+    /// into it rather than having to decide where it belongs.
+    ///
+    /// The lists are per profile because they hold decisions about rules, and rules are what a
+    /// profile changes. `#[serde(default)]` keeps a `learn.json` written before 0.55.0 readable.
+    #[serde(default)]
+    profiles: std::collections::BTreeMap<String, Vec<Detected>>,
     /// Every application path this tool has seen connecting, newest first.
     ///
-    /// This is deliberately separate from `entry`: the Detected list is a to-do list that shrinks
-    /// when a decision is made and stops growing when learning mode is off, while the set a
-    /// wildcard rule is expanded against has to keep both. `#[serde(default)]` keeps a
-    /// `learn.json` written by an earlier version readable.
+    /// This is deliberately outside the per-profile map: the Detected list is a to-do list that
+    /// shrinks when a decision is made and stops growing when learning mode is off, while the set
+    /// a wildcard rule is expanded against is a fact about the machine that has to keep both, and
+    /// an application an inactive profile has seen is still an application that exists.
     #[serde(default)]
     seen: Vec<String>,
 }
@@ -67,25 +79,91 @@ struct LearnFile {
 #[derive(Debug)]
 pub struct Detector {
     inner: Mutex<LearnFile>,
+    /// The profile whose list is the live one. Mirrors the active profile of the tool, which is
+    /// what tells the monitor thread where a new event belongs without asking the server.
+    active: Mutex<String>,
     /// Where the list is persisted. Kept in the value so every change writes itself.
     path: PathBuf,
 }
 
 impl Detector {
-    /// Read the Detected list, treating a missing file as an empty one.
-    pub fn load(path: &Path) -> Result<Self> {
+    /// Read the Detected list for one profile, treating a missing file as an empty one.
+    ///
+    /// A file written before 0.55.0 holds a single list under `entry`; that list becomes the
+    /// default profile's, because it was collected while the default profile was the only one.
+    pub fn load(path: &Path, active: &str) -> Result<Self> {
         let bytes = crate::store::read_if_exists(path)?.unwrap_or_default();
 
-        let file: LearnFile = if bytes.is_empty() {
+        let mut file: LearnFile = if bytes.is_empty() {
             LearnFile::default()
         } else {
             serde_json::from_slice(&bytes).context("parse learn.json")?
         };
 
+        if file.profiles.is_empty() {
+            file.profiles
+                .insert(String::new(), std::mem::take(&mut file.entry));
+        } else {
+            file.entry.clear();
+        }
+        file.profiles.entry(active.to_owned()).or_default();
+
         Ok(Self {
             inner: Mutex::new(file),
+            active: Mutex::new(active.to_owned()),
             path: path.to_path_buf(),
         })
+    }
+
+    /// Make another profile's list the live one, persisting the swap so a restart does not undo
+    /// it in the file. The list left behind stays under its profile's name.
+    pub fn set_profile(&self, name: &str) -> Result<()> {
+        let mut active = self.active.lock().expect("active profile lock poisoned");
+
+        if *active == name {
+            return Ok(());
+        }
+
+        {
+            let mut list = self.inner.lock().expect("learn lock poisoned");
+            list.profiles.entry(active.clone()).or_default();
+            list.profiles.entry(name.to_owned()).or_default();
+            *active = name.to_owned();
+        }
+
+        self.save()
+    }
+
+    /// Move one profile's list to a new name, following the rules file the rename moved.
+    pub fn rename_profile(&self, from: &str, to: &str) -> Result<()> {
+        let mut active = self.active.lock().expect("active profile lock poisoned");
+        let changed = {
+            let mut list = self.inner.lock().expect("learn lock poisoned");
+
+            match list.profiles.remove(from) {
+                Some(entries) => {
+                    list.profiles.insert(to.to_owned(), entries);
+                    if *active == from {
+                        *active = to.to_owned();
+                    }
+                    true
+                }
+                None => false,
+            }
+        };
+
+        if changed { self.save() } else { Ok(()) }
+    }
+
+    /// Take one profile's list out, as deleting a profile does. The live list is not this path:
+    /// the switch that follows decides what is live instead.
+    pub fn drop_profile(&self, name: &str) -> Result<()> {
+        let removed = {
+            let mut list = self.inner.lock().expect("learn lock poisoned");
+            list.profiles.remove(name).is_some()
+        };
+
+        if removed { self.save() } else { Ok(()) }
     }
 
     /// Take one connection into account.
@@ -119,10 +197,11 @@ impl Detector {
             None
         };
 
+        let active = self.active.lock().expect("active profile lock poisoned");
         let mut list = self.inner.lock().expect("learn lock poisoned");
+        let entries = list.profiles.entry(active.clone()).or_default();
 
-        if let Some(existing) = list
-            .entry
+        if let Some(existing) = entries
             .iter_mut()
             .find(|entry| entry.app == event.app && entry.remote == remote)
         {
@@ -133,7 +212,7 @@ impl Detector {
             return false;
         }
 
-        list.entry.insert(
+        entries.insert(
             0,
             Detected {
                 app: event.app.clone(),
@@ -144,7 +223,7 @@ impl Detector {
                 allowed: event.allowed,
             },
         );
-        list.entry.truncate(DETECTED_CAP);
+        entries.truncate(DETECTED_CAP);
 
         true
     }
@@ -181,27 +260,27 @@ impl Detector {
         crate::store::write_atomic(&self.path, &text)
     }
 
-    /// The list as it stands, newest first.
+    /// The live profile's list as it stands, newest first.
     pub fn snapshot(&self) -> Vec<Detected> {
-        self.inner
-            .lock()
-            .expect("learn lock poisoned")
-            .entry
-            .clone()
+        let active = self.active.lock().expect("active profile lock poisoned");
+        let list = self.inner.lock().expect("learn lock poisoned");
+
+        list.profiles.get(&*active).cloned().unwrap_or_default()
     }
 
-    /// Take one entry out of the list, as `dismiss` and a decided entry both do.
+    /// Take one entry out of the live profile's list, as `dismiss` and a decided entry both do.
     ///
     /// `remote` has to be the entry's destination, or `None` for an entry about the application
     /// alone; the two are different entries of the same application.
     pub fn dismiss(&self, app: &str, remote: Option<&str>) -> Result<bool> {
+        let active = self.active.lock().expect("active profile lock poisoned");
         let mut list = self.inner.lock().expect("learn lock poisoned");
-        let before = list.entry.len();
+        let entries = list.profiles.entry(active.clone()).or_default();
+        let before = entries.len();
 
-        list.entry
-            .retain(|entry| entry.app != app || entry.remote.as_deref() != remote);
+        entries.retain(|entry| entry.app != app || entry.remote.as_deref() != remote);
 
-        let removed = list.entry.len() != before;
+        let removed = entries.len() != before;
 
         if removed {
             let text = serde_json::to_vec_pretty(&*list).context("serialize learn.json")?;
@@ -230,7 +309,7 @@ mod tests {
     fn detector(name: &str) -> Detector {
         let path = crate::testutil::scratch_dir(name).join("learn.json");
 
-        Detector::load(&path).expect("load")
+        Detector::load(&path, "").expect("load")
     }
 
     fn event(app: &str, seq_time: u64) -> NetEvent {
@@ -459,7 +538,7 @@ mod tests {
     #[test]
     fn the_list_survives_a_round_trip_through_disk() {
         let path = crate::testutil::scratch_dir("detect-round-trip").join("learn.json");
-        let detector = Detector::load(&path).expect("load");
+        let detector = Detector::load(&path, "").expect("load");
 
         detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 10),
@@ -468,7 +547,7 @@ mod tests {
         detector.note_app("\\device\\harddiskvolume3\\a.exe");
         detector.save().expect("save");
 
-        let loaded = Detector::load(&path).expect("reload");
+        let loaded = Detector::load(&path, "").expect("reload");
 
         assert_eq!(loaded.snapshot(), detector.snapshot());
         assert_eq!(
@@ -539,6 +618,143 @@ mod tests {
         assert_eq!(
             detector.snapshot()[0].app,
             "\\device\\harddiskvolume3\\b.exe"
+        );
+    }
+
+    /// The whole point of the per-profile lists: an undecided entry collected while one profile
+    /// was live is not reported while another one is, because the decision it waits for belongs
+    /// to rules that are no longer in the store.
+    #[test]
+    fn each_profile_collects_its_own_list() {
+        let detector = detector("detect-per-profile");
+
+        detector.observe(
+            &event("\\device\\harddiskvolume3\\a.exe", 10),
+            &RuleFile::default(),
+        );
+        detector.set_profile("work").expect("switch");
+
+        assert!(
+            detector.snapshot().is_empty(),
+            "the new profile starts empty"
+        );
+
+        detector.observe(
+            &event("\\device\\harddiskvolume3\\b.exe", 20),
+            &RuleFile::default(),
+        );
+
+        assert_eq!(detector.snapshot().len(), 1);
+        assert_eq!(
+            detector.snapshot()[0].app,
+            "\\device\\harddiskvolume3\\b.exe",
+        );
+    }
+
+    /// Switching back returns exactly the list that was left behind — including the hits and the
+    /// timestamps the entries had accumulated, because the swap moves the list rather than
+    /// rebuilding it.
+    #[test]
+    fn switching_back_returns_the_list_that_was_left_behind() {
+        let detector = detector("detect-switch-back");
+
+        detector.observe(
+            &event("\\device\\harddiskvolume3\\a.exe", 10),
+            &RuleFile::default(),
+        );
+        detector.observe(
+            &event("\\device\\harddiskvolume3\\a.exe", 20),
+            &RuleFile::default(),
+        );
+        detector.set_profile("work").expect("switch");
+        detector.observe(
+            &event("\\device\\harddiskvolume3\\b.exe", 30),
+            &RuleFile::default(),
+        );
+        detector.set_profile("").expect("switch back");
+
+        assert_eq!(
+            detector.snapshot().len(),
+            1,
+            "the default list is whole again"
+        );
+        assert_eq!(detector.snapshot()[0].hits, 2, "and it kept its history");
+    }
+
+    /// The seen list is a fact about the machine, not about a profile: an application another
+    /// profile has seen is still an application that exists, and a wildcard rule of the live
+    /// profile has to expand against all of them.
+    #[test]
+    fn the_seen_pool_is_shared_between_the_profiles() {
+        let detector = detector("detect-shared-pool");
+
+        detector.note_app("\\device\\harddiskvolume3\\a.exe");
+        detector.set_profile("work").expect("switch");
+
+        assert_eq!(
+            detector.apps(),
+            vec!["\\device\\harddiskvolume3\\a.exe".to_owned()],
+            "the pool does not follow the profile",
+        );
+    }
+
+    /// A file written before the lists were per profile holds one list under `entry`; it was
+    /// collected while the default profile was the only one, so that is where it belongs.
+    #[test]
+    fn a_file_written_before_profiles_keeps_its_list_as_the_default() {
+        let path = crate::testutil::scratch_dir("detect-old-format").join("learn.json");
+
+        std::fs::write(
+            &path,
+            r#"{"entry":[{"app":"\\device\\harddiskvolume3\\a.exe","display":"C:\\a.exe","remote":null,"seen_ms":10,"hits":1,"allowed":false}],"seen":["\\device\\harddiskvolume3\\a.exe"]}"#,
+        )
+        .expect("write the old file");
+
+        let detector = Detector::load(&path, "work").expect("load the old file");
+
+        assert_eq!(
+            detector.snapshot().len(),
+            0,
+            "the new profile has no list yet"
+        );
+
+        detector.set_profile("").expect("switch back");
+
+        assert_eq!(
+            detector.snapshot().len(),
+            1,
+            "the old list is the default one"
+        );
+        assert_eq!(
+            detector.apps(),
+            vec!["\\device\\harddiskvolume3\\a.exe".to_owned()],
+        );
+    }
+
+    /// A rename carries the list to the new name, and a delete takes it out: entries waiting for
+    /// a decision about rules nobody can select again would be collected noise.
+    #[test]
+    fn a_renamed_profile_carries_its_list_and_a_deleted_oneloses_it() {
+        let detector = detector("detect-rename-delete");
+
+        detector.set_profile("before").expect("switch");
+        detector.observe(
+            &event("\\device\\harddiskvolume3\\a.exe", 10),
+            &RuleFile::default(),
+        );
+        detector.rename_profile("before", "after").expect("rename");
+
+        assert_eq!(
+            detector.snapshot().len(),
+            1,
+            "the renamed profile is still live and still has its entry",
+        );
+
+        detector.drop_profile("after").expect("drop");
+
+        assert!(
+            detector.snapshot().is_empty(),
+            "the list went with the profile"
         );
     }
 }

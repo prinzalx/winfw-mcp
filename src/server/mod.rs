@@ -411,7 +411,7 @@ pub(crate) mod testsupport {
 
         paths.ensure().expect("create the data directories");
 
-        let detector = Detector::load(&paths.learn).expect("load the detected list");
+        let detector = Detector::load(&paths.learn, "").expect("load the detected list");
 
         let active_file = paths.rules.clone();
 

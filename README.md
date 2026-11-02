@@ -73,10 +73,12 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.54.0**, and it changed no behaviour: the decision that tells the tool
-whether the shell granted an elevated restart — a number rather than an error, so the comparison
-against 32 is the whole story — is a named function now and is tested at its boundaries, which left
-no source file of the tool without tests. Before it, **0.53.0** corrected two places where the
+The current release is **0.55.0**: the Detected list follows the profile. An entry is a question
+about the rules that are live, so each profile now keeps its own list — switching profiles
+switches the list, rename and delete move it along — while the set of applications a wildcard
+expands against stays shared, because it is a fact about the machine. Before it, **0.54.0** named
+and tested the decision that tells the tool whether the shell granted an elevated restart, leaving
+no source file without tests. Before it, **0.53.0** corrected two places where the
 documentation had drifted from the code and gave `src/main.rs` its first tests, and **0.52.0**
 closed a backlog item by reading the rule model rather than changing it. The last change of
 behaviour was **0.51.0**, where a rule learned to name any transport — `protocol` took

@@ -57,6 +57,10 @@ fn make_live(state: &AppState, name: &str) -> Result<RuleFile> {
     *state.active_file.lock().expect("rules path lock poisoned") = new_file;
     *state.active_name.lock().expect("active name lock poisoned") = name.to_owned();
 
+    // The Detected list belongs to a profile the same way its rules do, so the live list moves
+    // with the live rules. Events seen while another profile was live stay under its name.
+    state.detector.set_profile(name)?;
+
     // The active profile is a setting, so it belongs in config.toml. Nothing else changes while
     // the server runs, so the in-memory copy is accurate apart from this one field.
     let mut next = state.settings.clone();
@@ -122,6 +126,10 @@ pub(super) fn delete_profile(
     // what was asked, and what remains is inert.
     let _ = std::fs::remove_file(crate::store::backup_path(&file));
 
+    // Its Detected list goes with it: entries waiting for a decision about rules of a profile
+    // nobody can select again would only be collected noise.
+    state.detector.drop_profile(name)?;
+
     if state.active_name() != name {
         // The live rules are untouched, so the store is reported rather than rebuilt.
         return worker.ask(StoreWork::Inventory);
@@ -178,6 +186,8 @@ pub(super) fn rename_profile(
     if backup.is_file() {
         let _ = std::fs::rename(&backup, crate::store::backup_path(&to));
     }
+
+    state.detector.rename_profile(name, new_name)?;
 
     if state.active_name() != name {
         return worker.ask(StoreWork::Inventory);
@@ -299,6 +309,67 @@ mod tests {
                 assert!(response.is_err(), "the second create must be refused");
             }
         }
+    }
+
+    /// A Detected entry asks a question about the rules that are live, so switching profiles
+    /// switches the list: an entry collected under one profile is not reported while another one
+    /// answers, and it is back when the first profile is live again.
+    #[test]
+    fn the_detected_list_follows_the_profile() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        server_state.detector.observe(
+            &crate::monitor::NetEvent {
+                remote_addr: String::new(),
+                ..crate::server::testsupport::connection("\\device\\harddiskvolume3\\a.exe")
+            },
+            &RuleFile::default(),
+        );
+
+        Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/profiles/switch",
+                br#"{"name":"work"}"#.to_vec(),
+            ),
+        )
+        .expect("switch");
+
+        let listed = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("list");
+        let body = String::from_utf8_lossy(&listed.body).into_owned();
+
+        assert!(
+            !body.contains("a.exe"),
+            "the other profile's entry is not reported: {body}",
+        );
+
+        Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/profiles/switch", br#"{"name":""}"#.to_vec()),
+        )
+        .expect("switch back");
+
+        let listed = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("list again");
+        let body = String::from_utf8_lossy(&listed.body).into_owned();
+
+        assert!(
+            body.contains("a.exe"),
+            "the entry is where it was left: {body}",
+        );
     }
 
     /// Deleting the live profile falls back to `rules.toml` and takes the file with it, so the data

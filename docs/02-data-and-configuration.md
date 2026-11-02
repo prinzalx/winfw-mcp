@@ -17,7 +17,7 @@ On the first run the binary creates its data directory and the files inside it:
     rules.toml.stamp     the fingerprint of the file the tool wrote last, so an outside edit is noticed
     server.port          written while a serving instance runs, removed when it stops
     profiles\            named profiles, one file each
-    learn.json           collected Detected entries (learning mode)
+    learn.json           collected Detected entries, one list per profile (learning mode)
     logs\                rotating log files
     export\              destination for on-demand exports, plus profile.txt naming the active profile
 ```

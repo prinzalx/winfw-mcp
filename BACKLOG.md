@@ -138,8 +138,12 @@ Kept as asked, with the two audits now folded in below.
   `Delete` sit beside the selector, and a name already in use is refused rather than silently
   overwritten. What is left of the finding is that the Detected list is still shared between
   profiles (the next bullet), which a profile manager does not settle.
-- **The Detected list is not scoped per profile.** `learn.json` is shared, and it is the pool a
-  wildcard pattern expands against, so switching profile silently changes what a wildcard means.
+- **The Detected list is not scoped per profile.** ~~`learn.json` is shared~~ — closed in 0.55.0.
+  The lists are keyed by profile name inside `learn.json`, an entry is collected into the list of
+  the profile that is live, and switching, renaming or deleting a profile moves its list along.
+  What is left of the finding is the other half of the file: the *seen pool* stays shared on
+  purpose, because an application one profile has seen is still an application that exists, and a
+  wildcard of the live profile expands against all of them.
 
 ### 3.5 WFP
 
@@ -1403,3 +1407,25 @@ tested it, which is the whole file now except the FFI calls themselves.
   process behind. The suite runs elevated and unelevated instead, and the relaunch route answers
   "already elevated" from the same function on an elevated runner, which is covered in the routes.
   (2026-11-02)
+
+## 49. The Detected list follows the profile round notes
+
+Release 0.55.0 scoped the Detected list per profile (§3.4), which the backlog had called the one
+finding a profile manager does not settle.
+
+- The lists are keyed by profile name inside the one `learn.json`, and the live name is held by
+  the detector itself, so a monitor callback knows where an event belongs without asking the
+  server. Profile switches, renames and deletes each carry the list along; deleting a profile
+  takes its list with it, because entries waiting about rules nobody can select again are noise.
+- The seen pool deliberately did **not** follow the profile. It is the set a wildcard rule is
+  expanded against, an application an inactive profile saw is still an application that exists,
+  and per-profile pools would make a wildcard narrower for reasons the page cannot show. The
+  finding that led here confused the two lists; both now say which they are in their comments.
+- Migration is by absence: a file with no `profiles` key moves its `entry` list to the default
+  profile, and a file written since then carries no `entry` at all. A named profile that has never
+  collected anything has no key either, so "absent" means empty and never means the default's.
+- A page needs no change to show this: the state already carries the live list, and the switch
+  already reloads the state. The route test asserts the entry vanishes and returns through
+  `/api/state`, which is the only place the list travels.
+- The Detected export needed no change and was checked rather than assumed: it copies the
+  `learn.json` file, so a manual backup now carries every profile's list in one file. (2026-11-02)

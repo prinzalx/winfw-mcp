@@ -6,6 +6,12 @@ The Detected list is the learning mode. Every application that connects while no
 covers it is collected there, with its hit count and whether the firewall allowed or blocked it, and
 the newest decision waits at the top.
 
+Each profile has its own list. An entry is a question about the rules that are live, so the list
+follows the profile: switching profiles switches the list, and an entry collected under one profile
+is back the moment that profile is live again. The set of seen applications a wildcard expands
+against is the one part of `learn.json` that every profile shares, because it is a fact about the
+machine rather than about a rule set.
+
 ## Applications, and the destinations they reach
 
 Learning mode collects applications, not connections. One executable that makes a hundred

@@ -206,7 +206,12 @@ earlier version needs no migration.
 
 Switching profiles writes the current rules back to the file they came from before the new one is
 read, so no rule is ever only in memory. Switching is available from the page, and the choice
-survives a restart.
+survives a restart. The [Detected list](04-learning-mode.md) belongs to a profile the same way
+its rules do: switching switches the list of applications waiting for a decision, so an entry
+collected under one profile never asks a question about rules that are not live, and renaming or
+deleting a profile moves its list along or takes it out. The one pool that does not follow the
+profile is the set of applications this machine has been seen connecting with, because that is a
+fact about the machine and a wildcard of the live profile expands against all of it.
 
 The page can also create, rename and delete a profile. **New** copies the rules on screen into the
 new file and switches to it, on the grounds that a profile started in a browser is meant to be a
