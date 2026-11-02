@@ -64,8 +64,8 @@ IPv4 address can never match on an IPv6 layer:
 | `remote` | Of those, only |
 |---|---|
 | absent | all of them |
-| an IPv4 address or network | the two `..._V4` layers |
-| an IPv6 address or network | the two `..._V6` layers |
+| an IPv4 address, network or span | the two `..._V4` layers |
+| an IPv6 address, network or span | the two `..._V6` layers |
 
 Each filter carries the application condition (`FWPM_CONDITION_ALE_APP_ID`) and, when the rule
 narrows, a protocol condition (`FWPM_CONDITION_IP_PROTOCOL`, `FWP_UINT8`), a port condition and a
@@ -73,18 +73,22 @@ remote address condition. The port condition is `FWPM_CONDITION_IP_REMOTE_PORT` 
 and `FWPM_CONDITION_IP_LOCAL_PORT` on a recv-accept layer, because that is the port the connection
 is about in each direction. The address condition is always
 `FWPM_CONDITION_IP_REMOTE_ADDRESS`, with `FWP_V4_ADDR_MASK` (an address and a mask) or
-`FWP_V6_ADDR_MASK` (an address and a prefix length) depending on the family.
+`FWP_V6_ADDR_MASK` (an address and a prefix length) depending on the family. A span of addresses is
+the same field matched with `FWP_MATCH_RANGE` and `FWP_RANGE_TYPE`: the bounds are a `FWP_UINT32`
+pair for a v4 span and a `FWP_BYTE_ARRAY16_TYPE` pair for a v6 one, which is what the reference
+fills for the same case.
 
 A single port is matched with `FWP_UINT16` and `FWP_MATCH_EQUAL`; a range with `FWP_RANGE_TYPE` and
 `FWP_MATCH_RANGE`. The range is one of the conditions WFP keeps a **pointer** to rather than a copy, so
-the `FWP_RANGE0` has to outlive the call. The two address conditions are pointer conditions too, for
-the same reason.
+the `FWP_RANGE0` has to outlive the call. The four address conditions are pointer conditions too, for
+the same reason, and a v6 span adds a pointer of its own inside each bound.
 
 > Getting that pointer wrong is easy and the failure is not obvious. Handing WFP the address of an
 > `Option<FWP_RANGE0>` instead of the address of the `FWP_RANGE0` inside it installs a filter whose
 > range is read out of the wrong bytes, and WFP answers `FWP_E_INVALID_ENUMERATOR`. The same trap
 > waits for every condition that is a pointer, which is why the address value is built as an enum of
-> the two families rather than an `Option` of each.
+> the four shapes rather than an `Option` of each, and why the bounds of a span are held next to the
+> `FWP_RANGE0` that points at them instead of inside it.
 
 ## The default-deny base
 

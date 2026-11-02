@@ -73,7 +73,10 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.55.0**: the Detected list follows the profile. An entry is a question
+The current release is **0.56.0**: a rule can name a span of addresses. `remote` took one address
+or one network, and a network cannot cover nine hosts without also covering the fifteen around
+them, so `10.0.0.1-10.0.0.9` is now written, stored, shown and installed as a range condition.
+Before it, **0.55.0** made the Detected list follow the profile: an entry is a question
 about the rules that are live, so each profile now keeps its own list — switching profiles
 switches the list, rename and delete move it along — while the set of applications a wildcard
 expands against stays shared, because it is a fact about the machine. Before it, **0.54.0** named

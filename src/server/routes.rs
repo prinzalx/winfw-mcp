@@ -8,7 +8,7 @@ use tracing::info;
 use crate::export::{self, Area};
 use crate::learn::Detected;
 use crate::monitor::NetEvent;
-use crate::rules::{Action, Cidr, Rule, RuleFile, validate_comment, validate_pattern};
+use crate::rules::{Action, Remote, Rule, RuleFile, validate_comment, validate_pattern};
 
 use super::http::{Request, Response, parse_body, parse_or_default};
 use super::mcp_tools::mcp_endpoint;
@@ -159,7 +159,7 @@ fn post_detected(state: &AppState, worker: &WfpWorker, request: &Request) -> Res
         // other, which is the whole point of asking about it.
         if let Some(text) = decision.remote.as_deref() {
             rule.remote = Some(
-                text.parse::<Cidr>()
+                text.parse::<Remote>()
                     .map_err(anyhow::Error::msg)
                     .with_context(|| format!("'{text}' is not an address"))?,
             );
@@ -1522,6 +1522,52 @@ pattern = "C:\\Windows\\two.exe"
             body.contains(r#""remote":"10.0.0.0/24""#),
             "the host bits are dropped: {body}",
         );
+    }
+
+    /// A span between two addresses is written over the API exactly like a network is, is stored
+    /// in the file, and comes back as the text it was written as. A span across the families is
+    /// refused there, because no layer of the store can match it.
+    #[test]
+    fn a_span_between_two_addresses_travels_through_the_api() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let accepted = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"C:\\Tools\\ssh.exe","enabled":true,"remote":"10.0.0.1-10.0.0.9"}]}"#.to_vec(),
+            ),
+        )
+        .expect("route the span");
+
+        let body = String::from_utf8_lossy(&accepted.body).into_owned();
+
+        assert!(
+            body.contains(r#""remote":"10.0.0.1-10.0.0.9""#),
+            "the span has to come back as it was written: {body}",
+        );
+
+        let written = std::fs::read_to_string(server_state.rules_path()).expect("read the rules");
+
+        assert!(
+            written.contains(r#"remote = "10.0.0.1-10.0.0.9""#),
+            "the span has to survive a restart: {written}",
+        );
+
+        let refused = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"C:\\Tools\\ssh.exe","enabled":true,"remote":"10.0.0.1-::2"}]}"#.to_vec(),
+            ),
+        );
+
+        assert!(refused.is_err(), "one span cannot cross the families");
     }
 
     /// A port the server cannot read is refused rather than read as no port, so a typo in the page

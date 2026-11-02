@@ -307,8 +307,9 @@
       A deny always beats an allow, whatever the order of the list. Patterns accept the wildcards
       <code>*</code> and <code>?</code>. A rule can be narrowed to one protocol (<code>tcp</code>,
       <code>udp</code>, or a number such as <code>47</code>), one direction, one port or port range
-      such as <code>1024-2048</code> and one remote address or network such as
-      <code>192.168.1.0/24</code>; a rule that names none of them is about
+      such as <code>1024-2048</code>, one remote address or network such as
+      <code>192.168.1.0/24</code>, or a span of addresses such as <code>10.0.0.1-10.0.0.9</code>;
+      a rule that names none of them is about
       all of them. Every change is written to <code>rules.toml</code> and
       pushed to the store immediately. A detected application is one no rule speaks about yet; edit
       its path into a pattern such as <code>C:\Program Files\*\app.exe</code> before you allow or
@@ -581,7 +582,8 @@
           remote.type = "text";
           remote.value = rule.remote ?? "";
           remote.placeholder = "any";
-          remote.title = "a remote address or network such as 10.0.0.5 or 192.168.1.0/24";
+          remote.title =
+            "a remote address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9";
           remote.addEventListener("change", () => {
             const text = remote.value.trim();
 

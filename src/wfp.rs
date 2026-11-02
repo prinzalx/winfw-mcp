@@ -10,12 +10,12 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use windows::Win32::Foundation::{FWP_E_ALREADY_EXISTS, HANDLE};
 use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTION_TYPE, FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE,
-    FWP_CONDITION_FLAG_IS_APPCONTAINER_LOOPBACK, FWP_CONDITION_FLAG_IS_LOOPBACK,
-    FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ANY_SET,
-    FWP_MATCH_RANGE, FWP_RANGE_TYPE, FWP_RANGE0, FWP_UINT8, FWP_UINT16, FWP_UINT32,
-    FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_V6_ADDR_AND_MASK, FWP_V6_ADDR_MASK, FWP_VALUE0,
-    FWP_VALUE0_0, FWPM_ACTION0, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS,
+    FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTION_TYPE, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE,
+    FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE, FWP_CONDITION_FLAG_IS_APPCONTAINER_LOOPBACK,
+    FWP_CONDITION_FLAG_IS_LOOPBACK, FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL,
+    FWP_MATCH_FLAGS_ANY_SET, FWP_MATCH_RANGE, FWP_RANGE_TYPE, FWP_RANGE0, FWP_UINT8, FWP_UINT16,
+    FWP_UINT32, FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_V6_ADDR_AND_MASK, FWP_V6_ADDR_MASK,
+    FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS,
     FWPM_CONDITION_IP_LOCAL_PORT, FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_ADDRESS,
     FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0, FWPM_FILTER_CONDITION0,
     FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_FILTER_FLAG_INDEXED, FWPM_FILTER_FLAG_PERSISTENT,
@@ -34,7 +34,9 @@ use windows::core::{GUID, PCWSTR, PWSTR};
 use crate::monitor::Attribution as Owners;
 
 use crate::config::Policy;
-use crate::rules::{Action, Direction, Family, Rule, RuleFile, is_wildcard, wildcard_match};
+use crate::rules::{
+    Action, Direction, Family, Remote, Rule, RuleFile, is_wildcard, wildcard_match,
+};
 
 /// The name the store shows for us, in provider, sublayer and filter display data alike.
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
@@ -647,18 +649,62 @@ impl Engine {
             // Both address conditions are a pointer into a struct WFP reads while the filter is
             // added, so the value lives here for as long as this application's filters are being
             // added. It is not an `Option` of the struct: the pointer has to reach the struct.
-            let addr = rule.remote.map(|remote| match remote.family {
-                Family::V4 => AddrValue::V4(FWP_V4_ADDR_AND_MASK {
-                    addr: u32::from_be_bytes(remote.v4_bytes()),
-                    mask: remote.v4_mask(),
-                }),
-                Family::V6 => AddrValue::V6(FWP_V6_ADDR_AND_MASK {
-                    addr: remote.addr,
-                    prefixLength: remote.prefix,
-                }),
+            let addr = rule.remote.map(|remote| match remote {
+                Remote::Network(cidr) => match cidr.family {
+                    Family::V4 => AddrValue::V4(FWP_V4_ADDR_AND_MASK {
+                        addr: u32::from_be_bytes(cidr.v4_bytes()),
+                        mask: cidr.v4_mask(),
+                    }),
+                    Family::V6 => AddrValue::V6(FWP_V6_ADDR_AND_MASK {
+                        addr: cidr.addr,
+                        prefixLength: cidr.prefix,
+                    }),
+                },
+                Remote::Span(range) => match range.family {
+                    Family::V4 => AddrValue::V4Range([bound32(range.from), bound32(range.to)]),
+                    Family::V6 => AddrValue::V6Range([
+                        FWP_BYTE_ARRAY16 {
+                            byteArray16: range.from,
+                        },
+                        FWP_BYTE_ARRAY16 {
+                            byteArray16: range.to,
+                        },
+                    ]),
+                },
             });
 
-            for layer in layers_for(rule.direction, rule.remote.map(|remote| remote.family)) {
+            // A range is a pointer condition as well, and its bounds are the `addr` above. The
+            // reference fills the same shape: a v4 bound is the address byteswapped, which is the
+            // number `bound32` of the octets gives, and a v6 bound is a pointer to the octets.
+            let addr_range = match &addr {
+                Some(AddrValue::V4Range([lo, hi])) => Some(FWP_RANGE0 {
+                    valueLow: FWP_VALUE0 {
+                        r#type: FWP_UINT32,
+                        Anonymous: FWP_VALUE0_0 { uint32: *lo },
+                    },
+                    valueHigh: FWP_VALUE0 {
+                        r#type: FWP_UINT32,
+                        Anonymous: FWP_VALUE0_0 { uint32: *hi },
+                    },
+                }),
+                Some(AddrValue::V6Range([lo, hi])) => Some(FWP_RANGE0 {
+                    valueLow: FWP_VALUE0 {
+                        r#type: FWP_BYTE_ARRAY16_TYPE,
+                        Anonymous: FWP_VALUE0_0 {
+                            byteArray16: lo as *const FWP_BYTE_ARRAY16 as *mut _,
+                        },
+                    },
+                    valueHigh: FWP_VALUE0 {
+                        r#type: FWP_BYTE_ARRAY16_TYPE,
+                        Anonymous: FWP_VALUE0_0 {
+                            byteArray16: hi as *const FWP_BYTE_ARRAY16 as *mut _,
+                        },
+                    },
+                }),
+                _ => None,
+            };
+
+            for layer in layers_for(rule.direction, rule.remote.map(Remote::family)) {
                 let mut conditions = vec![app_condition];
 
                 if let Some(condition) = protocol {
@@ -710,6 +756,19 @@ impl Engine {
                                 r#type: FWP_V6_ADDR_MASK,
                                 Anonymous: FWP_CONDITION_VALUE0_0 {
                                     v6AddrMask: addr as *const FWP_V6_ADDR_AND_MASK as *mut _,
+                                },
+                            },
+                        },
+                        AddrValue::V4Range(_) | AddrValue::V6Range(_) => FWPM_FILTER_CONDITION0 {
+                            fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                            matchType: FWP_MATCH_RANGE,
+                            conditionValue: FWP_CONDITION_VALUE0 {
+                                r#type: FWP_RANGE_TYPE,
+                                Anonymous: FWP_CONDITION_VALUE0_0 {
+                                    rangeValue: addr_range
+                                        .as_ref()
+                                        .map(|range| range as *const FWP_RANGE0 as *mut _)
+                                        .unwrap_or(std::ptr::null_mut()),
                                 },
                             },
                         },
@@ -1117,10 +1176,18 @@ fn layer_family(layer: GUID) -> Family {
     }
 }
 
-/// The address a rule's remote condition carries, in whichever family the address is in.
+/// The address a rule's remote condition carries, in whichever family the address is in. A span
+/// keeps only its bounds here; the `FWP_RANGE0` that points at them is built next to it.
 enum AddrValue {
     V4(FWP_V4_ADDR_AND_MASK),
     V6(FWP_V6_ADDR_AND_MASK),
+    V4Range([u32; 2]),
+    V6Range([FWP_BYTE_ARRAY16; 2]),
+}
+
+/// The four octets of a v4 address as WFP numbers them: most significant octet first.
+fn bound32(addr: [u8; 16]) -> u32 {
+    u32::from_be_bytes([addr[0], addr[1], addr[2], addr[3]])
 }
 
 /// The condition that names the port a connection is about on a layer.
@@ -1412,7 +1479,14 @@ mod tests {
             }
         }
 
-        for address in ["192.168.1.0/24", "10.0.0.5", "fe80::/10", "2001:db8::1/64"] {
+        for address in [
+            "192.168.1.0/24",
+            "10.0.0.5",
+            "fe80::/10",
+            "2001:db8::1/64",
+            "192.168.1.10-192.168.1.20",
+            "2001:db8::1-2001:db8::ff",
+        ] {
             let rules = RuleFile {
                 rule: vec![Rule {
                     remote: Some(address.parse().expect("parse an address")),

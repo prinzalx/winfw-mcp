@@ -44,7 +44,7 @@ them is about all of them, which is every rule written before these fields exist
 | `protocol` | `"tcp"`, `"udp"`, `47` | the transport the connection uses |
 | `direction` | `"in"`, `"out"` | which way the connection goes |
 | `port` | `"443"`, `"1024-2048"` | one port, or an inclusive range of them |
-| `remote` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"fe80::/10"` | the address the connection goes to |
+| `remote` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"` | the address the connection goes to |
 
 ```toml
 [[rule]]
@@ -75,8 +75,8 @@ connections alone rather than deciding them. Details in
 
 ## Writing a remote address
 
-`remote` is one address or one network in either family, written the way networks are written
-everywhere else:
+`remote` is one address, one network or one span of addresses in either family, written the way
+networks are written everywhere else:
 
 | Written | Read as |
 |---|---|
@@ -85,6 +85,7 @@ everywhere else:
 | `10.0.0.5/24` | `10.0.0.0/24` |
 | `fe80::/10` | an IPv6 network |
 | `::/0` | every IPv6 address |
+| `10.0.0.1-10.0.0.9` | the nine hosts between the two ends, both included |
 
 A bare address is a prefix as wide as its family, so it names one host. Host bits are dropped while
 the text is read, which is why `10.0.0.5/24` is stored and shown as `10.0.0.0/24`: what is in the
@@ -92,6 +93,12 @@ file is exactly the network the filter matches. A prefix longer than the family 
 `::/129`) is refused, and so is text that is not an address at all. A hostname such as
 `example.com` is not an address; resolving names is not something WFP does for a filter condition,
 so a name would have to be turned into an address by hand.
+
+A span is told from the other two shapes by the `-` between its ends, which no address text
+contains. It covers what a prefix cannot: `10.0.0.1-10.0.0.9` is nine hosts, while the narrowest
+network that holds them all would also hold `10.0.0.0` and `10.0.0.10` to `10.0.0.15`. Both ends
+have to be addresses of the same family and the first must not come after the second, so
+`10.0.0.9-10.0.0.1` is refused rather than read as a span that matches nothing.
 
 Because an IPv4 address can never match on an IPv6 layer and the other way round, an address also
 narrows the layers the rule is installed on, exactly as `direction` does.

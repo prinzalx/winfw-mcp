@@ -33,8 +33,8 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   file's order has on the filters. Every field is edited in place and saved on change. Protocol and
   direction are dropdowns whose first entry is `any`, which is sent as no value at all; the port
   box takes `443`
-  or `1024-2048` and the remote box `10.0.0.5` or `192.168.1.0/24`, both left empty for anything
-  goes. The comment box holds free text for the row and is empty on a rule that has nothing to say;
+  or `1024-2048` and the remote box `10.0.0.5`, `192.168.1.0/24` or a span such as
+  `10.0.0.1-10.0.0.9`, both left empty for anything goes. The comment box holds free text for the row and is empty on a rule that has nothing to say;
   clearing it removes the field from the file. A value the server cannot read bounces back as an
   error and the row is redrawn from what the server has.
 - **Detected** table: the learning mode, with `allow`, `deny` and `dismiss` per row. An entry for a
