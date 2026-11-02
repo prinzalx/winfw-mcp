@@ -1382,3 +1382,24 @@ what the code does, and it takes the two files that had no tests at all into the
   applications it has seen, and the wildcard that must install its pattern before the monitor has
   seen anything — the last one matters because an empty expansion would install no filter at all
   and leave a rule the store cannot explain. (2026-11-02)
+
+## 48. The elevated relaunch decision round notes
+
+Release 0.54.0 changed no behaviour. It made the one decision in `src/elevated.rs` testable and
+tested it, which is the whole file now except the FFI calls themselves.
+
+- `ShellExecuteW` reports a start and a refusal the same way: a number. Only `status > 32` means
+  granted, so the comparison decides whether this process stops itself — stopping on a refused
+  dialog would leave the firewall with no tool and no server. It was welded inside the call; it is
+  `granted()` now, with tests at null, `ERROR_CANCELLED` (5), 32 and 33.
+- The boundary is worth spelling out: 32 is the last value the shell can report as an error, so
+  the test asserts refusal at 32 and grant at 33, not "small versus large".
+- `wide()` keeps a test for the terminator, because the arguments cross the FFI boundary as
+  nul-terminated wide strings and a missing terminator is read as part of the argument by the
+  shell, not as a crash here.
+- What remains untested on purpose: `is_elevated()` and the relaunch itself. Both are the process
+  asking the operating system about itself; an assertion on the value would assert the environment
+  rather than the code, and asking for a real UAC dialog inside a test would leave an elevated
+  process behind. The suite runs elevated and unelevated instead, and the relaunch route answers
+  "already elevated" from the same function on an elevated runner, which is covered in the routes.
+  (2026-11-02)

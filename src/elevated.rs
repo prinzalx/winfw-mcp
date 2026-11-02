@@ -94,9 +94,7 @@ pub fn relaunch_elevated() -> Result<()> {
             )
         };
 
-        // `ShellExecuteW` reports a value rather than an error, and every value that is not an
-        // success is at most 32. The refused dialog is `ERROR_CANCELLED` (5) in that range.
-        if status.0 as usize <= 32 {
+        if !granted(status.0 as isize) {
             bail!(
                 "the shell refused the elevated start (status {})",
                 status.0 as usize,
@@ -117,6 +115,16 @@ pub fn relaunch_elevated() -> Result<()> {
     }
 }
 
+/// Whether a `ShellExecuteW` return value says the shell granted the start.
+///
+/// The function reports a value rather than an error, and every value that is not a success is at
+/// most 32, so a refusal has to be read out of the number. `ERROR_CANCELLED` (5) — the refused
+/// dialog — is inside that range, which is what lets the caller stop only after the shell said
+/// yes.
+fn granted(status: isize) -> bool {
+    status > 32
+}
+
 /// Encode a string as a terminated wide string.
 #[cfg(windows)]
 fn wide(value: &str) -> Vec<u16> {
@@ -126,4 +134,39 @@ fn wide(value: &str) -> Vec<u16> {
     encoded.push(0);
 
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::granted;
+
+    /// The decision is the whole safety of the route: stopping this process on a refused dialog
+    /// would leave the firewall with no tool and no server.
+    #[test]
+    fn only_a_value_above_the_error_range_grants_the_start() {
+        assert!(!granted(0), "a null handle is not a start");
+        assert!(!granted(5), "ERROR_CANCELLED is the refused dialog");
+        assert!(
+            !granted(32),
+            "32 is the last value the shell reports as an error"
+        );
+        assert!(
+            granted(33),
+            "the first value above the error range is a success"
+        );
+    }
+
+    /// The arguments travel to the shell as terminated wide strings, so the terminator is part of
+    /// the contract and not something the callee can supply.
+    #[test]
+    fn a_wide_string_ends_where_the_shell_reads_it() {
+        let encoded = super::wide("--serve");
+
+        assert_eq!(encoded.len(), "--serve".len() + 1);
+        assert_eq!(
+            encoded.last(),
+            Some(&0),
+            "the shell reads up to the terminator"
+        );
+    }
 }
