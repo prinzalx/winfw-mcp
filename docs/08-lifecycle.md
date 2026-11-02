@@ -52,6 +52,20 @@ A tray icon is not a widget: `Shell_NotifyIconW` binds an icon to a *window* and
 as messages to that window's procedure. So the tray owns a message-only window and the thread that
 pumps its messages, which is also why the tray cannot live on one of the server's request threads.
 
+### What a click on the icon does
+
+The shell reports which click it was inside the `lparam` of the callback message: the event in the
+low word, the icon id in the high word. The tray reads both words and acts on whichever names a
+real event — left button, double click and the keyboard equivalent open the page, right button and
+`WM_CONTEXTMENU` show the menu. Reading both words is deliberate and is what a shell that reports
+the event differently still gets answered by.
+
+The icon also declares version 4 to the shell. Without that the modern shell sends only raw mouse
+messages and never the `NIN_SELECT` or `WM_CONTEXTMENU` a versioned icon produces, so the version is
+what makes a click arrive at all rather than only what makes it readable. Hovering the icon names
+the tool and the address it listens on; the session token is not shown there, because it is not
+something one reads off a tooltip.
+
 ## Only one at a time
 
 A second `--serve` does not start a second server. The name `Local\winfw-mcp.serve` is claimed with

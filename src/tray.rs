@@ -46,9 +46,21 @@ static SERVER_RUNNING: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 #[cfg(windows)]
 static LIVE: Mutex<Option<Arc<crate::server::Live>>> = Mutex::new(None);
 
-/// Our icon's identifier among this window's icons.
+/// The icon's identifier among this window's icons.
 #[cfg(windows)]
 const ICON_ID: u32 = 1;
+
+/// The notification-icon version the tray asks the shell to speak.
+///
+/// The crate does not export `NOTIFY_VERSION`, and `MAKENOTIFYVERSION(0, 4)` is `0x0604`, which is
+/// version 4: the one that makes the shell report a click as `NIN_SELECT` and the right button as
+/// `WM_CONTEXTMENU` rather than only as raw mouse messages.
+#[cfg(windows)]
+const NOTIFY_VERSION: u32 = 0x0604;
+
+/// The keyboard equivalent of `NIN_SELECT`, which the crate does not export either.
+#[cfg(windows)]
+const NIN_KEYSELECT: u32 = 0x0401;
 
 /// The id of the icon `build.rs` put in the executable's resources.
 ///
@@ -165,7 +177,7 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
         NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-        NOTIFYICONDATAW, Shell_NotifyIconW,
+        NIM_SETVERSION, NOTIFYICONDATAW, Shell_NotifyIconW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE, LoadIconW,
@@ -259,7 +271,15 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
         ..Default::default()
     };
 
-    copy_wide(&mut data.szTip, "winfw-mcp");
+    // The tooltip names the address as well as the tool, so hovering answers "which instance is
+    // this and where does it live" without the user having to click first. The token is left out
+    // by `balloon_text`, which is not something one reads off a tooltip anyway.
+    let tip = format!(
+        "winfw-mcp — {}",
+        balloon_text(&UI_URL.lock().expect("url lock poisoned"))
+    );
+
+    copy_wide(&mut data.szTip, &tip);
 
     if !unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
         warn!("shell refused the tray icon");
@@ -271,11 +291,21 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
         return;
     }
 
+    // Tell the shell which icon version we speak. Without it the shell sends only raw mouse
+    // messages and, on a modern Windows 10/11 shell, reports them in a layout the window procedure
+    // used to read wrongly — which is exactly why a click did nothing. Setting the version is what
+    // makes the shell deliver `NIN_SELECT` and `WM_CONTEXTMENU`; the window procedure reads either
+    // form, so a shell that refuses the version is still understood.
+    data.Anonymous.uVersion = NOTIFY_VERSION;
+
+    if !unsafe { Shell_NotifyIconW(NIM_SETVERSION, &data) }.as_bool() {
+        debug!("shell did not accept the notification-icon version");
+    }
+
     // The start popup. A balloon the shell will not show costs a log line and nothing else: the
-    // icon is already in the notification area, and clicking it opens the page anyway. The version
-    // is deliberately left unset, which is what keeps the mouse events where the window procedure
-    // reads them today; the price is that the shell does not report a click on the balloon, so the
-    // balloon is read rather than used, and it goes away on its own.
+    // icon is already in the notification area, and clicking it opens the page anyway. The shell
+    // does not report a click on the balloon, so the balloon is read rather than used, and it goes
+    // away on its own.
     let popup = balloon_text(&UI_URL.lock().expect("url lock poisoned"));
 
     if !popup.is_empty() {
@@ -321,20 +351,23 @@ unsafe extern "system" fn wndproc(
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        DefWindowProcW, WM_APP, WM_LBUTTONUP, WM_RBUTTONUP,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_APP};
 
     // The callback message the icon was registered with.
     const TRAY_MESSAGE: u32 = WM_APP + 1;
 
     if message == TRAY_MESSAGE {
-        // Because no version was set on the icon, the mouse event that caused the callback is the
-        // high word of `lparam`.
-        match ((lparam.0 as usize) >> 16) as u32 {
-            WM_LBUTTONUP => open_browser(),
-            WM_RBUTTONUP => show_menu(handle),
-            _ => {}
+        // The shell reports the icon event in the low word of `lparam` and the icon id in the high
+        // word. Reading both words and taking whichever names a real event is what makes a click
+        // work on every shell; reading only the high word — as this code once did, expecting the
+        // event there — matched the icon id against a mouse message and answered nothing.
+        let low = (lparam.0 as u32) & 0xffff;
+        let high = ((lparam.0 as u64) >> 16) as u32 & 0xffff;
+
+        match icon_action(low, high) {
+            Some(TrayAction::Open) => open_browser(),
+            Some(TrayAction::Menu) => show_menu(handle),
+            None => {}
         }
 
         return windows::Win32::Foundation::LRESULT(0);
@@ -343,10 +376,46 @@ unsafe extern "system" fn wndproc(
     unsafe { DefWindowProcW(handle, message, wparam, lparam) }
 }
 
+/// What an icon notification asks the tray to do.
+#[cfg(windows)]
+#[derive(Debug, PartialEq, Eq)]
+enum TrayAction {
+    Open,
+    Menu,
+}
+
+/// The action an icon callback asks for, read from the two words of its `lparam`.
+///
+/// A shell that was told our icon version reports `NIN_SELECT` for a left click and
+/// `WM_CONTEXTMENU` for the right; a shell that was not reports the raw mouse messages instead.
+/// Both forms are handled so a click does the same thing whichever the shell chose. The event is
+/// the low word and the icon id the high word, but the high word is consulted too so a shell that
+/// reports it differently is still understood.
+#[cfg(windows)]
+fn icon_action(low: u32, high: u32) -> Option<TrayAction> {
+    use windows::Win32::UI::Shell::NIN_SELECT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP,
+    };
+
+    match low {
+        NIN_SELECT | NIN_KEYSELECT | WM_LBUTTONUP | WM_LBUTTONDBLCLK => {
+            return Some(TrayAction::Open);
+        }
+        WM_CONTEXTMENU | WM_RBUTTONUP => return Some(TrayAction::Menu),
+        _ => {}
+    }
+
+    match high {
+        WM_LBUTTONUP | WM_LBUTTONDBLCLK => Some(TrayAction::Open),
+        WM_RBUTTONUP => Some(TrayAction::Menu),
+        _ => None,
+    }
+}
+
 /// Hand a URL to the shell, which is what opens the default browser.
 ///
-/// The tray's own click ends up here, and so does a second process that found the instance name
-/// already taken and has nothing else to offer the user.
+/// The tray's own click ends up here.
 #[cfg(windows)]
 pub fn open_url(url: &str) {
     use tracing::info;
@@ -688,6 +757,35 @@ mod tests {
         assert_eq!(split_url("http://127.0.0.1:8788"), None);
         assert_eq!(split_url("http://127.0.0.1:8788/"), None);
         assert_eq!(split_url("http://127.0.0.1:8788/#token="), None);
+    }
+
+    /// The shell reports an icon click in the low word and the icon id in the high word. A shell
+    /// that knows our version reports `NIN_SELECT`/`WM_CONTEXTMENU`; one that does not reports the
+    /// raw mouse message. Every one of those must open the page or show the menu — a click that
+    /// lands in `None` is a click the user cannot see.
+    #[cfg(windows)]
+    #[test]
+    fn a_click_on_the_icon_is_read_from_either_word() {
+        use windows::Win32::UI::Shell::NIN_SELECT;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP,
+        };
+
+        assert_eq!(icon_action(NIN_SELECT, ICON_ID), Some(TrayAction::Open));
+        assert_eq!(icon_action(WM_LBUTTONUP, ICON_ID), Some(TrayAction::Open));
+        assert_eq!(
+            icon_action(WM_LBUTTONDBLCLK, ICON_ID),
+            Some(TrayAction::Open)
+        );
+        assert_eq!(icon_action(WM_CONTEXTMENU, ICON_ID), Some(TrayAction::Menu));
+        assert_eq!(icon_action(WM_RBUTTONUP, ICON_ID), Some(TrayAction::Menu));
+
+        // A shell that puts the event in the high word is still understood.
+        assert_eq!(icon_action(0, WM_LBUTTONUP), Some(TrayAction::Open));
+        assert_eq!(icon_action(0, WM_RBUTTONUP), Some(TrayAction::Menu));
+
+        // The icon id alone is not an event and must not open anything.
+        assert_eq!(icon_action(0, ICON_ID), None);
     }
 
     #[cfg(windows)]

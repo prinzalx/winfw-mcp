@@ -1688,3 +1688,35 @@ section 4 already promised case-insensitive wildcards.
 - Four tests, 242 green, `cargo fmt --check` clean, clippy unchanged at four warnings. Docs: the
   learning-mode chapter names the comparison, and the WFP chapter gained the section on the
   application condition with the measurement in it. (2026-11-02)
+
+## 59. A click on the tray icon finally works (2026-11-02)
+
+Reported by the user: the icon was visible in the notification area, its tooltip read only
+"winfw-mcp", and neither the left nor the right mouse button did anything.
+
+Cause. The icon is registered with a callback message, and the shell reports the event that
+triggered it inside the `lparam` of that message: the event in the low word, the icon id in the
+high word. The window procedure read only the high word, so it compared the icon id `1` against
+`WM_LBUTTONUP` and never matched; every click fell into the `_ => {}` arm and was dropped without a
+trace. A second issue sat behind the first: `Shell_NotifyIconW(NIM_SETVERSION, …)` was never called,
+and the modern Windows 10/11 shell reports a click as `NIN_SELECT` and the right button as
+`WM_CONTEXTMENU` only once the icon has declared a version, so those events were never delivered at
+all.
+
+Fix. The callback is resolved through a pure `icon_action(low, high)` helper that reads both words
+and takes whichever names a real event, so a shell that reports the event in either word is
+understood. `NIM_SETVERSION` is now sent with version 4 so the shell sends `NIN_SELECT`,
+`NIN_KEYSELECT` and `WM_CONTEXTMENU`, and a double click opens the page the same way a single one
+does. The tooltip now names the address as well as the tool, which answers "which instance is this"
+without a click.
+
+Honest about the limits. `NIN_SELECT`, `WM_CONTEXTMENU`, `WM_LBUTTONDBLCLK` and `NIM_SETVERSION` are
+exported by the `windows` crate; `NOTIFY_VERSION` and `NIN_KEYSELECT` are not, so they are defined
+locally. The click behaviour cannot be exercised by an automated test in this environment: there is
+no way to deliver a real shell click from a script, so the helper is tested for its decision table
+and the wiring is argued from the protocol and the user's report, not from a recorded click.
+
+Ghost icon caveat. A forced `taskkill` never runs `Shell_NotifyIconW(NIM_DELETE)`, so the icon stays
+behind after a killed process and answers nothing when clicked. That is cosmetic and clears on one
+click, but it explains part of the "nothing happens" feeling during development and it is worth
+remembering when a live test ends with `taskkill`.
