@@ -44,12 +44,19 @@ to the same live store, and the result then depends on which of them finished la
 ## Commands
 
 ```
-winfw-mcp            load rules.toml and install it in the live store, then exit
-winfw-mcp --serve    run the web server until stopped
-winfw-mcp --clear    remove our filters from the live store
-winfw-mcp --help     print the usage text (`-h`)
-winfw-mcp --version  print the version (`-V`)
+winfw-mcp                   load rules.toml and install it in the live store, then exit
+winfw-mcp --serve           run the web server until stopped
+winfw-mcp --clear           remove our filters from the live store
+winfw-mcp --import <file>   read a simplewall profile into the active rule file, replacing it
+winfw-mcp --help            print the usage text (`-h`)
+winfw-mcp --version         print the version (`-V`)
 ```
+
+`--import` needs no elevation: it reads the XML a person exported from the C original, writes the
+rules it understands into the rule file of the active profile, and stops there. Nothing reaches the
+live store, because the point of the import is to look at the result on the page before deciding
+whether it is worth installing. What the shape of a profile does not fit is written into the comment
+of the rule it came from, or reported as a note in the log when no rule came from it at all.
 
 An unknown flag is an error rather than a shrug, so a mistyped option cannot silently install
 filters nobody asked for. Only one `--serve` may run at a time: a second start finds the first,

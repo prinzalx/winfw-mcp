@@ -202,8 +202,10 @@ Kept as asked, with the two audits now folded in below.
 - ~~**`rmcp` was rejected in favour of hand-written JSON-RPC**~~ — closed in 0.44.1. The rejection
   stands (`src/mcp.rs:4-8`); the comment in `Cargo.toml` that still announced the crate as a
   dependency milestone 9 would add now says what was decided and why.
-- **`quick-xml` is absent**, so an existing simplewall profile cannot be read at all. PLAN.md §6 listed
-  it for exactly that.
+- ~~**`quick-xml` is absent**, so an existing simplewall profile cannot be read at all.~~ — closed in
+  0.57.0. PLAN.md §6 listed it for exactly that, and `src/simplewall.rs` now reads a profile through
+  it. What is *not* done: there is no import button on the page, only the `--import` flag, and the
+  XML is read but never written, so this tool cannot hand a file back to the C original.
 - **The `mcp-template` structure was not carried over**: no contract document, no per-tool smoke
   tests, no skill file, no `tests/` directory.
 - **Doc drift, closed in 0.53.0**: chapter 8 claimed every tray entry is the same request the page
@@ -1480,3 +1482,33 @@ network or a span. What it still cannot:
 
 Two of these are WFP work with the text format already settled; the third is a layer of its own,
 as §9 said. None of them was started, and no decision here is hard to reverse. (2026-11-02)
+
+## 52. Reading a profile of the C original round notes
+
+Release 0.57.0 added `src/simplewall.rs` and the `--import <file>` flag, which closes the last item
+of §3.7 that named a dependency the plan listed but the build did not use.
+
+- Reading was done against the reference reader (`simplewall/src/db.c:283-420`) rather than against a
+  remembered format, and that corrected two guesses before they became code. The sections that hold
+  rules are `rules_custom` and `rules_system`; there is no section called `rules_user`, which is the
+  name the profile *statistics* use for a count (`profile.c:869`) and nothing to do with the XML.
+  `rules_config` is skipped on purpose: it is the enabled table of the built-in rules (`db.c:484-510`),
+  not a rule.
+- The attribute names are `name`, `apps`, `rule`, `rule_local`, `comment`, `dir`, `protocol`,
+  `is_block`, `is_enabled`, `is_services`, `is_kernel`, `os_version` and `version` (`db.c:309-341`).
+  `dir` and `protocol` are numbers, not words, and absent means outbound and any protocol, which is
+  how the reference reads them (`_r_xml_getattribute_long` on a missing attribute yields 0).
+- `version` is the address family and had no place in our model, so it is named in the comment of the
+  rule it came from. This was found by comparing the attribute list of `_app_db_parse_rule` against
+  our own field list rather than by testing, which is the kind of thing §4 exists for.
+- One item that names several applications becomes one rule each, because our rule holds one pattern.
+  Everything else the shape cannot carry is named in the comment, or in a note when no rule came from
+  the item at all. Nothing is dropped in silence; that was the design rule, and it is what makes a
+  hand-written profile safe to feed in.
+- The reader is `quick-xml` with default features off, so no encoding detection is compiled in: the
+  files simplewall writes are UTF-8 and the crate's own default decoder handles them. It also means
+  the crate's lenient behaviour is what we ship — an unclosed tag is *not* an error, which surprised
+  the first version of the failure test and is now what that test asserts about.
+- Not built: writing XML back out, an import button on the page, and a merge mode. `--import` replaces
+  the rule file of the active profile and exits without touching the live store, so the person looks
+  at the result on the page and applies it in their own time. (2026-11-02)

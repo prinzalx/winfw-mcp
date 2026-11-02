@@ -14,6 +14,7 @@ mod monitor;
 mod paths;
 mod rules;
 mod server;
+mod simplewall;
 mod store;
 mod tray;
 #[cfg(windows)]
@@ -22,9 +23,10 @@ mod wfp;
 #[cfg(test)]
 mod testutil;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -38,7 +40,7 @@ use crate::rules::RuleFile;
 ///
 /// The two one-shot operations are the two the web UI exposes as well; `Serve` is the mode the
 /// tool is meant to run in, and it keeps the process alive instead of applying and exiting.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 enum Command {
     /// Push the loaded rules into the live store.
     #[default]
@@ -47,6 +49,8 @@ enum Command {
     Clear,
     /// Run the web server until the process is stopped.
     Serve,
+    /// Read a profile written by the C original into the active rule file.
+    Import(PathBuf),
 }
 
 impl Command {
@@ -57,6 +61,7 @@ impl Command {
             [] => Ok(Self::default()),
             [flag] if flag == "--clear" => Ok(Self::Clear),
             [flag] if flag == "--serve" => Ok(Self::Serve),
+            [flag, path] if flag == "--import" => Ok(Self::Import(PathBuf::from(path))),
             [flag] => bail!("unknown argument '{flag}'; expected --clear or --serve (see --help)"),
             _ => bail!("too many arguments; expected at most one flag"),
         }
@@ -68,7 +73,7 @@ fn main() -> Result<()> {
 
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "winfw-mcp [ --serve | --clear ]\n\n    (no flag)      load the rules and install them in the live store\n    --serve        run the web server until the process is stopped\n    --clear        remove our filters from the live store\n    --help, -h     show this text\n    --version, -V  print the version\n\nReading and writing the store needs elevation."
+            "winfw-mcp [ --serve | --clear | --import <profile.xml> ]\n\n    (no flag)      load the rules and install them in the live store\n    --serve        run the web server until the process is stopped\n    --clear        remove our filters from the live store\n    --import       read a simplewall profile into the active rule file, replacing it\n    --help, -h     show this text\n    --version, -V  print the version\n\nReading and writing the store needs elevation."
         );
 
         return Ok(());
@@ -129,6 +134,31 @@ fn main() -> Result<()> {
         "settings loaded",
     );
     info!(count = rules.rule.len(), "rules loaded");
+
+    // Reading a profile from the C original replaces the rules of the active profile and stops
+    // there: nothing is pushed to the live store, because the user is meant to look at the result
+    // on the page before deciding whether it is worth installing.
+    if let Command::Import(file) = &command {
+        let text = std::fs::read_to_string(file)
+            .with_context(|| format!("read the profile {}", file.display()))?;
+        let import = simplewall::parse(&text)
+            .with_context(|| format!("read the profile {}", file.display()))?;
+
+        import.rules.save(&active_rules)?;
+
+        for note in &import.notes {
+            warn!(note = %note, "left out of the import");
+        }
+
+        info!(
+            file = %file.display(),
+            rules = import.rules.rule.len(),
+            notes = import.notes.len(),
+            "profile imported",
+        );
+
+        return Ok(());
+    }
 
     if command == Command::Serve {
         return serve(paths, settings, rules, active_rules, log_filter);
@@ -337,8 +367,9 @@ fn sync_store(rules: &RuleFile, command: Command, known: &[String], policy: Poli
         Command::Clear => engine.clear().map(|removed| {
             info!(removed, "our filters removed from WFP");
         }),
-        // `serve` returns before `sync_store` is reached, so this only keeps the match honest.
-        Command::Serve => Ok(()),
+        // Neither of these two reaches `sync_store`: `serve` returns into its own loop, and an
+        // import stops after writing the rule file. The arms only keep the match honest.
+        Command::Serve | Command::Import(_) => Ok(()),
     };
 
     if let Err(error) = outcome {
@@ -438,6 +469,10 @@ mod tests {
             Command::parse(&["--clear".to_owned()]).expect("--clear"),
             Command::Clear,
         );
+        assert_eq!(
+            Command::parse(&["--import".to_owned(), "profile.xml".to_owned()]).expect("--import"),
+            Command::Import("profile.xml".into()),
+        );
     }
 
     #[test]
@@ -449,5 +484,8 @@ mod tests {
         let doubled = Command::parse(&["--serve".to_owned(), "--clear".to_owned()])
             .expect_err("two flags are not one command");
         assert!(doubled.to_string().contains("too many"), "{doubled}");
+
+        let alone = Command::parse(&["--import".to_owned()]).expect_err("--import needs a file");
+        assert!(alone.to_string().contains("--import"), "{alone}");
     }
 }

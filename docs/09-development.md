@@ -9,6 +9,7 @@ src/main.rs              argument parsing, startup, the one-shot store commands
 src/config.rs            settings
 src/paths.rs             the data directory and every path inside it
 src/rules.rs             rules.toml, the profile files, and the stamp that records who wrote them last
+src/simplewall.rs        reading the XML profile the C original writes
 src/store.rs             atomic file writes
 src/device.rs            device path <-> drive path
 src/learn.rs             the Detected list

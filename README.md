@@ -52,7 +52,7 @@ dismissed from the browser. In a release build it runs without a console window 
 icon. Any area can be copied into `export\` on demand, one rule travels as a Base64 string, and an
 MCP agent talks JSON-RPC to `POST /mcp`. Rules are organised into named profiles, protection can be
 paused from the page or from the tray menu, and stopping the tool — from either — leaves the filters
-in place.
+in place. A rule file written by the C original can be read in with `--import <file>`.
 
 The MCP endpoint reads only, on purpose: an agent that could write a rule could open its own gate,
 and that is the one thing a firewall in front of an agent should not allow.
@@ -73,27 +73,26 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.56.0**: a rule can name a span of addresses. `remote` took one address
-or one network, and a network cannot cover nine hosts without also covering the fifteen around
-them, so `10.0.0.1-10.0.0.9` is now written, stored, shown and installed as a range condition.
-Before it, **0.55.0** made the Detected list follow the profile: an entry is a question
-about the rules that are live, so each profile now keeps its own list — switching profiles
-switches the list, rename and delete move it along — while the set of applications a wildcard
-expands against stays shared, because it is a fact about the machine. Before it, **0.54.0** named
-and tested the decision that tells the tool whether the shell granted an elevated restart, leaving
-no source file without tests. Before it, **0.53.0** corrected two places where the
-documentation had drifted from the code and gave `src/main.rs` its first tests, and **0.52.0**
-closed a backlog item by reading the rule model rather than changing it. The last change of
-behaviour was **0.51.0**, where a rule learned to name any transport — `protocol` took
-only `tcp` and `udp` and now takes a protocol number from 1 to 255 as well, which is how a rule
-about GRE (47) or ESP (50) is written. Before that, a drive mounted after the tool started became
-findable (a path
-lookup that misses re-asks the system for the drive-to-device table and retries), an unelevated run
+The current release is **0.57.0**: a profile written by the C original can be read. `--import
+<file>` takes the XML simplewall exports, turns the items of its two rule sections into rules of
+this tool, and replaces the rule file of the active profile with them; nothing reaches the live
+store, so the result is looked at on the page before anything is installed. Before it, **0.56.0**
+let a rule name a span of addresses — `remote` took one address or one network, and a network
+cannot cover nine hosts without also covering the fifteen around them, so `10.0.0.1-10.0.0.9` is
+now written, stored, shown and installed as a range condition. Before it, **0.55.0** made the
+Detected list follow the profile: an entry is a question about the rules that are live, so each
+profile keeps its own list, while the set of applications a wildcard expands against stays shared,
+because that is a fact about the machine. Before it, **0.54.0** named and tested the decision that
+tells the tool whether the shell granted an elevated restart, and **0.53.0** corrected two places
+where the documentation had drifted from the code. Earlier changes of behaviour: a rule learned to
+name any transport (`protocol` takes a number from 1 to 255, which is how a rule about GRE (47) or
+ESP (50) is written, 0.51.0), a drive mounted after the tool started became findable (a lookup that
+misses re-asks the system for the drive-to-device table and retries, 0.50.0), an unelevated run
 learned to raise itself (`POST /api/relaunch` shows the UAC dialog and stops this process when the
-shell grants it), two pages open on the same rules list stopped overwriting each other silently (the
-state reports a `generation`, and a whole-list write that names a stale one is answered `409`), the
-rules table learned to be reordered, and the connection feed learned to say when it last spoke —
-`running, 128 events, last event 42s ago`. The startup diff names the rules
+shell grants it, 0.49.0), two pages open on the same rules list stopped overwriting each other
+silently (the state reports a `generation`, and a whole-list write that names a stale one is
+answered `409`), the rules table learned to be reordered, and the connection feed learned to say
+when it last spoke — `running, 128 events, last event 42s ago`. The startup diff names the rules
 added, removed or flipped while the tool was closed. An export names the profile its rules came
 from, the firewall can be paused from the page or the tray, and a rule can carry a `comment`. The
 handbook reads like an operating manual rather than a development diary, and the release history

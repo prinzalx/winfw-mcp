@@ -205,6 +205,20 @@ can be handed a share string and can report what the page makes of it, but it ca
 one itself. On import the pattern is validated first, because a share string is Base64 around JSON a
 human may have edited.
 
+## Importing from the C original
+
+`--import <file>` reads the XML a person exported from simplewall and writes the rules it understands
+into the rule file of the active profile, replacing what was there. The two sections that hold rules
+are read in document order; the list of applications, the table of built-in rules and the blocklist
+are left alone, because they are not rules of this shape.
+
+What a rule of this tool cannot express is not dropped in silence. An item that names several
+applications becomes one rule each. An item that names several ports or addresses, a local address,
+an address family, a service instead of a path, a service or kernel flag: all of it is named either
+in the comment of the rule it came from or, when no rule came from it at all, as a note in the log.
+The import writes and exits; it does not touch the live store, so the result is looked at on the page
+before anything is installed.
+
 ## Profiles
 
 A profile is a file, not a table. The active profile is a name in `config.toml`, and its rules are
