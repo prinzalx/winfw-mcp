@@ -55,11 +55,16 @@ Kept as asked, with the two audits now folded in below.
 
 ### 3.1 Lifecycle and tray
 
-- **The start popup does not exist.** PLAN.md §1 promises a popup that confirms the tool is running
-  and shows the local URL, then closes. A tray icon was built instead, which the code documents as a
-  deliberate replacement (`src/tray.rs:3-6`), but nothing at startup shows the URL to the user.
-- **The tray menu has only `Quit`.** The planned `Open` and `Pause protection` are absent; `Open` is
-  reachable only through a left click. [verified] There is no pause concept in the code at all.
+- ~~**The start popup does not exist.**~~ — closed in 0.41.0. PLAN.md §1 promises a popup that
+  confirms the tool is running and shows the local URL, then closes. The tray icon came first and for
+  a while *was* the announcement; the popup is now the balloon the icon is modified with, it names
+  the address, and it closes itself (`src/tray.rs`, `NIF_INFO`). What is left of the finding is
+  whether the balloon should be suppressible at all.
+- ~~**The tray menu has only `Quit`.**~~ — closed in 0.21.0 for the menu itself: right click now
+  opens `Open`, `Pause learning` and `Quit`, and the pause label is built when the menu opens, so it
+  follows the flag the monitor reads. What is left of the finding is the *other* pause: PLAN.md §1
+  also named `Pause protection`, which would stop enforcing rather than stop collecting, and no such
+  flag exists.
 - ~~**The UI never says whether the monitor is running.**~~ — closed in 0.27.0. The thread
   publishes what subscribing did (`starting`, `running`, `refused` with the code, `stopped`) and
   both reports carry how many events the log took in, so an empty list names its reason. What is
@@ -1018,3 +1023,35 @@ Open after the pass:
   (2026-11-02)
 - `docs/05` still describes the page area by area; a screenshot has never been part of the
   handbook, and a reviewer may ask for one.
+
+## 34. Start popup round notes
+
+Released in **0.41.0**. The first bullet of §3.1 is closed: PLAN.md §1 promised a start popup that
+says the tool is running and shows the local URL, and a double-clicked tool had nothing to say — a
+release build has no console, so even the line the startup logs goes somewhere the user is not
+looking.
+
+The decisions the round made, so that a later reader knows they were deliberate:
+
+- **The popup is a balloon, not a window.** `Shell_NotifyIconW` with `NIF_INFO` shows the address
+  beside the icon and closes itself after the shell's display time. It needs no window, no widget and
+  no second thread, which is what PLAN.md §1's "no layered popup-notification windows" was
+  protecting.
+- **The icon keeps its shell version unset.** Reporting a click on the balloon needs a version, and a
+  version also moves the mouse events out of the high word of `lParam`, where the window procedure
+  reads them today. The existing click path was worth more than a balloon click, so the balloon is
+  read rather than used and only ever dismisses itself.
+- **The text is the address without the token.** The tray opens the browser on a URL carrying the
+  session token, and a token is thirty characters the user did not ask for in a balloon that is
+  readable for a few seconds. The page reads its token from its own first response anyway, so the
+  shorter text loses nothing.
+- **A refused balloon costs a debug line.** The icon is in the notification area either way, and the
+  popup is the least important thing the shell is asked for here.
+
+Open after the round:
+
+- Whether the popup should be suppressible — `--quiet`, or a setting — has not been asked. A tool
+  started from the Startup folder shows it on every logon, which is the intended behaviour until
+  somebody says otherwise. (2026-11-02)
+- No human has seen the balloon yet: an unelevated `--serve` run reaches the `NIM_MODIFY` call, but
+  whether the shell paints it on this desktop is a visual fact no unit test can assert. (2026-11-02)

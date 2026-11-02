@@ -34,6 +34,15 @@ it from there, which is what keeps a single `.exe` portable. If the resource is 
 without a resource compiler — the tray falls back to the system's default application icon and the
 tool still works.
 
+Once the icon is in place it is modified a second time, and that second call is the start popup of
+PLAN.md section 1: a balloon whose title is the tool's name and whose text is the address the server
+listens on. It answers the only question a double-click raises — where is the page? — without opening
+a window and without waiting for anybody. The text is the address alone; the session token the tray
+opens the browser with is thirty characters the user did not ask for and cannot type, and the page
+reads its token from its own first response anyway. A balloon the shell refuses is a debug line
+rather than a failure, because the icon is in the notification area either way, and a startup that
+shows nothing at all is what PLAN.md section 1 was written against.
+
 A tray icon is not a widget: `Shell_NotifyIconW` binds an icon to a *window* and delivers its clicks
 as messages to that window's procedure. So the tray owns a message-only window and the thread that
 pumps its messages, which is also why the tray cannot live on one of the server's request threads.
@@ -72,6 +81,10 @@ on one machine may each run the tool, and each owns the rules in its own `%APPDA
   lasts for this run only: a restart reads `config.toml` again. The menu is built when it opens, so
   the label always reflects the flag the monitor reads; a settings change made in the web in between
   is picked up the next time the menu opens. `Quit` is the same stop as below.
+- **A click on the start balloon only dismisses it.** Reporting that click needs the icon to be
+  registered with a shell version, and the version also moves where the mouse events sit in the
+  callback message. Keeping the click path where it is costs less than the balloon is worth, so the
+  balloon is read rather than used, and the icon is what opens the page.
 
 ## Stopping
 

@@ -1,9 +1,10 @@
 //! The tray icon: the only visible part of a portable tool.
 //!
-//! PLAN.md section 1 replaced simplewall's startup popup with a notification-area icon, because a
-//! tool started by double-click has no terminal to print its address in. Clicking the icon opens
-//! the browser on the UI, the right button offers `Quit`, and nothing else happens at startup, so
-//! the tool stays out of the way until it is asked for.
+//! PLAN.md section 1 asked for a start popup that says the tool is running and shows its address.
+//! That popup is the balloon the icon arrives with: it needs no window of its own, it closes
+//! itself, and it holds nobody up. Clicking the icon opens the browser on the UI, the right button
+//! offers `Open`, `Pause learning` and `Quit`, and nothing else happens at startup, so the tool
+//! stays out of the way until it is asked for.
 //!
 //! A tray icon is not a widget: `Shell_NotifyIconW` binds an icon to a *window* and delivers its
 //! clicks as messages to that window's procedure. So this module owns a message-only window and the
@@ -150,7 +151,8 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
     use windows::Win32::Foundation::HINSTANCE;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
-        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+        NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+        NOTIFYICONDATAW, Shell_NotifyIconW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE, LoadIconW,
@@ -254,6 +256,24 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
         }
 
         return;
+    }
+
+    // The start popup. A balloon the shell will not show costs a log line and nothing else: the
+    // icon is already in the notification area, and clicking it opens the page anyway. The version
+    // is deliberately left unset, which is what keeps the mouse events where the window procedure
+    // reads them today; the price is that the shell does not report a click on the balloon, so the
+    // balloon is read rather than used, and it goes away on its own.
+    let popup = balloon_text(&UI_URL.lock().expect("url lock poisoned"));
+
+    if !popup.is_empty() {
+        data.uFlags = NIF_INFO;
+        data.dwInfoFlags = NIIF_INFO;
+        copy_wide(&mut data.szInfoTitle, "winfw-mcp");
+        copy_wide(&mut data.szInfo, &popup);
+
+        if !unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool() {
+            debug!("shell refused the start balloon");
+        }
     }
 
     let _ = ready.send(true);
@@ -455,6 +475,17 @@ fn wide(value: &str) -> Vec<u16> {
     encoded
 }
 
+/// The text of the start balloon: the address, without the token the tray opens the browser with.
+///
+/// The token is thirty-odd characters the user did not ask for and cannot type, and a balloon is
+/// readable for a few seconds. The address alone is what PLAN.md section 1 wants shown, and the page
+/// reads its token from its own first response, so the shorter text loses nothing.
+#[cfg(windows)]
+fn balloon_text(url: &str) -> String {
+    url.split_once('?')
+        .map_or_else(|| url.to_owned(), |(head, _)| head.to_owned())
+}
+
 /// Copy a string into one of the fixed wide buffers of a shell struct.
 #[cfg(windows)]
 fn copy_wide(buffer: &mut [u16], value: &str) {
@@ -491,6 +522,20 @@ mod tests {
     #[test]
     fn a_wide_string_is_nul_terminated() {
         assert_eq!(wide("ab"), vec![u16::from(b'a'), u16::from(b'b'), 0]);
+    }
+
+    /// The balloon shows the address, not the session token the tray URL carries with it.
+    #[cfg(windows)]
+    #[test]
+    fn the_start_balloon_names_the_address_and_not_the_token() {
+        assert_eq!(
+            balloon_text("http://127.0.0.1:8788/?token=0f3a"),
+            "http://127.0.0.1:8788/"
+        );
+        assert_eq!(
+            balloon_text("http://127.0.0.1:8788"),
+            "http://127.0.0.1:8788"
+        );
     }
 
     #[cfg(windows)]

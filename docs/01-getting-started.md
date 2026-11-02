@@ -4,8 +4,9 @@
 
 winfw-mcp is a rewrite of [simplewall](https://github.com/henrypp/simplewall) in Rust. The C
 original is the functional specification, not a code base to port line by line. Instead of a native
-GUI it runs a small web server: start it, click the tray icon, and the browser opens the UI. The
-same core answers an MCP client, so an agent can allow or deny a connection too.
+GUI it runs a small web server: start it, a balloon names the address next to the tray icon, and a
+click on that icon opens the browser on the UI. The same core answers an MCP client, so an agent can
+allow or deny a connection too.
 
 ## What it is, and what it is not
 

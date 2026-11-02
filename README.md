@@ -4,8 +4,9 @@
 
 A rewrite of [simplewall](https://github.com/henrypp/simplewall) in Rust. The C original is the
 functional specification, not a code base to port line by line. Instead of a native GUI it runs a
-small web server: start it, click the tray icon, the browser opens the UI. The same core answers an
-MCP client over JSON-RPC, which is where a local agent reads the firewall.
+small web server: start it, a balloon names the address next to the tray icon, a click on that icon
+opens the browser, and the same core answers an MCP client over JSON-RPC, which is where a local
+agent reads the firewall.
 
 - Target platform: **Windows only**, no cross-platform abstraction layer
 - Runs **portable**: no service, no installer, no registry state
@@ -71,9 +72,10 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.40.1**, a documentation release. The handbook reads like an operating
-manual rather than a development diary: version numbers are gone from the chapters and the release
-history has its own file, [CHANGELOG.md](CHANGELOG.md).
+The current release is **0.41.0**. Starting the tool now says so: the tray icon arrives with a
+balloon naming the address, which is the start popup PLAN.md section 1 promised. The handbook reads
+like an operating manual rather than a development diary: version numbers are gone from the chapters
+and the release history has its own file, [CHANGELOG.md](CHANGELOG.md).
 [SECURITY_REVIEW.md](SECURITY_REVIEW.md) is a brief for an outside reviewer of the request
 path; the security chapter it reviews is
 [the security model](docs/10-security-model.md#the-guard).
