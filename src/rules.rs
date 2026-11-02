@@ -16,13 +16,20 @@ pub enum Action {
 
 /// The transport a rule is about.
 ///
-/// Absent on a rule means both, which is what a rule was before this dimension existed. A bare
-/// protocol number is not offered yet; TCP and UDP are what the reference offers too.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// Absent on a rule means every transport, which is what a rule was before this dimension existed.
+/// The two names the rule file may hold are `tcp` and `udp`; anything else is written as the
+/// protocol number, which is how a rule about GRE (47) or ESP (50) is expressed. A number is read
+/// from either shape — `protocol = 47` and `protocol = "47"` mean the same rule — and is written
+/// back as a number.
+///
+/// Zero is refused rather than treated as a protocol: a rule that wants every transport leaves the
+/// field out, and `0` is what a caller who did not understand that would send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
     Tcp,
     Udp,
+    /// A transport with no name of its own in this tool, named by its number.
+    Other(u8),
 }
 
 impl Protocol {
@@ -31,7 +38,90 @@ impl Protocol {
         match self {
             Self::Tcp => 6,
             Self::Udp => 17,
+            Self::Other(number) => number,
         }
+    }
+
+    /// The name this protocol is written with, if it has one.
+    const fn name(self) -> Option<&'static str> {
+        match self {
+            Self::Tcp => Some("tcp"),
+            Self::Udp => Some("udp"),
+            Self::Other(_) => None,
+        }
+    }
+
+    /// Accept a number from either shape, which is what lets `47` and `"47"` mean one rule.
+    fn from_number(number: u64) -> Option<Self> {
+        match u8::try_from(number) {
+            Ok(0) | Err(_) => None,
+            Ok(number) => Some(Self::Other(number)),
+        }
+    }
+}
+
+impl Serialize for Protocol {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.name() {
+            Some(name) => serializer.serialize_str(name),
+            None => serializer.serialize_u8(self.number()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Protocol {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Value;
+
+        impl serde::de::Visitor<'_> for Value {
+            type Value = Protocol;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("\"tcp\", \"udp\", or a protocol number from 1 to 255")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<Protocol, E> {
+                match text {
+                    "tcp" => return Ok(Protocol::Tcp),
+                    "udp" => return Ok(Protocol::Udp),
+                    _ => {}
+                }
+
+                // A number that arrives inside a string is still the answer the user meant, and a
+                // zero or an over-large one is refused exactly as the numeric form is.
+                match text.parse::<u64>().ok().and_then(Protocol::from_number) {
+                    Some(protocol) => Ok(protocol),
+                    None => Err(E::invalid_value(
+                        serde::de::Unexpected::Str(text),
+                        &"\"tcp\", \"udp\", or a protocol number from 1 to 255",
+                    )),
+                }
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, number: u64) -> Result<Protocol, E> {
+                match Protocol::from_number(number) {
+                    Some(protocol) => Ok(protocol),
+                    None => Err(E::invalid_value(
+                        serde::de::Unexpected::Unsigned(number),
+                        &"a protocol number from 1 to 255",
+                    )),
+                }
+            }
+
+            /// TOML hands every integer over as signed, and serde's default for this one only
+            /// names the type it did not expect.
+            fn visit_i64<E: serde::de::Error>(self, number: i64) -> Result<Protocol, E> {
+                match u64::try_from(number) {
+                    Ok(number) => self.visit_u64(number),
+                    Err(_) => Err(E::invalid_value(
+                        serde::de::Unexpected::Signed(number),
+                        &"a protocol number from 1 to 255",
+                    )),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(Value)
     }
 }
 
@@ -1071,11 +1161,83 @@ mod tests {
 
     #[test]
     fn a_rule_file_refuses_a_protocol_it_does_not_know() {
-        let parsed: Result<RuleFile, toml::de::Error> = toml::from_str(
-            "[[rule]]\nname = \"x\"\naction = \"allow\"\npattern = \"a\"\nprotocol = \"sctp\"\n",
+        let parsed = rule_file_with("protocol = \"sctp\"");
+
+        assert!(parsed.is_err(), "a name that is not tcp or udp is refused");
+    }
+
+    /// Read one rule file whose only interesting field is the text given.
+    fn rule_file_with(field: &str) -> Result<RuleFile, toml::de::Error> {
+        toml::from_str(&format!(
+            "[[rule]]\nname = \"x\"\naction = \"allow\"\npattern = \"a\"\n{field}\n"
+        ))
+    }
+
+    #[test]
+    fn a_bare_protocol_number_survives_a_round_trip() {
+        let path = crate::testutil::scratch_dir("rules-protocol-number").join("rules.toml");
+        let rules = RuleFile {
+            rule: vec![Rule {
+                protocol: Some(Protocol::Other(47)),
+                ..Rule::plain("gre", Action::Allow, "C:\\Tools\\gre.exe")
+            }],
+        };
+
+        rules.save(&path).expect("save");
+
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("protocol = 47"), "{text}");
+        assert_eq!(RuleFile::load_or_create(&path).expect("load"), rules);
+    }
+
+    #[test]
+    fn a_protocol_number_is_the_same_rule_whether_it_is_quoted_or_not() {
+        let bare = rule_file_with("protocol = 47").expect("read the bare number");
+        let quoted = rule_file_with("protocol = \"47\"").expect("read the quoted number");
+
+        assert_eq!(bare, quoted, "one number is one rule");
+    }
+
+    #[test]
+    fn a_protocol_number_outside_one_byte_or_zero_is_refused() {
+        for field in ["protocol = 0", "protocol = 256", "protocol = -1"] {
+            assert!(
+                rule_file_with(field).is_err(),
+                "{field} should not name a protocol of this rule"
+            );
+        }
+    }
+
+    /// The state answer, the API body and the share string all go through JSON, so both directions
+    /// of the shape are pinned: a name stays a name, a number stays a number, and a client that
+    /// sends the number means the same rule the file spells it.
+    #[test]
+    fn a_protocol_travels_as_its_name_or_as_its_number() {
+        assert_eq!(
+            serde_json::to_string(&Protocol::Tcp).expect("tcp"),
+            "\"tcp\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Protocol::Udp).expect("udp"),
+            "\"udp\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Protocol::Other(47)).expect("a number"),
+            "47"
         );
 
-        assert!(parsed.is_err(), "only tcp and udp are protocols");
+        for text in ["47", "\"47\""] {
+            assert_eq!(
+                serde_json::from_str::<Protocol>(text).expect("a protocol read from JSON"),
+                Protocol::Other(47),
+                "{text} should read as the same protocol",
+            );
+        }
+
+        assert!(
+            serde_json::from_str::<Protocol>("0").is_err(),
+            "zero is not a protocol"
+        );
     }
 
     #[test]

@@ -263,8 +263,13 @@ set is `FWPM_CONDITION_ALE_APP_ID`.
 (single or range). **Closed in 0.15.0:** the remote address with a CIDR prefix, and with it the
 address family, which an address decides for itself. Still missing:
 
-- **Protocol by number.** Only TCP and UDP are offered; the reference also takes a number, which is
-  how a rule about ESP or GRE would be written.
+- ~~**Protocol by number.** Only TCP and UDP are offered; the reference also takes a number, which
+  is how a rule about ESP or GRE would be written.~~ — closed by **0.51.0**: a number from 1 to 255
+  is accepted in the file, over HTTP and in a share string, quoted or bare, and the page field
+  became a text field so a number can be typed at all (§45).
+- **Protocol names beyond the two.** The number works, but a rule about ESP reads better as a name,
+  and the reference has the list. Only worth doing together with a table of the names, not on its
+  own.
 - ~~**Address family.** We always install for both IPv4 and IPv6.~~ — done in 0.15.0, as a
   consequence of the remote address: a rule with a v4 address is installed on the v4 layers only.
   A rule **without** an address still goes on both families, which is right.
@@ -1309,3 +1314,22 @@ miss, throttled, which turned out to be the smaller change and needs no window a
 - A first draft had a function named `allow_requery` that only read and updated the timestamp and
   never asked, so a miss translated nothing and the test that looked most likely to pass was the one
   that caught it. (2026-11-02)
+
+## 45. Protocol by number round notes
+
+- The enum grew a third case rather than becoming a newtype, so `tcp` and `udp` stay spelled the way
+  every existing `rules.toml` spells them and only the new shape is a number.
+- `deserialize_any` is what lets one field answer to a name and to a number. The price is that the
+  visitor has to spell out every shape it accepts, and that `visit_i64` is not forwarded to
+  `visit_u64` by serde: TOML hands integers over signed, so a visitor without it refuses every
+  number in the file while accepting every number in JSON. Found by the round-trip test, not by the
+  JSON one.
+- Zero is refused rather than mapped to "every transport", because the field already has a way to
+  say that, which is to be absent. Accepting `0` would mean two spellings for one idea and a
+  question about which one wins.
+- The page column became a text field. `select_choices` silently shows the first option when the
+  current value is not in its list, so a stored `47` would have been displayed as "any" and
+  rewritten to nothing on the next edit of an unrelated field.
+- What is deliberately **not** here: names for the other transports. `protocol = "esp"` is still
+  refused, and the honest position is that a name list is only worth having complete, which is its
+  own item in section 4. (2026-11-02)

@@ -305,9 +305,10 @@
 
     <p class="sub">
       A deny always beats an allow, whatever the order of the list. Patterns accept the wildcards
-      <code>*</code> and <code>?</code>. A rule can be narrowed to one protocol, one direction,
-      one port or port range such as <code>1024-2048</code> and one remote address or network
-      such as <code>192.168.1.0/24</code>; a rule that names none of them is about
+      <code>*</code> and <code>?</code>. A rule can be narrowed to one protocol (<code>tcp</code>,
+      <code>udp</code>, or a number such as <code>47</code>), one direction, one port or port range
+      such as <code>1024-2048</code> and one remote address or network such as
+      <code>192.168.1.0/24</code>; a rule that names none of them is about
       all of them. Every change is written to <code>rules.toml</code> and
       pushed to the store immediately. A detected application is one no rule speaks about yet; edit
       its path into a pattern such as <code>C:\Program Files\*\app.exe</code> before you allow or
@@ -542,8 +543,17 @@
 
           // The four narrowing columns are optional on a rule, which the server reads as null.
           // An empty choice is therefore sent as null rather than as the word "any".
-          const protocol = select_choices(["", "tcp", "udp"], rule.protocol, (value) => {
-            rule.protocol = value;
+          //
+          // Protocol is a text field rather than a choice list because a transport can be named by
+          // number, and a list would have to hold every number a rule could mean.
+          const protocol = element("input");
+          protocol.type = "text";
+          protocol.value = rule.protocol ?? "";
+          protocol.placeholder = "any";
+          protocol.title = "tcp, udp, or a protocol number such as 47";
+          protocol.addEventListener("change", () => {
+            const text = protocol.value.trim();
+            rule.protocol = text === "" ? null : text;
             save();
           });
           row.appendChild(element("td", null)).appendChild(protocol);

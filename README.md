@@ -73,14 +73,15 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.50.0**. A drive mounted after the tool started is found: a path lookup
-that misses re-asks the system for the drive-to-device table and retries, so a USB disk or a
-late map of `D:\` needs neither a restart nor a device-notification window. Before that, an
-unelevated run learned to raise itself (`POST /api/relaunch` shows the UAC dialog and stops this
-process when the shell grants it), two pages open on the same rules list stopped overwriting each
-other silently (the state reports a `generation`, and a whole-list write that names a stale one is
-answered `409`), the rules table learned to be reordered, and the connection feed learned to say
-when it last spoke — `running, 128 events, last event 42s ago`. The startup diff names the rules
+The current release is **0.51.0**. A rule can name any transport: `protocol` took only `tcp` and
+`udp` and now takes a protocol number from 1 to 255 as well, which is how a rule about GRE (47) or
+ESP (50) is written. Before that, a drive mounted after the tool started became findable (a path
+lookup that misses re-asks the system for the drive-to-device table and retries), an unelevated run
+learned to raise itself (`POST /api/relaunch` shows the UAC dialog and stops this process when the
+shell grants it), two pages open on the same rules list stopped overwriting each other silently (the
+state reports a `generation`, and a whole-list write that names a stale one is answered `409`), the
+rules table learned to be reordered, and the connection feed learned to say when it last spoke —
+`running, 128 events, last event 42s ago`. The startup diff names the rules
 added, removed or flipped while the tool was closed. An export names the profile its rules came
 from, the firewall can be paused from the page or the tray, and a rule can carry a `comment`. The
 handbook reads like an operating manual rather than a development diary, and the release history

@@ -41,7 +41,7 @@ them is about all of them, which is every rule written before these fields exist
 
 | Field | Values | Meaning |
 |---|---|---|
-| `protocol` | `"tcp"`, `"udp"` | the transport the connection uses |
+| `protocol` | `"tcp"`, `"udp"`, `47` | the transport the connection uses |
 | `direction` | `"in"`, `"out"` | which way the connection goes |
 | `port` | `"443"`, `"1024-2048"` | one port, or an inclusive range of them |
 | `remote` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"fe80::/10"` | the address the connection goes to |
@@ -61,6 +61,12 @@ remote = "192.168.1.0/24"
 All four are written in the file, read back from it, shown in the page and accepted over both the
 HTTP API and MCP. A value the server cannot read is refused rather than ignored, so `port = "http"`
 bounces instead of silently turning into "every port".
+
+`protocol` is the one field with two shapes. The two transports worth naming are written as their
+names; everything else is written as its number, which is how a rule about GRE (47) or ESP (50)
+exists at all. A number may be quoted or bare, and both are written back as a bare number, so
+`protocol = "47"` becomes `protocol = 47` the next time the file is saved. Zero is refused: a rule
+that wants every transport leaves the field out rather than naming protocol 0.
 
 The narrowing is real, not cosmetic. `direction` decides which layers the rule is installed on, and
 `protocol`, `port` and `remote` become conditions on the filter, so a narrowed rule leaves other
