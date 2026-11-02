@@ -262,7 +262,10 @@ address family, which an address decides for itself. Still missing:
 - **Multi-valued** remote and local lists inside one rule. Our four narrowing fields are
   single-valued: one protocol, one direction, one port range, one address. A rule that wants TCP
   *and* UDP simply leaves the field out, and two ports that are not contiguous need two rules.
-- **Comment** on a rule and on an application.
+- ~~**Comment** on a rule~~ — closed in 0.42.0 for a rule: `comment` is an optional string that
+  decides nothing, is skipped when absent, travels with the share string and shows in the page.
+  What is left is the reference's *per-application* comment, which has no place to live here because
+  a Detected entry is a record of an event rather than one of a person's intentions.
 - **Rule class / group** (blocklist, system, user), which also decides the weight, and a separate
   overlay table so a stock rule can be toggled without editing it.
 - **Application identity beyond a path.** The reference matches services through
@@ -1055,3 +1058,31 @@ Open after the round:
   somebody says otherwise. (2026-11-02)
 - No human has seen the balloon yet: an unelevated `--serve` run reaches the `NIM_MODIFY` call, but
   whether the shell paints it on this desktop is a visual fact no unit test can assert. (2026-11-02)
+
+## 35. Rule comment round notes
+
+Released in **0.42.0**. The field is `comment` on a rule: optional, skipped when it is absent, and
+never sent to the store.
+
+The decisions the round made, so that a later reader knows they were deliberate:
+
+- **The comment decides nothing.** It is not a rule dimension, so it does not narrow a connection and
+  the store is not told about it. A wildcard rule expands into a dozen filters, and a comment written
+  into each of them would be the same sentence a dozen times in a store nobody reads with a comment.
+- **An absent comment is not written at all.** With the four narrowing fields this was already the
+  rule, and it matters more here, because a comment is the first field an old file is certain not to
+  have. A rules file that never uses the field is byte for byte what it was before.
+- **Too long is refused, not cut.** The reference truncates at its buffer size. Refusing tells the
+  person who typed it at the time, and keeps a file free of sentences that lost their ending. The
+  limit is 200 characters, and a control character is refused for the same reason.
+- **The examples carry comments.** A first-run file that shows the field teaches it; `rule` entries
+  the user writes without one are unaffected.
+
+Open after the round:
+
+- The add-rule form on the page has no comment field of its own: a new rule arrives with the name
+  `new rule` and an empty comment, which is editable in the table. A form that asks for the reason is
+  a nicer interaction and has not been built. (2026-11-02)
+- `POST /api/detected` writes no comment either, so a rule decided from the Detected list explains
+  itself with its name alone. Whether the destination should be written as the comment is a design
+  question, not a missing line of code. (2026-11-02)

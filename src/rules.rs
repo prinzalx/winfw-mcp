@@ -301,6 +301,15 @@ pub struct Rule {
     /// which is also what narrows the rule to the application alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<Cidr>,
+    /// Why the rule exists, in the words of the person who wrote it.
+    ///
+    /// It decides nothing: the field is for the reader of a list they did not write. It is skipped
+    /// when absent, so a rules file that never uses it is written exactly as it was before the
+    /// field existed. The reference has the same field on its rules (`ITEM_RULE`, `main.h`), and
+    /// like there it is never sent to the store: a filter is what a rule became, and a wildcard rule
+    /// that expands to a dozen filters would repeat the sentence a dozen times.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 const fn always_enabled() -> bool {
@@ -321,6 +330,7 @@ impl Rule {
             direction: None,
             port: None,
             remote: None,
+            comment: None,
         }
     }
 }
@@ -357,6 +367,30 @@ pub fn validate_pattern(pattern: &str) -> Result<()> {
 
     if !drive_rooted && bytes[0] != b'\\' {
         bail!("a pattern must be an absolute path such as C:\\Windows\\*.exe");
+    }
+
+    Ok(())
+}
+
+/// The longest comment a rule accepts.
+///
+/// The reference keeps its comments in a fixed buffer, so a longer one is simply cut off there.
+/// Refusing is kinder than cutting: the person who typed it finds out at once, and the file never
+/// holds a sentence that lost its ending.
+pub const COMMENT_LIMIT: usize = 200;
+
+/// Refuse a comment that would not read back the way it was meant.
+///
+/// A comment is the one field a person pastes rather than types, and pasted text brings control
+/// characters with it. TOML would escape a newline and read it back happily, but a rule that spans
+/// three lines in a file the user is expected to scan is not worth what it looks like in an editor.
+pub fn validate_comment(comment: &str) -> Result<()> {
+    if comment.chars().any(char::is_control) {
+        bail!("a comment cannot contain a control character");
+    }
+
+    if comment.chars().count() > COMMENT_LIMIT {
+        bail!("a comment cannot be longer than {COMMENT_LIMIT} characters");
     }
 
     Ok(())
@@ -470,6 +504,7 @@ impl RuleFile {
                 .parse()
                 .expect("the example prefix is a literal"),
         );
+        allow.comment = Some("the allow shape: this app may reach this network".to_owned());
 
         let mut deny = Rule::plain("example deny", Action::Deny, "C:\\test\\tool2.exe");
         deny.remote = Some(
@@ -477,6 +512,7 @@ impl RuleFile {
                 .parse()
                 .expect("the example prefix is a literal"),
         );
+        deny.comment = Some("the deny shape: this app may not".to_owned());
 
         Self {
             rule: vec![allow, deny],
@@ -1061,6 +1097,81 @@ mod tests {
             validate_pattern("C:\\a\nb.exe").is_err(),
             "a pasted newline is a control character"
         );
+    }
+
+    /// A comment is the one field that is prose, so it is the one field a person is most likely to
+    /// paste in from somewhere else. It has to survive the file exactly as it was typed.
+    #[test]
+    fn a_comment_survives_the_file_and_the_share_string() {
+        let mut rule = Rule::plain("browser", Action::Allow, "C:\\Windows\\*");
+        rule.comment = Some("vpn client, must not be blocked \u{2014} see ticket 42".to_owned());
+
+        let text = toml::to_string_pretty(&RuleFile {
+            rule: vec![rule.clone()],
+        })
+        .expect("serialize");
+
+        assert!(text.contains("comment ="), "{text}");
+
+        let loaded = RuleFile::from_text(&text).expect("read the file back");
+
+        assert_eq!(loaded.rule[0], rule, "the comment must not be rewritten");
+        assert_eq!(
+            crate::export::decode(&crate::export::encode(&rule).expect("encode"))
+                .expect("decode the share"),
+            rule,
+            "a shared rule keeps its reason"
+        );
+    }
+
+    /// A rule that has no comment must not grow one, and an empty file must not grow the key at
+    /// all: this is the first field an older `rules.toml` is certain not to have.
+    #[test]
+    fn a_rule_without_a_comment_is_written_exactly_as_it_used_to_be() {
+        let text = toml::to_string_pretty(&sample()).expect("serialize");
+
+        assert!(!text.contains("comment"), "{text}");
+
+        let plain: RuleFile = toml::from_str(
+            "[[rule]]\nname = \"x\"\naction = \"allow\"\npattern = \"C:\\\\a.exe\"\n",
+        )
+        .expect("a file without the key still reads");
+
+        assert_eq!(plain.rule[0].comment, None);
+    }
+
+    #[test]
+    fn a_comment_refuses_what_a_line_cannot_hold() {
+        assert!(
+            validate_comment("").is_ok(),
+            "an empty comment is a question for the UI"
+        );
+        assert!(validate_comment("block telemetry until the vendor fixes it").is_ok());
+        assert!(
+            validate_comment("two\nlines").is_err(),
+            "a comment is one line of a file the user scans"
+        );
+        assert!(
+            validate_comment(&"x".repeat(COMMENT_LIMIT + 1)).is_err(),
+            "too long is refused rather than cut"
+        );
+        assert!(validate_comment(&"x".repeat(COMMENT_LIMIT)).is_ok());
+    }
+
+    /// The first screen teaches the field as well as the shape of a rule.
+    #[test]
+    fn the_example_rules_explain_themselves() {
+        let examples = RuleFile::examples();
+
+        for rule in &examples.rule {
+            let comment = rule.comment.as_deref().unwrap_or_default();
+
+            assert!(
+                comment.starts_with("the "),
+                "{comment} should read as a reason"
+            );
+            assert!(validate_comment(comment).is_ok(), "{comment} is too long");
+        }
     }
 
     #[test]

@@ -27,11 +27,13 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   This is not decoration: the choice is applied to the page in the same request and
   survives a reload, so a bright terminal and a dark browser stop fighting each other.
 - **Rules** table: enabled flag, name, action, pattern, protocol, direction, port, remote address,
-  remove, share. Every field is edited in place and saved on change. Protocol and direction are
-  dropdowns whose first entry is `any`, which is sent as no value at all; the port box takes `443`
+  comment, remove, share. Every field is edited in place and saved on change. Protocol and
+  direction are dropdowns whose first entry is `any`, which is sent as no value at all; the port
+  box takes `443`
   or `1024-2048` and the remote box `10.0.0.5` or `192.168.1.0/24`, both left empty for anything
-  goes. A value the server cannot read bounces back as an error and the row is redrawn from what
-  the server has.
+  goes. The comment box holds free text for the row and is empty on a rule that has nothing to say;
+  clearing it removes the field from the file. A value the server cannot read bounces back as an
+  error and the row is redrawn from what the server has.
 - **Detected** table: the learning mode, with `allow`, `deny` and `dismiss` per row. An entry for a
   destination a covered application reached is marked `to <address>` and decides that destination
   alone.

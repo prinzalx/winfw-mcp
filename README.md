@@ -72,10 +72,12 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.41.0**. Starting the tool now says so: the tray icon arrives with a
-balloon naming the address, which is the start popup PLAN.md section 1 promised. The handbook reads
-like an operating manual rather than a development diary: version numbers are gone from the chapters
-and the release history has its own file, [CHANGELOG.md](CHANGELOG.md).
+The current release is **0.42.0**. A rule can now carry a `comment`: optional free text, shown in a
+column of its own, sent along in the Base64 share string, and kept out of the store. Starting the
+tool also says something now — the tray icon arrives with a balloon naming the address, which is the
+start popup PLAN.md section 1 promised. The handbook reads like an operating manual rather than a
+development diary: version numbers are gone from the chapters and the release history has its own
+file, [CHANGELOG.md](CHANGELOG.md).
 [SECURITY_REVIEW.md](SECURITY_REVIEW.md) is a brief for an outside reviewer of the request
 path; the security chapter it reviews is
 [the security model](docs/10-security-model.md#the-guard).

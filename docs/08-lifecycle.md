@@ -37,9 +37,11 @@ tool still works.
 Once the icon is in place it is modified a second time, and that second call is the start popup of
 PLAN.md section 1: a balloon whose title is the tool's name and whose text is the address the server
 listens on. It answers the only question a double-click raises — where is the page? — without opening
-a window and without waiting for anybody. The text is the address alone; the session token the tray
-opens the browser with is thirty characters the user did not ask for and cannot type, and the page
-reads its token from its own first response anyway. A balloon the shell refuses is a debug line
+a window, without waiting for anybody, and without asking the shell for anything the tray is not
+already asking for. The text is the address alone; the session token the tray opens the browser with
+is thirty characters the user did not ask for and cannot type, and the page reads its token from its
+own first response anyway. A balloon the shell refuses is a debug line rather than a failure,
+because the icon is in the notification area either way.
 rather than a failure, because the icon is in the notification area either way, and a startup that
 shows nothing at all is what PLAN.md section 1 was written against.
 

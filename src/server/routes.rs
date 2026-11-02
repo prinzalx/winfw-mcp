@@ -8,7 +8,7 @@ use tracing::info;
 use crate::export::{self, Area};
 use crate::learn::Detected;
 use crate::monitor::NetEvent;
-use crate::rules::{Action, Cidr, Rule, RuleFile, validate_pattern};
+use crate::rules::{Action, Cidr, Rule, RuleFile, validate_comment, validate_pattern};
 
 use super::http::{Request, Response, parse_body, parse_or_default};
 use super::mcp_tools::mcp_endpoint;
@@ -83,6 +83,10 @@ fn post_rules(state: &AppState, worker: &WfpWorker, request: &Request) -> Result
 
     for rule in &rules.rule {
         validate_pattern(&rule.pattern).with_context(|| format!("rule '{}'", rule.name))?;
+
+        if let Some(comment) = &rule.comment {
+            validate_comment(comment).with_context(|| format!("rule '{}'", rule.name))?;
+        }
     }
 
     // File first, then store: a store that refuses us must not lose the user's edit.
@@ -229,6 +233,10 @@ fn post_rules_import(state: &AppState, worker: &WfpWorker, request: &Request) ->
 
     validate_pattern(&incoming.pattern)?;
 
+    if let Some(comment) = &incoming.comment {
+        validate_comment(comment)?;
+    }
+
     let applied = {
         let mut current = state.rules.lock().expect("rules lock poisoned");
 
@@ -260,6 +268,10 @@ fn post_rules_replace(state: &AppState, worker: &WfpWorker, request: &Request) -
     // that was edited by hand after an export has not been read by anything since.
     for rule in &incoming.rule {
         validate_pattern(&rule.pattern)?;
+
+        if let Some(comment) = &rule.comment {
+            validate_comment(comment)?;
+        }
     }
 
     let applied = {

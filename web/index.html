@@ -257,6 +257,7 @@
           <th style="width: 6rem">Direction</th>
           <th style="width: 7rem">Port</th>
           <th style="width: 10rem">Remote</th>
+          <th style="width: 12rem">Comment</th>
           <th style="width: 4rem"></th>
           <th style="width: 5rem"></th>
         </tr>
@@ -547,6 +548,22 @@
             save();
           });
           row.appendChild(element("td", null)).appendChild(remote);
+
+          // The comment decides nothing; it is the sentence the person who wrote the rule leaves
+          // for the person who reads it next. Empty is stored as absent rather than as "".
+          const comment = element("input");
+          comment.type = "text";
+          comment.value = rule.comment ?? "";
+          comment.placeholder = "why";
+          comment.spellcheck = false;
+          comment.title = "why this rule exists";
+          comment.addEventListener("change", () => {
+            const text = comment.value.trim();
+
+            rule.comment = text === "" ? null : text;
+            save();
+          });
+          row.appendChild(element("td", null)).appendChild(comment);
 
           const remove = element("button", null, "remove");
           remove.addEventListener("click", () => {

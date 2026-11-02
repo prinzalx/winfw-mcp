@@ -17,6 +17,7 @@ action = "allow"
 pattern = "C:\\test\\tool1.exe"
 enabled = true
 remote = "192.0.2.0/24"
+comment = "the allow shape: this app may reach this network"
 
 [[rule]]
 name = "example deny"
@@ -24,6 +25,7 @@ action = "deny"
 pattern = "C:\\test\\tool2.exe"
 enabled = true
 remote = "198.51.100.0/24"
+comment = "the deny shape: this app may not"
 ```
 
 Both are deliberately inert. The paths name `C:\test\`, which a normal machine does not have, and
@@ -139,6 +141,30 @@ stopped honest.
 
 Application paths reach the firewall in device form (`\device\harddiskvolume3\...`), which nobody
 reads comfortably, so the UI shows the drive form and a rule written in either form is accepted.
+
+## Commenting a rule
+
+`comment` is the one field that decides nothing. It is a sentence for whoever reads the list next,
+usually the person who wrote the rule six months earlier, and it is skipped when it is absent, so a
+rules file that never uses it is written exactly as it was before the field existed.
+
+```toml
+[[rule]]
+name = "vpn"
+action = "allow"
+pattern = "C:\\Program Files\\*\\vpn.exe"
+enabled = true
+comment = "must stay allowed or the vendor's updater hangs"
+```
+
+The page shows it in a column of its own and the Base64 share string carries it, which is what makes
+a rule explainable when it travels by copy and paste. It is not sent to the store: a filter is what a
+rule became, and a wildcard rule that expands to a dozen filters would repeat the same sentence a
+dozen times in a store nobody reads with a comment.
+
+Two hundred characters is the limit, and a control character is refused. Both are refusals rather
+than cuts on purpose. The reference truncates at its buffer size, and a rule that quietly lost the
+end of its reason is harder to trust than one refused at the moment it was written.
 
 ## Sharing a rule
 
