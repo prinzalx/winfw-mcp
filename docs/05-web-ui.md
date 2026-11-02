@@ -87,7 +87,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | Route | Purpose |
 |---|---|
 | `GET /` | the page itself |
-| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, the session token and whether `rules.toml` changed outside the tool |
+| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, the session token, how often the rules file has been written, and whether `rules.toml` changed outside the tool |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
 | `POST /api/settings` | change `learn_mode`, `default_policy`, `theme` or `log_level` at runtime; all four take effect at once |
@@ -109,6 +109,19 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | `GET /api/health` | liveness, for a supervisor or the MCP transport |
 | `GET /favicon.ico` | the icon in the browser's tab, served from the binary so a request for it does not answer 404 |
 | `POST /mcp` | the Model Context Protocol endpoint (JSON-RPC 2.0) |
+
+## Two pages, one list
+
+A whole-list write — `POST /api/rules`, `POST /api/rules/replace`, `POST /api/rules/move` — may carry
+the `generation` its list was read from: the counter every state answer reports, counting how often
+this run has written the rules file. A write that names a generation the server has moved past is
+answered **409** with the state as it is now, and nothing is written: the page says *the rule list
+changed underneath you* and the human decides again. A write that names no generation is
+unconditional, which is what a client that knows nothing about the counter sends.
+
+`409` covers the case the fingerprint on the banner cannot: two pages open at the same moment. A
+file edited by hand shows up after the fact; a second page writing between this page's read and its
+save is caught before it overwrites the first page's edit.
 
 ## Who may write
 

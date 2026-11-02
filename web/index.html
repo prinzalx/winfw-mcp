@@ -873,6 +873,7 @@
         }
 
         rules = state.rules.rule;
+        generation = state.generation;
         detected = state.detected;
         learnMode = state.learn_mode;
         protection = state.protection;
@@ -912,6 +913,10 @@
       // pressed.
       let token = new URLSearchParams(window.location.search).get("token") ?? "";
 
+      // The version of the rule list this page last saw. A whole-list write names it, and a 409
+      // means someone else wrote while this page was open.
+      let generation = 0;
+
       async function request(method, path, payload) {
         const headers = {};
 
@@ -928,14 +933,22 @@
           body: payload ? JSON.stringify(payload) : undefined,
         });
 
-        if (!response.ok) {
+        if (!response.ok && response.status !== 409) {
           throw new Error(path + " answered " + response.status);
         }
 
         // One route answers with a bare Base64 string rather than JSON, and reading that as JSON
         // would fail on the padding character.
         if ((response.headers.get("content-type") ?? "").startsWith("application/json")) {
-          return response.json();
+          const body = await response.json();
+
+          if (response.status === 409) {
+            // A whole-list write named a generation the server has moved past. The body is the
+            // state as it is now; the caller says what it means.
+            body.conflict = true;
+          }
+
+          return body;
         }
 
         return response.text();
@@ -973,7 +986,11 @@
 
       async function save() {
         try {
-          apply(await request("POST", "/api/rules", { rule: rules }));
+          const state = await request("POST", "/api/rules", { rule: rules, generation: generation });
+          apply(state);
+          if (state.conflict) {
+            status("the rule list changed underneath you — save again");
+          }
         } catch (error) {
           status("could not save: " + error.message);
         }
@@ -981,7 +998,11 @@
 
       async function moveRule(index, to) {
         try {
-          apply(await request("POST", "/api/rules/move", { index: index, to: to }));
+          const state = await request("POST", "/api/rules/move", { index: index, to: to, generation: generation });
+          apply(state);
+          if (state.conflict) {
+            status("the rule list changed underneath you — move again");
+          }
         } catch (error) {
           status("could not move: " + error.message);
         }
@@ -1059,8 +1080,13 @@
         try {
           const text = await picked.text();
 
-          apply(await request("POST", "/api/rules/replace", { text }));
-          status("restored " + picked.name);
+          const state = await request("POST", "/api/rules/replace", { text: text, generation: generation });
+          apply(state);
+          if (state.conflict) {
+            status("the rule list changed underneath you — restore again");
+          } else {
+            status("restored " + picked.name);
+          }
         } catch (error) {
           status("could not restore: " + error.message);
         }

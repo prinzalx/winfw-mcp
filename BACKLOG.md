@@ -173,11 +173,11 @@ Kept as asked, with the two audits now folded in below.
 - ~~**`mcp_writes = "all"` promises flipping settings and switching profiles; only profiles work**
   (see §3.2).~~ — moot in the same way. The setting is still read from an old `config.toml` so such a
   file loads, and the next save drops the key.
-- **No protection against a write race.** No generation counter exists; every write is a full rebuild
-  and the last writer wins silently. Since **0.36.0** a change to `rules.toml` made by someone else is
-  *noticed* — the fingerprint and the banner — but two clients writing at the same moment are still
-  resolved by whoever arrives last. PLAN.md §10 asked for this before the MCP endpoint shipped, and it
-  is still the open half of that request.
+- ~~**No protection against a write race.**~~ — closed by **0.48.0**: the state answers a generation
+  counter and a whole-list write that names a stale one is refused `409` rather than applied. A
+  client that names no generation still wins silently, which is the documented behaviour rather than
+  a hole. What remains open is the question of extending the same check to routes that take an index
+  (`/api/rules/share`, `POST /api/detected`) rather than a whole list.
 - **An agent cannot stop the tool.** `shutdown` was a writing tool, so since **0.36.0** the endpoint
   has no way to end the process. That is the intended reading of "read only", but a client written
   against the old list will look for a method that is no longer there.
@@ -1224,3 +1224,28 @@ Open after the round:
 
 - Two people with the page open can still overwrite each other (no generation counter yet, see
   §3.6); the move is as exposed as every other write in that respect. (2026-11-02)
+## 42. Generation counter round notes
+
+Released in **0.48.0**. State answers carry `generation`; whole-list writes may name theirs and a
+stale name is refused `409` with the current state in the body.
+
+The decisions the round made:
+
+- **The counter counts writes of this run, not versions of the file.** A restart hands every client
+  a fresh state anyway, so a per-run atomic answers the question without surviving anything.
+- **Naming a generation is optional.** A client that does not know the counter gets the old
+  unconditional behaviour, which kept every existing route test honest without editing it.
+- **The counter belongs to the request, not to `rules.toml`.** `RuleFile` rejects unknown fields
+  because the file has no generation to carry, so the whole-list body got its own type and the file
+  format is byte for byte what it was.
+- **The bump lives in `note_rules_written`,** the one place every rules write already calls, so a
+  route cannot forget to move the counter the way a caller can forget to call a setter.
+- **A conflict answers with the whole state,** not with an error string. The page applies it and the
+  human sees what they were about to overwrite; asking the store for the inventory on the way made
+  that free, because the answer was going to be built anyway.
+
+Open after the round:
+
+- `POST /api/detected` and `POST /api/rules/import` append to the server's own list and cannot
+  contradict a client's copy, so they take no generation today. If a client ever edits a detected
+  entry rather than accepting it, that route will want the same field. (2026-11-02)

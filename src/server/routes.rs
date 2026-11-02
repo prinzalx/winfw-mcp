@@ -81,15 +81,23 @@ fn post_settings(state: &AppState, worker: &WfpWorker, request: &Request) -> Res
 
 /// What `POST /api/rules` answers: the state a replaced rule list settled on.
 fn post_rules(state: &AppState, worker: &WfpWorker, request: &Request) -> Result<Response> {
-    let rules: RuleFile = parse_body(&request.body, "a rule file object")?;
+    let incoming: Replacement = parse_body(&request.body, "a rule file object")?;
 
-    for rule in &rules.rule {
+    for rule in &incoming.rule {
         validate_pattern(&rule.pattern).with_context(|| format!("rule '{}'", rule.name))?;
 
         if let Some(comment) = &rule.comment {
             validate_comment(comment).with_context(|| format!("rule '{}'", rule.name))?;
         }
     }
+
+    if stale_generation(state, incoming.generation) {
+        return generation_conflict(state, worker);
+    }
+
+    let rules = RuleFile {
+        rule: incoming.rule,
+    };
 
     // File first, then store: a store that refuses us must not lose the user's edit.
     {
@@ -295,6 +303,11 @@ fn post_rules_import(state: &AppState, worker: &WfpWorker, request: &Request) ->
 /// What `POST /api/rules/replace` answers: the state a whole file settled on.
 fn post_rules_replace(state: &AppState, worker: &WfpWorker, request: &Request) -> Result<Response> {
     let body: Import = parse_body(&request.body, "the rules file text")?;
+
+    if stale_generation(state, body.generation) {
+        return generation_conflict(state, worker);
+    }
+
     let incoming = RuleFile::from_text(&body.text)?;
 
     // Every pattern goes through the check a single rule goes through, because a file
@@ -336,6 +349,10 @@ fn post_rules_replace(state: &AppState, worker: &WfpWorker, request: &Request) -
 /// other way. The store is rebuilt because a rebuild is the only way order reaches WFP.
 fn post_rules_move(state: &AppState, worker: &WfpWorker, request: &Request) -> Result<Response> {
     let body: MoveRule = parse_body(&request.body, "a rule move object")?;
+
+    if stale_generation(state, body.generation) {
+        return generation_conflict(state, worker);
+    }
 
     let applied = {
         let mut current = state.rules.lock().expect("rules lock poisoned");
@@ -480,6 +497,10 @@ struct StateJson {
     /// True for a hand edit made while the tool was closed as well as for one made a moment ago,
     /// and it clears when the tool writes the file again.
     rules_changed: bool,
+    /// How often this run has written the rules file. A whole-list write that names a different
+    /// generation is answered 409 rather than applied, which is what stops two open pages from
+    /// overwriting each other silently.
+    generation: u64,
 }
 
 /// The monitor's state together with the count the log holds, so an empty list can be told apart
@@ -528,8 +549,26 @@ impl StateJson {
             startup: state.startup.clone(),
             token: state.token.clone(),
             rules_changed: state.rules_changed_outside(),
+            generation: state.rules_generation(),
         }
     }
+}
+
+/// Whether a whole-list write disagrees with the server about which version of the list it edits.
+///
+/// A write that names no generation is unconditional, which is what a client that does not know
+/// about the counter sends.
+fn stale_generation(state: &AppState, claimed: Option<u64>) -> bool {
+    claimed.is_some_and(|generation| generation != state.rules_generation())
+}
+
+/// The answer to a whole-list write that named a generation the server has moved past: the state
+/// as it is now, so the client can re-read and decide again. The store is asked rather than
+/// assumed, because a conflict response should not be cheaper to look at than a normal one.
+fn generation_conflict(state: &AppState, worker: &WfpWorker) -> Result<Response> {
+    let outcome = worker.ask(StoreWork::Inventory)?;
+
+    Response::json(409, &StateJson::new(state, &outcome))
 }
 
 /// The body of `POST /api/detected`: what to do with one detected application.
@@ -586,11 +625,27 @@ struct ShareIndex {
     index: usize,
 }
 
-/// The body of `POST /api/rules/move`: which rule to move, and where it lands.
+/// The body of `POST /api/rules/move`: which rule to move, where it lands, and — when the client
+/// knows it — the generation the row was read from.
 #[derive(Debug, Clone, Deserialize)]
 struct MoveRule {
     index: usize,
     to: usize,
+    #[serde(default)]
+    generation: Option<u64>,
+}
+
+/// The body of `POST /api/rules`: the whole list and, when the client knows it, the generation it
+/// read that list from.
+///
+/// This is not `RuleFile` itself: that type rejects unknown fields because `rules.toml` has no
+/// generation to carry, so the counter belongs to the request rather than to the file.
+#[derive(Debug, Clone, Deserialize)]
+struct Replacement {
+    #[serde(default)]
+    rule: Vec<Rule>,
+    #[serde(default)]
+    generation: Option<u64>,
 }
 
 /// The body of `POST /api/rules/import`.
@@ -599,11 +654,14 @@ struct Share {
     share: String,
 }
 
-/// The body of `POST /api/rules/replace`: a whole rules file, as text.
+/// The body of `POST /api/rules/replace`: a whole rules file, as text, and the optional generation
+/// the restore was read against.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Import {
     text: String,
+    #[serde(default)]
+    generation: Option<u64>,
 }
 
 /// The body of `POST /api/profiles/switch`: which profile to make live. An empty name selects
@@ -1058,6 +1116,92 @@ pattern = "C:\\Windows\\two.exe"
         assert!(
             error.to_string().contains("outside"),
             "the refusal has to name the problem: {error}",
+        );
+    }
+
+    /// Two pages holding the same list: the one that writes second names the generation it read,
+    /// finds the server has moved past it, and is refused rather than silently winning.
+    #[test]
+    fn a_write_naming_a_stale_generation_is_refused() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        // The first page writes without naming a generation, which is unconditional and moves
+        // the server's counter past the zero a page loaded before it would name.
+        Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"first","action":"allow","pattern":"C:\\Tools\\first.exe","enabled":true}],"generation":0}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"second","action":"deny","pattern":"C:\\Tools\\second.exe","enabled":true}],"generation":0}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        assert_eq!(response.status, 409, "a stale write is a conflict");
+
+        let body = json(&response);
+
+        assert_eq!(
+            body["rules"]["rule"][0]["name"], "first",
+            "the refused write leaves the server's list on screen",
+        );
+
+        let written =
+            std::fs::read_to_string(server_state.rules_path()).expect("read the rules file");
+
+        assert!(
+            written.contains("first") && !written.contains("second"),
+            "a refused write must not reach the file: {written}",
+        );
+    }
+
+    /// The same write naming the generation the server is on is applied, and the answer carries
+    /// the moved counter so the page can write again.
+    #[test]
+    fn a_write_naming_the_current_generation_is_applied() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let first = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", Vec::new()),
+        )
+        .expect("route");
+
+        let generation = json(&first)["generation"].as_u64().expect("a generation");
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules/move",
+                serde_json::json!({ "index": 0, "to": 0, "generation": generation })
+                    .to_string()
+                    .into_bytes(),
+            ),
+        )
+        .expect("route");
+
+        assert_eq!(response.status, 200, "a current write is applied");
+        assert_eq!(
+            json(&response)["generation"].as_u64(),
+            Some(generation + 1),
+            "a write moves the counter",
         );
     }
 

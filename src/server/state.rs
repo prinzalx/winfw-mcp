@@ -2,7 +2,7 @@
 //! and the record the startup rebuild left behind.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -60,6 +60,13 @@ pub struct AppState {
     /// difference. Writing the file replaces the record, so the notice disappears with the edit
     /// that caused it and needs no bookkeeping of its own.
     rules_written: Mutex<Option<Fingerprint>>,
+    /// How often this process has written the rules file.
+    ///
+    /// A page that holds an old copy of the list can name the generation it read in a whole-file
+    /// write, and the server refuses the write when its own generation has moved on: the last
+    /// writer no longer wins silently. The counter is per run, which is enough, because a restart
+    /// hands every client a fresh state anyway.
+    rules_generation: AtomicU64,
     /// The log level as the process understands it, which a settings change moves.
     ///
     /// It is kept apart from `settings` for the same reason `learn_mode` is: the value in
@@ -103,6 +110,7 @@ impl AppState {
             startup,
             token,
             rules_written: Mutex::new(rules_written),
+            rules_generation: AtomicU64::new(0),
             log: Mutex::new(log_level),
             log_filter: Mutex::new(log_filter),
         }
@@ -197,6 +205,8 @@ impl AppState {
     /// against what we wrote rather than against whatever a reader left behind. Writing the stamp
     /// is best effort: a stamp that cannot be written costs a lost notice, not a lost rule.
     pub(super) fn note_rules_written(&self) {
+        self.rules_generation.fetch_add(1, Ordering::SeqCst);
+
         let file = self.rules_path();
 
         match Fingerprint::of_file(&file) {
@@ -211,6 +221,11 @@ impl AppState {
                 warn!(reason = %format!("{error:#}"), "could not fingerprint the rules file")
             }
         }
+    }
+
+    /// How often the rules file has been written during this run.
+    pub(super) fn rules_generation(&self) -> u64 {
+        self.rules_generation.load(Ordering::SeqCst)
     }
 
     /// Whether the rules file on disk is not the one the tool wrote.

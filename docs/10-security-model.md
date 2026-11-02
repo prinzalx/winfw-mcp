@@ -102,6 +102,11 @@ Being honest here matters more than sounding secure.
 - **The guard does not know what a rule means.** It refuses a write from a page that is not ours; it
   does not refuse a rule that happens to open the whole internet. Deny outranks allow, always, and
   that is the semantic protection rather than this transport one.
+- **Two writers are told, not ordered.** A whole-list write may name the generation it read, and a
+  stale name is answered `409` with the current state rather than applied; see
+  [the web UI chapter](05-web-ui.md#two-pages-one-list). A client that names no generation still
+  wins silently, so the protection covers the page and any client that chooses to use it, not the
+  raw API.
 - **The tray is a client, not a privileged process.** It holds the URL the server gave it and sends
   the same token in the same header, so pausing protection or learning from the menu is checked by
   the guard exactly like a click on the page. Nothing reaches a route through a side door, which is
