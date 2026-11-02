@@ -71,9 +71,9 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.40.0**, a documentation release. The handbook now reads like an
-operating manual rather than a development diary: version numbers are gone from the chapters
-and the release history has its own file, [CHANGELOG.md](CHANGELOG.md).
+The current release is **0.40.1**, a documentation release. The handbook reads like an operating
+manual rather than a development diary: version numbers are gone from the chapters and the release
+history has its own file, [CHANGELOG.md](CHANGELOG.md).
 [SECURITY_REVIEW.md](SECURITY_REVIEW.md) is a brief for an outside reviewer of the request
 path; the security chapter it reviews is
 [the security model](docs/10-security-model.md#the-guard).

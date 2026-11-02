@@ -996,31 +996,10 @@ The decisions the round made, so that a later reader knows they were deliberate:
 Closed by the handbook pass that came after 0.39.0:
 
 - The version history moved out of the handbook into a root `CHANGELOG.md`. The handbook answers
-  how the tool works; the changelog answers what it produced. The README index row for chapter 9
-  and its "working documents" line point at the new file.
-- The "since 0.x.y" narration is gone from chapters 2 to 8 and 10, replaced by the present tense.
-  The two historical notes that stay (the writing tools in chapter 6) are about the design, not
-  about a date.
-- Chapter 10 gained the numbered request path (bind, mutex, reads, writes, `/mcp` without a token)
-  so a reviewer can check the whole answer in one place, and the answer about test code is written
-  down in chapter 9: it is all `#[cfg(test)]` and ships nowhere.
-
-Open after the pass:
-
-- The review is still owed by somebody who did not write it: the request path is documented, but
-  nobody outside has confirmed that no other local caller can bypass the guard. The brief for that
-  reviewer is `SECURITY_REVIEW.md` at the repository root, written for someone who has not seen
-  the code. (2026-11-02)
-- `docs/05` still describes the page area by area; a screenshot has never been part of the
-  handbook, and a reviewer may ask for one.
-
-## 33. Documentation overhaul round notes
-
-Closed by the handbook pass that came after 0.39.0:
-
-- The version history moved out of the handbook into a root `CHANGELOG.md`. The handbook answers
   how the tool works; the changelog answers what each release produced. The README index row for
   chapter 9 and its "working documents" line point at the new file.
+- The section existed twice in the commit that made 0.40.0; the duplicate is gone and the
+  numbering is unique again. (2026-11-02)
 - The "since 0.x.y" narration is gone from chapters 2 to 8 and 10, replaced by the present tense.
   The two historical notes that stay (the writing tools in chapter 6) are about the *design*, not
   about a date.
@@ -1034,5 +1013,8 @@ Open after the pass:
   nobody outside has confirmed that no other local caller can bypass the guard. The brief for that
   reviewer is `SECURITY_REVIEW.md` at the repository root, written for someone who has not seen
   the code. (2026-11-02)
+- The elevated `--serve` observation from section 32 is still owed: that `logs\winfw-mcp.log`
+  really starts and stops accepting lines when the level is changed through the web UI.
+  (2026-11-02)
 - `docs/05` still describes the page area by area; a screenshot has never been part of the
   handbook, and a reviewer may ask for one.
