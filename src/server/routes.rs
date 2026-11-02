@@ -49,6 +49,7 @@ impl Server {
             ("POST", "/api/rules/share") => post_rules_share(state, request),
             ("POST", "/api/rules/import") => post_rules_import(state, worker, request),
             ("POST", "/api/rules/replace") => post_rules_replace(state, worker, request),
+            ("POST", "/api/rules/move") => post_rules_move(state, worker, request),
             ("GET", "/api/profiles") => get_profiles(state),
             ("POST", "/api/profiles/create") => post_profiles_create(state, worker, request),
             ("POST", "/api/profiles/delete") => post_profiles_delete(state, worker, request),
@@ -328,6 +329,45 @@ fn post_rules_replace(state: &AppState, worker: &WfpWorker, request: &Request) -
     Response::json(200, &StateJson::new(state, &outcome))
 }
 
+/// What `POST /api/rules/move` answers: the state a reordered rule list settled on.
+///
+/// Order is not cosmetic here: the file's order becomes the filter creation order, and the first
+/// matching rule wins, so moving a rule can decide a connection that the old order decided the
+/// other way. The store is rebuilt because a rebuild is the only way order reaches WFP.
+fn post_rules_move(state: &AppState, worker: &WfpWorker, request: &Request) -> Result<Response> {
+    let body: MoveRule = parse_body(&request.body, "a rule move object")?;
+
+    let applied = {
+        let mut current = state.rules.lock().expect("rules lock poisoned");
+
+        if body.index >= current.rule.len() || body.to >= current.rule.len() {
+            bail!(
+                "index {} to {} outside the {} rules",
+                body.index,
+                body.to,
+                current.rule.len(),
+            );
+        }
+
+        let rule = current.rule.remove(body.index);
+        current.rule.insert(body.to, rule);
+
+        current
+            .save(&state.rules_path())
+            .context("write the rules file")?;
+        state.note_rules_written();
+        current.clone()
+    };
+
+    let outcome = worker.ask(StoreWork::Apply {
+        rules: applied,
+        known: state.detector.apps(),
+        policy: state.policy(),
+    })?;
+
+    Response::json(200, &StateJson::new(state, &outcome))
+}
+
 /// What `GET /api/profiles` answers: which profile is live and which names exist.
 fn get_profiles(state: &AppState) -> Result<Response> {
     let body = serde_json::json!({
@@ -544,6 +584,13 @@ struct Protection {
 #[derive(Debug, Clone, Deserialize)]
 struct ShareIndex {
     index: usize,
+}
+
+/// The body of `POST /api/rules/move`: which rule to move, and where it lands.
+#[derive(Debug, Clone, Deserialize)]
+struct MoveRule {
+    index: usize,
+    to: usize,
 }
 
 /// The body of `POST /api/rules/import`.
@@ -947,6 +994,70 @@ pattern = "C:\\Windows\\two.exe"
         assert!(
             written.contains("one") && written.contains("two"),
             "the replacement has to survive a restart: {written}",
+        );
+    }
+
+    /// A moved rule has to land in its new place in the answer and in the file, because the
+    /// file's order is the order the filters get created in and the first match wins.
+    #[test]
+    fn a_moved_rule_is_written_in_its_new_place() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"one","action":"allow","pattern":"C:\\Tools\\one.exe","enabled":true},{"name":"two","action":"deny","pattern":"C:\\Tools\\two.exe","enabled":true}]}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/rules/move", br#"{"index":1,"to":0}"#.to_vec()),
+        )
+        .expect("route");
+
+        assert_eq!(response.status, 200);
+
+        let body = json(&response);
+
+        assert_eq!(body["rules"]["rule"][0]["name"], "two", "the move reorders");
+        assert_eq!(body["rules"]["rule"][1]["name"], "one", "the move reorders");
+
+        let written =
+            std::fs::read_to_string(server_state.rules_path()).expect("read the rules file");
+
+        assert!(
+            written.find("two").expect("the moved name is written")
+                < written.find("one").expect("the other name is written"),
+            "the new order has to survive a restart: {written}",
+        );
+    }
+
+    /// A move that names a place the list does not have is refused, and the refusal leaves the
+    /// order alone, so a typo in a request cannot shuffle the set by accident.
+    #[test]
+    fn a_move_outside_the_rule_list_is_refused() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let error = match Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/rules/move", br#"{"index":0,"to":9}"#.to_vec()),
+        ) {
+            Ok(_) => panic!("a move past the end has to be refused"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("outside"),
+            "the refusal has to name the problem: {error}",
         );
     }
 

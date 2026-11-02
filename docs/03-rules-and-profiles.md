@@ -103,6 +103,10 @@ than being partly read. Anything this tool writes itself is escaped correctly.
 The order in `rules.toml` is exactly the order WFP evaluates, because applying is a full rebuild:
 our filters are removed and re-added in rule order inside one transaction.
 
+The page can change that order: the up and down buttons in the order column of the rules table send
+`POST /api/rules/move`, which rewrites the file and rebuilds the filters, because a rebuild is the
+only way order reaches WFP.
+
 **Deny always beats allow.** A deny filter is installed one weight above an allow filter, so a
 matching deny wins even when an allow rule comes earlier in the file. Between rules of the same
 action the earlier one still wins, because equal weights are resolved in creation order and filters

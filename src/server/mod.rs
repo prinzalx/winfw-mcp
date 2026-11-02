@@ -31,6 +31,7 @@
 //! | POST | `/api/rules/share` | one rule as a Base64 string, for copy and paste |
 //! | POST | `/api/rules/import` | append the rule a Base64 string carries |
 //! | POST | `/api/rules/replace` | replace the rules with a whole file's text, the restore half of an export |
+//! | POST | `/api/rules/move` | move one rule to another position: order decides which rule wins |
 //! | POST | `/api/profiles/switch` | make another profile, or the default rules, the live one |
 //! | POST | `/api/profiles/create` | create a profile from the current rules and switch to it |
 //! | POST | `/api/profiles/rename` | rename a profile, keeping it live when it was live |

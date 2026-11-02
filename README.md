@@ -73,11 +73,13 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.46.0**. The connection feed now says when it last spoke —
+The current release is **0.47.0**. The rules table can be reordered: an order column moves a rule
+up or down, and because the file's order is the order the filters are created in, a rebuild carries
+the move into the store. Before that, the connection feed learned to say when it last spoke —
 `running, 128 events, last event 42s ago` — so a quiet machine and a stuck subscription are told
-apart. The startup diff names the rules added, removed or flipped while the tool was closed, an
-export names the profile its rules came from, the firewall can be paused from the page or the tray,
-and a rule can carry a `comment`. The handbook reads like an operating manual rather than a
+apart, and the startup diff names the rules added, removed or flipped while the tool was closed.
+An export names the profile its rules came from, the firewall can be paused from the page or the
+tray, and a rule can carry a `comment`. The handbook reads like an operating manual rather than a
 development diary, and the release history has its own file, [CHANGELOG.md](CHANGELOG.md).
 [SECURITY_REVIEW.md](SECURITY_REVIEW.md) is a brief for an outside reviewer of the request
 path; the security chapter it reviews is

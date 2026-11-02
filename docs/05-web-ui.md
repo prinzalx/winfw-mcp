@@ -28,8 +28,9 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   request. The theme cycles `light -> dark -> auto`, where `auto` follows the operating system.
   This is not decoration: the choice is applied to the page in the same request and
   survives a reload, so a bright terminal and a dark browser stop fighting each other.
-- **Rules** table: enabled flag, name, action, pattern, protocol, direction, port, remote address,
-  comment, remove, share. Every field is edited in place and saved on change. Protocol and
+- **Rules** table: order, enabled flag, name, action, pattern, protocol, direction, port, remote
+  address, comment, remove, share. The order column moves a rule up or down with the same effect the
+  file's order has on the filters. Every field is edited in place and saved on change. Protocol and
   direction are dropdowns whose first entry is `any`, which is sent as no value at all; the port
   box takes `443`
   or `1024-2048` and the remote box `10.0.0.5` or `192.168.1.0/24`, both left empty for anything
@@ -98,6 +99,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | `POST /api/rules/share` | one rule as a Base64 string, for copy and paste |
 | `POST /api/rules/import` | append the rule a Base64 string carries |
 | `POST /api/rules/replace` | replace the whole rule list with the text of a rules file: the restore half of an export |
+| `POST /api/rules/move` | move one rule to another place in the list: `index` is where it sits, `to` is where it should end up |
 | `GET /api/profiles` | the active profile and the names of the stored profiles |
 | `POST /api/profiles/switch` | make another profile live (an empty name selects `rules.toml`) |
 | `POST /api/profiles/create` | copy the live rules into a new profile and make it live; a name already taken is refused |

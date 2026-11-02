@@ -167,9 +167,9 @@ Kept as asked, with the two audits now folded in below.
   finding was right that a check in `mcp_tool` could be walked around; the answer was to remove what
   it checked.
 - ~~**`mcp_writes = "rules"` promises add, edit, remove and reorder; only add exists.**~~ — closed by
-  the removal rather than by implementing the promise. Edit and reorder remain open *as HTTP work*:
-  the page can replace the list but cannot reorder it, which is a user-facing gap rather than an
-  agent-facing one now.
+  the removal rather than by implementing the promise. Edit remains open *as HTTP work*; reorder
+  closed in **0.47.0** with `POST /api/rules/move` and the order column, which was a user-facing gap
+  rather than an agent-facing one. In-place editing of a rule's fields is the last piece.
 - ~~**`mcp_writes = "all"` promises flipping settings and switching profiles; only profiles work**
   (see §3.2).~~ — moot in the same way. The setting is still read from an old `config.toml` so such a
   file loads, and the next save drops the key.
@@ -1202,3 +1202,25 @@ Open after the round:
 - The page shows the age as of the last state read; it does not tick on its own. A row that counts
   seconds up while you watch it is a nicer interaction and needs a timer the page does not have.
   (2026-11-02)
+## 41. Rule reorder round notes
+
+Released in **0.47.0**. The rules table grew an order column; up and down send
+`POST /api/rules/move`, which rewrites the file and rebuilds the store.
+
+The decisions the round made:
+
+- **A move is a remove plus an insert, not a swap.** `{"index":1,"to":0}` says where the rule sits
+  and where it should end up, which is what a person dragging a row means; a swap would answer a
+  different question and the buttons would have to explain it.
+- **A place outside the list is refused the way every other bad index is refused**: as an error the
+  route reports, not as a clamp. A typo in a request must not shuffle the set by accident.
+- **The rebuild is not optional.** Order only reaches WFP through the creation order inside one
+  transaction, so the route takes the same `StoreWork::Apply` path a replacement takes instead of
+  editing the file and hoping.
+- **Both bounds are checked before anything is written**, so a refused move leaves the file and the
+  in-memory list exactly as they were.
+
+Open after the round:
+
+- Two people with the page open can still overwrite each other (no generation counter yet, see
+  §3.6); the move is as exposed as every other write in that respect. (2026-11-02)

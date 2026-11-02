@@ -260,6 +260,7 @@
           <th style="width: 7rem">Port</th>
           <th style="width: 10rem">Remote</th>
           <th style="width: 12rem">Comment</th>
+          <th style="width: 7rem">Order</th>
           <th style="width: 4rem"></th>
           <th style="width: 5rem"></th>
         </tr>
@@ -580,6 +581,21 @@
             save();
           });
           row.appendChild(element("td", null)).appendChild(comment);
+
+          // Order is not cosmetic: the file's order decides which rule wins, so the table offers
+          // a step in each direction and the server does the move on its own list.
+          const order = element("td");
+          const up = element("button", null, "up");
+          up.disabled = index === 0;
+          up.title = "move this rule one step up";
+          up.addEventListener("click", () => moveRule(index, index - 1));
+          const down = element("button", null, "down");
+          down.disabled = index === rules.length - 1;
+          down.title = "move this rule one step down";
+          down.addEventListener("click", () => moveRule(index, index + 1));
+          order.appendChild(up);
+          order.appendChild(down);
+          row.appendChild(order);
 
           const remove = element("button", null, "remove");
           remove.addEventListener("click", () => {
@@ -960,6 +976,14 @@
           apply(await request("POST", "/api/rules", { rule: rules }));
         } catch (error) {
           status("could not save: " + error.message);
+        }
+      }
+
+      async function moveRule(index, to) {
+        try {
+          apply(await request("POST", "/api/rules/move", { index: index, to: to }));
+        } catch (error) {
+          status("could not move: " + error.message);
         }
       }
 
