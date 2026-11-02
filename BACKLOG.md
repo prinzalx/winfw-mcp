@@ -157,9 +157,17 @@ Kept as asked, with the two audits now folded in below.
 - ~~**"Relaunch elevated" is prose, not an action.**~~ — closed by **0.49.0**:
   `POST /api/relaunch` asks the shell for the elevated start, the banner carries the button, and
   the tray menu offers the entry while the process is not elevated.
-- **Drive and device paths are resolved once.** The map is cached at startup and `WM_DEVICECHANGE` is
-  not handled, so a volume mounted after start is not known. The module documents this itself
-  (`src/device.rs:9-10`).
+- ~~**Drive and device paths are resolved once.** The map is cached at startup and
+  `WM_DEVICECHANGE` is not handled, so a volume mounted after start is not known. The module
+  documents this itself (`src/device.rs:9-10`).~~ — closed by **0.50.0**: a lookup that misses a
+  drive-shaped path re-asks the system and retries, throttled to one re-ask per second, so the
+  tray needs no device-notification window. Filters already installed from a path that was
+  untranslated at the time are still the old text until the next apply, which is now its own
+  item below.
+- **A filter installed from an untranslated drive path is not corrected by the re-ask.** The
+  translation happens when a filter is built, so a rule for a drive that did not exist at that
+  moment went into the store with `d:\...` as its literal text. Any later write to the rule list
+  rebuilds the filters and fixes it; nothing notices on its own.
 
 ### 3.6 MCP
 
@@ -1277,3 +1285,27 @@ Open after the round:
   with arguments loses them; no such argument exists today.
 - The first instance owns the port until it exits, so a relaunch while an older process is wedged
   leaves the new one to the port walk of eight. (2026-11-02)
+
+## 44. Device re-resolution round notes
+
+The item asked for `WM_DEVICECHANGE` in the tray. What the code does instead is re-ask on a lookup
+miss, throttled, which turned out to be the smaller change and needs no window at all:
+
+- The tray window is a message-only window (`HWND_MESSAGE`), and those do not receive broadcasts,
+  so `WM_DEVICECHANGE` would have needed `RegisterDeviceNotificationW` and a handle to unregister
+  again. The miss-driven re-ask covers the same case from the side that actually cares about the
+  answer.
+- The pause is one second, and only a path that could name a drive (`X:` as its first two
+  characters) is allowed to cause a re-ask, so `*` and the host patterns do not burn a query every
+  second. The tests count the queries to prove both halves.
+- `OnceLock` became `RwLock<Option<Arc<[Mapping]>>>`, because a lock that can only be filled once
+  cannot be re-filled. The read lock is dropped before the write lock is taken, so no lock is held
+  across `QueryDosDeviceW`.
+- Filters already installed from an untranslated path are not corrected by the re-ask, which is
+  written down in section 3 as its own item rather than left inside this note.
+- The cache is shared process-wide state, so every test in the module now declares the state it
+  starts from. Tests that ran in a harmless order before can leave an empty cache behind for the
+  next one.
+- A first draft had a function named `allow_requery` that only read and updated the timestamp and
+  never asked, so a miss translated nothing and the test that looked most likely to pass was the one
+  that caught it. (2026-11-02)

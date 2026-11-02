@@ -146,6 +146,17 @@ stopped honest.
 Application paths reach the firewall in device form (`\device\harddiskvolume3\...`), which nobody
 reads comfortably, so the UI shows the drive form and a rule written in either form is accepted.
 
+The table that translates the two forms is asked once and kept. A drive that appears later — a USB
+disk mounted after the tool started, a network share mapped while it was already running — is
+noticed the next time a path is looked up and does not match: the table is asked again, at most once
+a second, and the lookup is retried against the answer. A pattern that is not a path at all (`*`, or
+a host name) never triggers that re-ask.
+
+What the re-ask does not do is rewrite filters that are already in the store. A rule pointing at a
+drive that did not exist when the filters were installed went in with the drive form untranslated,
+and it stays that way until the rules are applied again, which every later write to the rule list
+does anyway.
+
 ## Commenting a rule
 
 `comment` is the one field that decides nothing. It is a sentence for whoever reads the list next,
