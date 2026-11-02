@@ -457,10 +457,11 @@ Roughly by how much they cost to change later:
    answer is ordered by `seen_ms` before it is cut, so the twenty entries the page shows are the
    twenty that asked most recently, and `detected_total` counts the whole list so a badge can say
    `47+`. Deciding whether the page should paginate the whole list instead is still open; see §64.
-9. **No test loads the page** (§62.2). A script that stopped parsing shipped for twelve releases, and
-   the redesign of 0.64.0 carries the same risk: the suite greps a handful of strings out of
-   `web/index.html`, which passes happily while the markup is broken. A test that parses the file and
-   checks every id the script asks for exists would have caught both.
+9. ~~**No test loads the page** (§62.2)~~ — half done in 0.66.0. A test collects every element id the
+   script asks for and asserts the markup declares it, which is the disagreement a change to either
+   half produces; it was verified to fail when an id is renamed. What it cannot do is notice a script
+   that no longer parses, because that needs a JavaScript parser, and a page that does not parse still
+   renders its static HTML. Whether to add a parser to the test target alone is an open question.
 
 ## 7. Extension round notes (2026-11-01)
 
@@ -1900,3 +1901,28 @@ entries, refreshes the one at the end of the list with a much later timestamp, a
 answer starts with it, carries 20 entries and reports `detected_total = 21`. Without the sort that
 entry is the one cut.
 
+## 65. The page and its markup are checked against each other (2026-11-02)
+
+Closing the half of §62.2 that could be closed without a JavaScript parser.
+
+`every_element_the_page_script_asks_for_exists` (`src/server/mod.rs`) reads the embedded page and
+collects the element ids its script asks for by name. Two places name an id: `el("…")` at the call
+site, and the `WRITE_CONTROLS` array the script walks to enable or disable every write control. Both
+are read, the names are deduplicated, and each has to appear in the markup as `id="…"`. The scan
+yields 48 ids on the page as it stands.
+
+The scan is deliberately not a parser. Two call sites pass a variable to `el()` instead of a literal,
+and in both cases the variable holds one of the names the scan does collect, which is what makes the
+set complete; that is written in the helper's comment rather than left to be rediscovered.
+
+Verified by mutation, because a test that cannot fail is worth nothing here: renaming the
+`detected-count` id in the markup makes the test fail with *the script asks for #detected-count, the
+markup does not declare it*, which is exactly the mistake the test exists to catch.
+
+What remains open is named in §6 item 9 and in the development chapter: a script that stops parsing is
+still not noticed. The failure that shipped for twelve releases is of that kind, and the static HTML
+renders whether or not the script runs, so the page looks alive. Closing it means a parser in the test
+target alone, which the project has no reason to add yet.
+
+*Verified:* 246 tests (`cargo test -- --test-threads=1`), `cargo fmt --all -- --check` clean, clippy
+unchanged at the four known warnings.

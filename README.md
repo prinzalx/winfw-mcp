@@ -73,7 +73,12 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.65.0**: the Detected list answers the questions asked most recently. The
+The current release is **0.66.0**: the page is checked against its own markup. Nothing noticed for
+twelve releases that the page's script had stopped parsing, because the static HTML keeps rendering
+whether or not the script runs. A test now collects every element id the embedded script asks for and
+asserts the markup declares each of them, and renaming one id was verified to fail it.
+
+Before it, **0.65.0**: the Detected list answers the questions asked most recently. The
 tab listed the twenty entries that were *collected* first, and an entry a repeat connection merely
 refreshes keeps its place, so a program running for a week had its newest question at the bottom of
 the list and never reached the page — blocked and undetected at the same time. The list is now

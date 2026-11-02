@@ -603,4 +603,62 @@ mod tests {
             "an empty rules list under deny has to warn about it",
         );
     }
+
+    /// The element ids the page's script asks for by name.
+    ///
+    /// The script names an element in two ways: `el("id")` at the call site, and the
+    /// `WRITE_CONTROLS` list it walks to enable or disable every write control. Both are read here.
+    /// A name built at runtime is not, and the two places that do it pass a variable holding one of
+    /// these names, which is why the list of what is asked for can be complete at all.
+    fn element_ids(page: &str) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::new();
+
+        let mut rest = page;
+        while let Some(at) = rest.find("el(\"") {
+            rest = &rest[at + 4..];
+
+            let Some(end) = rest.find('\"') else {
+                break;
+            };
+
+            ids.push(rest[..end].to_owned());
+            rest = &rest[end..];
+        }
+
+        let list = page
+            .find("const WRITE_CONTROLS = [")
+            .map(|start| &page[start..])
+            .and_then(|from| from.find("];").map(|end| &from[..end]))
+            .expect("the write control list exists and is closed");
+
+        ids.extend(list.split('\"').skip(1).step_by(2).map(str::to_owned));
+
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Nothing but a test can notice that the page's script asks for an element the markup does not
+    /// hold, because the page is one embedded file with no build step and no parser in front of it.
+    /// A script that stopped parsing shipped for twelve releases (§62.2), and a renamed id fails the
+    /// same quiet way: the page renders, the button does nothing, and the suite passes.
+    ///
+    /// What this does not catch is the parse failure itself, only the disagreement between the two
+    /// halves of the file.
+    #[test]
+    fn every_element_the_page_script_asks_for_exists() {
+        let asked = element_ids(INDEX_HTML);
+
+        assert!(
+            asked.len() >= 40,
+            "the scan found {asked:?}, which is too few to be the whole page"
+        );
+
+        for id in &asked {
+            assert!(
+                INDEX_HTML.contains(&format!("id=\"{id}\"")),
+                "the script asks for #{id}, the markup does not declare it"
+            );
+        }
+    }
 }

@@ -62,6 +62,14 @@ Test code lives in the same files as the code it checks and ships nowhere: `serv
 `testutil` scratch directory, `server::testsupport` and every `mod tests` are `#[cfg(test)]`,
 so the release executable carries none of it and a separate test crate would buy nothing.
 
+The page has one test of its own, and no browser takes part in it.
+`every_element_the_page_script_asks_for_exists` (`src/server/mod.rs`) collects the element ids the
+embedded script asks for — every `el("…")` at the call site and the `WRITE_CONTROLS` list it walks to
+disable the write controls — and asserts the markup declares each of them. That is the disagreement a
+change to either half of the file produces. It cannot notice a script that fails to parse, which is the
+failure that once shipped for twelve releases, because noticing that needs a JavaScript parser and a
+build step this tool does not have.
+
 ## The icon and the version information
 
 A portable executable has no installer to give it a logo, so `build.rs` compiles one in:
