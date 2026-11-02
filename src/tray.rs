@@ -52,11 +52,22 @@ const ICON_ID: u32 = 1;
 
 /// The notification-icon version the tray asks the shell to speak.
 ///
-/// The crate does not export `NOTIFY_VERSION`, and `MAKENOTIFYVERSION(0, 4)` is `0x0604`, which is
-/// version 4: the one that makes the shell report a click as `NIN_SELECT` and the right button as
-/// `WM_CONTEXTMENU` rather than only as raw mouse messages.
+/// `NOTIFYICON_VERSION_4` is what the shell accepts, and the crate does not export it under that
+/// name. Version 4 is the one that makes the shell report a click as `NIN_SELECT` and the right
+/// button as `WM_CONTEXTMENU` rather than only as raw mouse messages. Asking for anything else —
+/// this constant used to carry a packed `0x0604` — is refused, which leaves the icon at version 0.
 #[cfg(windows)]
-const NOTIFY_VERSION: u32 = 0x0604;
+const NOTIFY_VERSION: u32 = 4;
+
+/// How often the tooltip is rewritten, and the id it is rewritten under.
+///
+/// The tooltip is the only thing that tells the user what the icon is doing without a click, and
+/// the state it names changes while the process runs, so it is refreshed rather than written once.
+#[cfg(windows)]
+const TOOLTIP_TICK_MS: u32 = 2000;
+
+#[cfg(windows)]
+const TOOLTIP_TIMER: usize = 1;
 
 /// The keyboard equivalent of `NIN_SELECT`, which the crate does not export either.
 #[cfg(windows)]
@@ -180,8 +191,9 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
         NIM_SETVERSION, NOTIFYICONDATAW, Shell_NotifyIconW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE, LoadIconW,
-        MSG, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WNDCLASSW,
+        CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE, KillTimer,
+        LoadIconW, MSG, RegisterClassW, SetTimer, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+        WM_APP, WNDCLASSW,
     };
     use windows::core::PCWSTR;
 
@@ -274,12 +286,7 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
     // The tooltip names the address as well as the tool, so hovering answers "which instance is
     // this and where does it live" without the user having to click first. The token is left out
     // by `balloon_text`, which is not something one reads off a tooltip anyway.
-    let tip = format!(
-        "winfw-mcp — {}",
-        balloon_text(&UI_URL.lock().expect("url lock poisoned"))
-    );
-
-    copy_wide(&mut data.szTip, &tip);
+    copy_wide(&mut data.szTip, &tooltip_text());
 
     if !unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
         warn!("shell refused the tray icon");
@@ -319,6 +326,12 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
         }
     }
 
+    // From here on the tooltip follows the state. A timer rather than an event, because the shell
+    // tells us nothing about a protection or a learning mode that changed behind the icon.
+    if unsafe { SetTimer(Some(handle), TOOLTIP_TIMER, TOOLTIP_TICK_MS, None) } == 0 {
+        debug!("shell refused the tooltip timer");
+    }
+
     let _ = ready.send(true);
     debug!("tray icon added");
 
@@ -334,6 +347,7 @@ fn run(thread: Arc<Mutex<Option<u32>>>, ready: Sender<bool>) {
     }
 
     unsafe {
+        KillTimer(Some(handle), TOOLTIP_TIMER).ok();
         let _ = Shell_NotifyIconW(NIM_DELETE, &data);
         DestroyWindow(handle).ok();
     }
@@ -351,10 +365,17 @@ unsafe extern "system" fn wndproc(
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_APP};
+    use tracing::{debug, info};
+    use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_APP, WM_TIMER};
 
     // The callback message the icon was registered with.
     const TRAY_MESSAGE: u32 = WM_APP + 1;
+
+    if message == WM_TIMER {
+        unsafe { set_tooltip(handle) };
+
+        return windows::Win32::Foundation::LRESULT(0);
+    }
 
     if message == TRAY_MESSAGE {
         // The shell reports the icon event in the low word of `lparam` and the icon id in the high
@@ -364,10 +385,22 @@ unsafe extern "system" fn wndproc(
         let low = (lparam.0 as u32) & 0xffff;
         let high = ((lparam.0 as u64) >> 16) as u32 & 0xffff;
 
+        // Every icon event is logged. A user reporting that a click does nothing can otherwise
+        // only be answered with a guess, and the two possible answers — the shell never told us,
+        // or it told us something this code does not recognise — need different fixes.
         match icon_action(low, high) {
-            Some(TrayAction::Open) => open_browser(),
+            Some(TrayAction::Open) => {
+                info!("the tray icon was clicked");
+                open_browser();
+            }
             Some(TrayAction::Menu) => show_menu(handle),
-            None => {}
+            None => {
+                debug!(
+                    event = %format!("{low:#06x}"),
+                    icon = %format!("{high:#06x}"),
+                    "unhandled tray icon event"
+                );
+            }
         }
 
         return windows::Win32::Foundation::LRESULT(0);
@@ -538,7 +571,8 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
     use tracing::{info, warn};
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MF_SEPARATOR, MF_STRING,
-        PostQuitMessage, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_RETURNCMD, TrackPopupMenu,
+        PostMessageW, PostQuitMessage, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+        TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
     };
     use windows::core::{PCWSTR, w};
 
@@ -593,14 +627,18 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
         let mut point = windows::Win32::Foundation::POINT::default();
         GetCursorPos(&raw mut point).ok();
 
-        // Without this the menu can stay open over the window it belongs to.
+        // The menu belongs to this window, and Windows only keeps it open while that window is
+        // the foreground one. Without this the menu can close again before the user sees it, which
+        // is what made a right click look like nothing happened.
         let _ = SetForegroundWindow(handle);
 
         // `TPM_RETURNCMD` makes the choice the return value instead of a `WM_COMMAND` that would
-        // have to be picked out of the message loop, which keeps quitting in one place.
+        // have to be picked out of the message loop, which keeps quitting in one place. Left
+        // alignment at the cursor is what the shell's own menus do; the tray icon sits at the
+        // bottom right of the screen, and without it the menu can open off the edge.
         let choice = TrackPopupMenu(
             menu,
-            TPM_BOTTOMALIGN | TPM_RETURNCMD,
+            TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
             point.x,
             point.y,
             Some(0),
@@ -609,6 +647,17 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
         );
 
         DestroyMenu(menu).ok();
+
+        info!(choice = choice.0, "the tray menu was closed");
+
+        // The message the shell expects after a tracked menu, so a menu that was dismissed by a
+        // click outside it is really gone. Empty on purpose.
+        let _ = PostMessageW(
+            Some(handle),
+            WM_NULL,
+            windows::Win32::Foundation::WPARAM(0),
+            windows::Win32::Foundation::LPARAM(0),
+        );
 
         if choice.0 == MENU_OPEN as i32 {
             open_browser();
@@ -686,6 +735,41 @@ fn balloon_text(url: &str) -> String {
         .map_or_else(|| url.to_owned(), |(head, _)| head.to_owned())
 }
 
+/// The text of the icon's tooltip: what the tool is, what it is doing, where the page lives.
+#[cfg(windows)]
+fn tooltip_text() -> String {
+    let (learning, protection) = LIVE
+        .lock()
+        .expect("live lock poisoned")
+        .as_ref()
+        .map_or((false, true), |live| (live.learning(), live.protection()));
+
+    format!(
+        "winfw-mcp — protection {}, learning {} — {}",
+        if protection { "on" } else { "paused" },
+        if learning { "on" } else { "paused" },
+        balloon_text(&UI_URL.lock().expect("url lock poisoned")),
+    )
+}
+
+/// Rewrite the tooltip of an icon that is already in the notification area.
+#[cfg(windows)]
+unsafe fn set_tooltip(handle: windows::Win32::Foundation::HWND) {
+    use windows::Win32::UI::Shell::{NIF_TIP, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW};
+
+    let mut data = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: handle,
+        uID: ICON_ID,
+        uFlags: NIF_TIP,
+        ..Default::default()
+    };
+
+    copy_wide(&mut data.szTip, &tooltip_text());
+
+    let _ = unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
+}
+
 /// Copy a string into one of the fixed wide buffers of a shell struct.
 #[cfg(windows)]
 fn copy_wide(buffer: &mut [u16], value: &str) {
@@ -722,6 +806,19 @@ mod tests {
     #[test]
     fn a_wide_string_is_nul_terminated() {
         assert_eq!(wide("ab"), vec![u16::from(b'a'), u16::from(b'b'), 0]);
+    }
+
+    /// Hovering has to answer "is this icon working, and on what", so the tooltip names both
+    /// flags. It must not carry the token, which is thirty-odd characters nobody reads off an
+    /// icon, and must not be empty when the server has no address to show.
+    #[cfg(windows)]
+    #[test]
+    fn the_tooltip_names_the_state_and_not_the_token() {
+        let tip = tooltip_text();
+
+        assert!(tip.starts_with("winfw-mcp — protection "));
+        assert!(tip.contains("learning "));
+        assert!(!tip.contains("token="));
     }
 
     /// The balloon shows the address, not the session token the tray URL carries with it.

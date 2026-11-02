@@ -1831,3 +1831,39 @@ The page is 64 KB where the brief asked for under 60 KB; the owner accepted the 
 Found on the way and not changed: the comment above the theme test in `src/server/settings.rs` still
 says `log_level` "waits for" a restart, while `state.set_log_level` and the `tracing_subscriber::reload`
 handle in `src/main.rs` have applied a new level to the running process since the reload layer landed.
+
+## 63. The icon in the notification area reports its state (2026-11-02)
+
+The owner reported that the icon showed nothing on hover beyond `winfw-mcp`, that neither mouse button
+did anything, and that a double click did nothing either. What the code and the log say:
+
+1. **The left button did work.** `open_url` is called from two places only — the icon click and the
+   menu's `Open` entry — and the log held two `asked the shell for the browser` lines, each a few
+   seconds after an icon was added. `ShellExecuteW` answered 42, which is above 32 and therefore
+   success. So the click reached the shell; what was missing was anything the user could see.
+2. **Hover answered nothing because the tooltip was written once.** It was composed at `NIM_ADD` from
+   the tool name and the address and never touched again, so it could not reflect a protection paused
+   from the menu. It now names both flags and the address, and a `WM_TIMER` every two seconds keeps it
+   current (`tooltip_text`, `set_tooltip`).
+3. **The menu was the weak part.** It is tracked on a message-only window. The window is now made
+   foreground before `TrackPopupMenu` and the shell's empty post-tracking message is posted after it,
+   and the flags carry `TPM_LEFTALIGN | TPM_RIGHTBUTTON`; without those a tracked menu can be gone
+   before it is read, which is indistinguishable from a right button that does nothing.
+4. **The version constant was wrong but harmless.** It carried a packed `0x0604` where the shell
+   documents `4` (`NOTIFYICON_VERSION_4`). Measured against a live shell, `NIM_SETVERSION` accepted
+   both — no refusal in the log either way — so this is correctness, not the cause.
+5. **The reporting gap is closed.** Every icon event is logged (`info` for the one that opens the
+   page, `debug` with both words for the rest). The first run with it produced
+   `NIN_BALLOONSHOW` and `NIN_BALLOONTIMEOUT`, which proves the start popup is shown and confirms the
+   callback arrives at all. Before this, "clicking does nothing" could not be told apart from "the
+   shell never told us".
+
+Still open, and the reason the owner's report may not reproduce:
+
+- **A `taskkill /F` leaves a ghost icon.** A killed process never reaches `NIM_DELETE`, so the shell
+  can keep an icon that answers nothing while the live icon sits in the overflow flyout. The tool
+  cannot clean that up after the fact; stopping it through `Quit` or `POST /api/shutdown` does.
+- **The menu cannot be verified without a hand on the mouse.** Everything above is what the code now
+  guarantees; whether the owner sees the menu on their shell is the next manual run.
+- 244 tests, `cargo fmt --check` clean, clippy still at the four known warnings, release build
+  starts, page loads, network left unblocked.

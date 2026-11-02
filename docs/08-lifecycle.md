@@ -62,9 +62,36 @@ the event differently still gets answered by.
 
 The icon also declares version 4 to the shell. Without that the modern shell sends only raw mouse
 messages and never the `NIN_SELECT` or `WM_CONTEXTMENU` a versioned icon produces, so the version is
-what makes a click arrive at all rather than only what makes it readable. Hovering the icon names
-the tool and the address it listens on; the session token is not shown there, because it is not
-something one reads off a tooltip.
+what makes a click arrive at all rather than only what makes it readable.
+
+Every event the shell reports is written to the log: the one that opens the page at `info`, the
+others with both words of the callback at `debug`. That is not decoration. A report of "clicking
+does nothing" has two causes — the shell never told us, or it told us something this code does not
+recognise — and they are fixed differently, so the report has to be decidable after the fact. Read
+this way, a real start produces `NIN_BALLOONSHOW` followed by `NIN_BALLOONTIMEOUT`: the popup the
+shell showed and then took away again, both ignored on purpose.
+
+### What hovering the icon says
+
+The tooltip names the tool, the two flags that can be paused from the menu, and the address:
+
+```
+winfw-mcp — protection on, learning on — http://127.0.0.1:8788/
+```
+
+It is rewritten on a two-second timer rather than written once at startup, because the state it
+names changes while the process runs — protection paused from the menu, learning resumed in the web
+— and a tooltip that only says `winfw-mcp` answers no question. The session token is left out; it
+is thirty characters nobody reads off an icon.
+
+### What the right button does
+
+The menu is built each time it opens, so its labels describe the flags as they are at that moment,
+and it is tracked at the cursor with the shell's own alignment. Two calls around it are what make it
+readable at all on a message-only window: the window is made the foreground one before the menu is
+tracked, and the empty message the shell expects afterwards is posted to it. Without them a tracked
+menu can close again before anyone reads it, which looks exactly like a right button that does
+nothing.
 
 ## Only one at a time
 
