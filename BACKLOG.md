@@ -25,7 +25,7 @@ These are not missing features; they are behaviour that differs from what the co
 | B2 | **`learn_mode` is inert.** The setting is read, stored and reported, but the monitor collects unconditionally, so `learn_mode = false` still fills the Detected list. **Fixed in 0.11.2** — the monitor now takes the setting and only offers events to the detector while learning is on; the connection log still fills either way. Verified with an elevated run: off → 21 events and an empty Detected list, on → the same traffic produces Detected entries. | fixed; `src/monitor.rs` (`Sink::learning`, gate in `on_event`), `src/main.rs` (`serve`) |
 | B3 | **A port conflict terminates the app.** `Server::bind` returned an error and `--serve` propagated it, while PLAN.md §9 asked for a fallback so a conflict does not kill the tray app. **Fixed in 0.11.3** — `Server::bind` now walks forward to the next free port of eight, warns in the log, and the tray opens the port it actually got. | fixed; `src/server.rs` (`Server::bind`, `PORT_ATTEMPTS`) |
 | B4 | **A wildcard rule silently missed applications until something wrote.** Expansion was rebuilt only when a write happened, from the applications the detector had seen; a one-shot run expanded against nothing. **Fixed in 0.11.4** — seen applications are recorded whatever `learn_mode` says, a newly seen application under an enabled pattern triggers a rebuild, the store is rebuilt from the rules at startup, and a one-shot `--apply` expands against the seen list on disk. | fixed; `src/learn.rs` (`seen`, `note_app`), `src/monitor.rs` (`on_event`), `src/main.rs` (`serve`, `sync_store`) |
-| B5 | **A rules file that cannot be parsed is replaced by its backup without a trace in the log.** `RuleFile::load_or_create` warns about the fallback, but the rules are read before `init_tracing` installs the subscriber, so the warning is dropped and the page then shows the backup's rules while the file on disk holds something else. Found while testing 0.61.0 with a hand-edited `rules.toml` whose Windows path was written with a single backslash, which TOML reads as an escape. | `src/main.rs` (load order), `src/rules.rs` (`load_or_create`) |
+| B5 | **A rules file that cannot be parsed is replaced by its backup without a trace in the log.** `RuleFile::load_or_create` warns about the fallback, but the rules were read before `init_tracing` installed the subscriber, so the warning was dropped and the page showed the backup's rules while the file on disk held something else. Found while testing 0.61.0 with a hand-edited `rules.toml` whose Windows path was written with a single backslash, which TOML reads as an escape. **Fixed in 0.67.0** — the subscriber is installed before the rule file is read; see §66. | fixed; `src/main.rs` (load order), `src/rules.rs` (`load_or_create`) |
 
 There was also an open question behind B1: stopping the tool from the browser needed a route that
 did not exist, so stopping meant `taskkill`. It exists since 0.11.0 as `POST /api/shutdown`, is
@@ -1926,3 +1926,41 @@ target alone, which the project has no reason to add yet.
 
 *Verified:* 246 tests (`cargo test -- --test-threads=1`), `cargo fmt --all -- --check` clean, clippy
 unchanged at the four known warnings.
+
+## 66. A broken rules file is logged before it is believed (2026-11-02)
+
+Closing B5. `RuleFile::load_or_create` has warned about its fallback to the previous generation since
+0.24.0, and the warning was written into a vacuum until now: `main` read the rule file *before*
+`init_tracing` installed the subscriber, so the only startup line with something to say about the state
+the tool then showed was dropped.
+
+The order in `src/main.rs` is now settings → log file → subscriber → rule file. One reorder and one
+move:
+
+- The settings have to be read before the subscriber, because the log level is one of them. They are
+  therefore the only state this process reads before it can write a line anywhere. Their own reader
+  warns about nothing (`src/config.rs` holds no `warn!`), so no second hole of this kind was left
+  behind — that was checked rather than assumed.
+- Naming the active rule file is a path decision, not a read, so it moved up with the settings and the
+  `files resolved` line keeps the fields it had.
+
+Verified live, elevated, and with the machine left unblocked:
+
+- the rule file was replaced by one naming `pattern = "C:\Program Files\..."` in double quotes, which
+  TOML reads as a broken escape;
+- `--clear` was enough to exercise the path, because it reads all state before it dispatches the
+  command, and taking filters out cannot block the machine;
+- the log then held `rules file unreadable, read the backup instead` with both the file and the backup
+  named, followed by `rules loaded count=2` — the backup's two rules, which is the point.
+
+*Not covered by a test, and worth knowing:* the fallback itself has one, named
+`an_unreadable_rules_file_falls_back_to_its_backup`, but that test cannot notice the order in `main`,
+because a test always has
+a subscriber of its own already. Guarding the order would mean factoring the startup reads out of
+`main` and capturing what was logged inside them, which is a larger change than the bug deserves today.
+
+*Also found while checking the changelog table:* the 0.64.1 release row had been merged into the row
+above it and was missing from the table entirely, which is how the §64 note about 0.64.0 came to light in
+the first place. It is restored from the tag, wording unchanged. One older row (0.24.0) still carries a
+`|` inside its text and so renders a third column; left as it is, because fixing it means reading the
+whole row for a rendering nit.

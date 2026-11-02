@@ -74,7 +74,8 @@ that predates them, someone has to type the line to turn the switch on.
   a crash never leaves a half written config behind. This matters because the WFP filters this tool
   installs are persistent and outlive the process. Rule files — `rules.toml` and every profile — are
   also copied to `<name>.bak` before each write, and a rule file that cannot be read at startup falls
-  back to that backup with a warning in the log rather than a failed start.
+  back to that backup rather than failing the start. It names both files in the log when it does, and
+  the log file is opened before any rule file is read, so the line is really there to be found.
 - **A rule file says which version wrote it.** `rules.toml` starts with `version = 1`. A file from an
   earlier version has no line and is read as this version; a file from a newer one is refused, and the
   message names both versions. Since an unknown field is an error, the version is what turns "this

@@ -111,28 +111,23 @@ fn main() -> Result<()> {
     // release build has no console: this file is the only place its lines survive.
     let logfile = paths.logs.join("winfw-mcp.log");
 
-    // All state is read here, once. Later milestones keep the in-memory copy authoritative and
-    // write every change straight back (PLAN.md section 2).
+    // All state is read here, once. Later milestones keep the in-memory copy authoritative and write
+    // every change straight back (PLAN.md section 2). The settings come first because the log level
+    // is one of them, which makes them the only state read before a line can be written anywhere.
     let settings = Settings::load_or_create(&paths.config)?;
 
     // A named profile is an ordinary rule file under `profiles\`; an empty name means the rules
-    // of `rules.toml` itself, which is what a fresh install has.
+    // of `rules.toml` itself, which is what a fresh install has. Naming the file reads nothing.
     let active_rules = match settings.active_profile.as_str() {
         "" => paths.rules.clone(),
         name => paths.profile_file(name),
     };
-    // A rule file that does not exist yet is created with the two example rules, so the first
-    // screen shows what a rule looks like instead of an empty table. A file a person has emptied
-    // on purpose is not touched again, because it exists by then.
-    let rules = if active_rules.is_file() {
-        RuleFile::load_or_create(&active_rules)?
-    } else {
-        let examples = RuleFile::examples();
-        examples.save(&active_rules)?;
 
-        examples
-    };
-
+    // The subscriber is installed before the rule file is read, so that a read which has something
+    // to say about itself can say it. Until 0.67.0 the rules were read first, and the one warning
+    // `RuleFile::load_or_create` knows — the file on disk did not parse, the previous generation
+    // was taken instead — went into a vacuum: the page showed rules the file did not hold, and the
+    // log held nothing about it.
     let log_filter = init_tracing(&settings, &logfile);
 
     info!(root = %paths.root.display(), "data directory ready");
@@ -148,6 +143,19 @@ fn main() -> Result<()> {
         log_level = %settings.log_level,
         "settings loaded",
     );
+
+    // A rule file that does not exist yet is created with the two example rules, so the first
+    // screen shows what a rule looks like instead of an empty table. A file a person has emptied
+    // on purpose is not touched again, because it exists by then.
+    let rules = if active_rules.is_file() {
+        RuleFile::load_or_create(&active_rules)?
+    } else {
+        let examples = RuleFile::examples();
+        examples.save(&active_rules)?;
+
+        examples
+    };
+
     info!(count = rules.rule.len(), "rules loaded");
 
     // Reading a profile from the C original replaces the rules of the active profile and stops
