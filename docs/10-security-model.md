@@ -102,6 +102,10 @@ Being honest here matters more than sounding secure.
 - **The guard does not know what a rule means.** It refuses a write from a page that is not ours; it
   does not refuse a rule that happens to open the whole internet. Deny outranks allow, always, and
   that is the semantic protection rather than this transport one.
+- **The tray is a client, not a privileged process.** It holds the URL the server gave it and sends
+  the same token in the same header, so pausing protection or learning from the menu is checked by
+  the guard exactly like a click on the page. Nothing reaches a route through a side door, which is
+  the point worth stating: the guard has one caller and the tray has no direct line to the store.
 - **Elevation is a separate question.** The HTTP server runs with the process's rights; the difference
   between an elevated and an unelevated run is about the live store, and it is described in
   [WFP internals](07-wfp-internals.md#reading-the-store-needs-elevation).

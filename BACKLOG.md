@@ -62,9 +62,11 @@ Kept as asked, with the two audits now folded in below.
   whether the balloon should be suppressible at all.
 - ~~**The tray menu has only `Quit`.**~~ — closed in 0.21.0 for the menu itself: right click now
   opens `Open`, `Pause learning` and `Quit`, and the pause label is built when the menu opens, so it
-  follows the flag the monitor reads. What is left of the finding is the *other* pause: PLAN.md §1
-  also named `Pause protection`, which would stop enforcing rather than stop collecting, and no such
-  flag exists.
+  follows the flag the monitor reads. The *other* pause PLAN.md §1 named — `Pause protection`,
+  which stops enforcing rather than stop collecting — is closed in **0.43.0**: the flag is held by
+  the worker that talks to the store and honoured on every piece of work it is given, so a rebuild
+  asked for while paused clears instead of installing. What is left of the finding is whether a
+  paused tool should say so somewhere louder than a word in the header.
 - ~~**The UI never says whether the monitor is running.**~~ — closed in 0.27.0. The thread
   publishes what subscribing did (`starting`, `running`, `refused` with the code, `stopped`) and
   both reports carry how many events the log took in, so an empty list names its reason. What is
@@ -1086,3 +1088,16 @@ Open after the round:
 - `POST /api/detected` writes no comment either, so a rule decided from the Detected list explains
   itself with its name alone. Whether the destination should be written as the comment is a design
   question, not a missing line of code. (2026-11-02)
+
+## 36. Pause protection round notes
+
+Nothing was opened by this round. Two things are worth writing down now that the switch exists:
+
+- **A paused tool is quiet about it.** One word in the header is the whole announcement, and a
+  machine whose firewall has been paused for a week looks like a machine whose firewall works. A
+  tray tooltip, a second icon and a banner are all available; none of them is obviously right, so
+  this waits for somebody to be annoyed by it.
+- **The export does not name the profile it came from.** `export\` holds `rules.toml`, `config.toml`,
+  `detected.json` and `profiles\`, and after a while nobody can say which profile a given directory
+  belongs to. A `profile.txt` beside them, or the active name inside a single manifest, would make an
+  exported directory self-describing. Not a bug: nothing reads the directory back except a human.

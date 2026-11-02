@@ -20,10 +20,12 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   `Delete` work on the profile the selector holds, and `Delete` asks first because it takes the
   rules file with it. Renaming or deleting the unnamed `default` is refused: it is `rules.toml`
   itself rather than a file in `profiles\`.
-- **Header** line: address, learning mode, default policy, theme. Learning mode and the default
-  policy are underlined because they are clickable — clicking one asks the server to switch it to
-  the other value, which writes `config.toml` and rebuilds the store in the same request. The theme
-  is clickable too and cycles `light -> dark -> auto`, where `auto` follows the operating system.
+- **Header** line: address, protection, learning mode, default policy, theme. All four are
+  underlined because they are clickable. Protection reads **on** or **paused** and asks the server
+  to put our filters into the store or take them out, which is the pause the
+  [lifecycle chapter](08-lifecycle.md#pausing-protection) describes. Learning mode and the default
+  policy switch to the other value, which writes `config.toml` and rebuilds the store in the same
+  request. The theme cycles `light -> dark -> auto`, where `auto` follows the operating system.
   This is not decoration: the choice is applied to the page in the same request and
   survives a reload, so a bright terminal and a dark browser stop fighting each other.
 - **Rules** table: enabled flag, name, action, pattern, protocol, direction, port, remote address,
@@ -86,6 +88,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | `POST /api/settings` | change `learn_mode`, `default_policy`, `theme` or `log_level` at runtime; all four take effect at once |
 | `POST /api/detected/dismiss` | drop a detected application or destination without deciding |
 | `POST /api/clear` | remove our filters from the store |
+| `POST /api/protection` | pause or resume: an empty body flips, `{"enabled":true}` asks for one of the two |
 | `POST /api/shutdown` | stop the server, which ends the process; the filters stay installed |
 | `POST /api/export` | copy the rules, the config, the Detected list and the profiles into `export\` |
 | `POST /api/rules/share` | one rule as a Base64 string, for copy and paste |

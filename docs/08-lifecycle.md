@@ -41,9 +41,8 @@ a window, without waiting for anybody, and without asking the shell for anything
 already asking for. The text is the address alone; the session token the tray opens the browser with
 is thirty characters the user did not ask for and cannot type, and the page reads its token from its
 own first response anyway. A balloon the shell refuses is a debug line rather than a failure,
-because the icon is in the notification area either way.
-rather than a failure, because the icon is in the notification area either way, and a startup that
-shows nothing at all is what PLAN.md section 1 was written against.
+because the icon is in the notification area either way, and a startup that shows nothing at all is
+what PLAN.md section 1 was written against.
 
 A tray icon is not a widget: `Shell_NotifyIconW` binds an icon to a *window* and delivers its clicks
 as messages to that window's procedure. So the tray owns a message-only window and the thread that
@@ -78,15 +77,46 @@ on one machine may each run the tool, and each owns the rules in its own `%APPDA
 
 - **Left click** opens the browser on the UI. The URL is handed to the shell, which means the
   browser is the user's, not ours.
-- **Right click** opens a menu with `Open`, `Pause learning` and `Quit`. `Open` does what a left
-  click does. `Pause` and `Resume` flip the running `learn_mode` flag and write no file, so a pause
-  lasts for this run only: a restart reads `config.toml` again. The menu is built when it opens, so
-  the label always reflects the flag the monitor reads; a settings change made in the web in between
-  is picked up the next time the menu opens. `Quit` is the same stop as below.
+- **Right click** opens a menu with `Open`, `Pause learning`, `Pause protection` and `Quit`.
+  `Open` does what a left click does. `Pause learning` and `Pause protection` flip a running flag
+  and write no file, so each pause lasts for this run only: a restart reads `config.toml` again and
+  the labels read `Pause` again. The menu is built when it opens, so a label always reflects the
+  flag the monitor or the worker reads; a change made in the web in between is picked up the next
+  time the menu opens. Both entries are the same request the page sends, so the tray is a client of
+  the API rather than a second way in. `Quit` is the same stop as below.
 - **A click on the start balloon only dismisses it.** Reporting that click needs the icon to be
   registered with a shell version, and the version also moves where the mouse events sit in the
   callback message. Keeping the click path where it is costs less than the balloon is worth, so the
   balloon is read rather than used, and the icon is what opens the page.
+
+## Pausing protection
+
+A firewall that is in the way is normally switched off rather than reconfigured, and that is what
+the header switch and `Pause protection` in the tray menu are for. Protection is a flag the worker
+holds, not a setting in `config.toml`: it starts **on**, and a restart enforces again.
+
+What pauses is our filters, not Windows. The switch lives in the worker that talks to the store, so
+the worker honours it on every piece of work it is given: while protection is paused, a rebuild that
+would install filters takes them out instead. That matters for the case a switch elsewhere would get
+wrong — saving a rule while the firewall is paused writes the file and rebuilds, and must not be
+what resumes protection.
+
+| Request | What the store is asked for |
+|---|---|
+| `POST /api/protection` with no body | flip, and report what it became |
+| `POST /api/protection` with `{"enabled":false}` | pause |
+| `POST /api/protection` with `{"enabled":true}` | resume |
+
+Both answer with the whole state, like the settings route does, and the `protection` field in that
+state is what the page, the MCP `status` tool and the tray menu label read. Two consequences are
+worth knowing:
+
+- **The default deny of the store is ours too.** Pausing takes the base permits and the unconditional
+  block out with the rules, which is the difference between "the tool stops filtering" and "the
+  tool filters less". Other software in the store is untouched.
+- **A paused tool keeps watching.** The connection feed and the Detected list are filled by the
+  monitor, not by the worker, so learning continues while the firewall is paused, and the decisions
+  made in that time are written to `rules.toml` as usual.
 
 ## Stopping
 

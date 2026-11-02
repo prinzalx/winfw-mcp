@@ -185,8 +185,15 @@ fn serve(
     let detector = Arc::new(learn::Detector::load(&paths.learn)?);
 
     // The worker is started before the monitor so a callback can hand the store a rebuild when an
-    // application turns up that no filter knows about yet.
-    let worker = Arc::new(server::WfpWorker::start());
+    // application turns up that no filter knows about yet. It is started after `live` because it is
+    // the thread that honours the protection switch, and it has to see the same flag the routes
+    // write.
+    let live = Arc::new(server::Live::new(
+        settings.learn_mode,
+        settings.default_policy,
+        settings.theme,
+    ));
+    let worker = Arc::new(server::WfpWorker::start(Arc::clone(&live)));
 
     // Captured before `settings` moves into the state: a volatile run takes its filters out
     // again when the server stops.
@@ -194,14 +201,6 @@ fn serve(
 
     // The monitor is started before the listener so the first page load already has a feed, even
     // if it is empty. It is held by this scope, which is what keeps the subscription open.
-    // The two settings that may change while the server runs live here, so the monitor's callbacks
-    // and `POST /api/settings` read and write the same pair.
-    let live = Arc::new(server::Live::new(
-        settings.learn_mode,
-        settings.default_policy,
-        settings.theme,
-    ));
-
     let events = Arc::new(monitor::EventLog::new());
     let _monitor = monitor::Monitor::start(
         Arc::clone(&events),

@@ -224,7 +224,9 @@
       <div>
         <h1>winfw-mcp</h1>
         <div class="sub">
-          <span id="addr">localhost</span> &middot; learning mode
+          <span id="addr">localhost</span> &middot; protection
+          <span id="protection" class="toggle" title="click to pause or resume the firewall">on</span>
+          &middot; learning mode
           <span id="learn-mode" class="toggle" title="click to toggle learning mode">off</span>
           &middot; default
           <span id="default-policy" class="toggle" title="click to toggle the default policy">allow</span>
@@ -317,6 +319,7 @@
       let rules = [];
       let detected = [];
       let learnMode = false;
+      let protection = true;
       let source = null;
       let detectedTimer = null;
 
@@ -834,7 +837,9 @@
         rules = state.rules.rule;
         detected = state.detected;
         learnMode = state.learn_mode;
+        protection = state.protection;
         el("addr").textContent = location.host;
+        el("protection").textContent = state.protection ? "on" : "paused";
         el("learn-mode").textContent = state.learn_mode ? "on" : "off";
         el("default-policy").textContent = state.default_policy;
         el("theme").textContent = state.theme;
@@ -1055,6 +1060,16 @@
           status("default policy is " + next);
         } catch (error) {
           status("could not change the default policy: " + error.message);
+        }
+      });
+
+      // An empty body means flip, which is the same request the tray menu sends.
+      el("protection").addEventListener("click", async () => {
+        try {
+          apply(await request("POST", "/api/protection", {}));
+          status(protection ? "protection resumed" : "protection paused");
+        } catch (error) {
+          status("could not change protection: " + error.message);
         }
       });
 

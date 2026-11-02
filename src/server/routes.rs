@@ -44,6 +44,7 @@ impl Server {
             ("POST", "/api/shutdown") => post_shutdown(state),
             ("GET", "/api/health") => Ok(Response::text(200, "ok")),
             ("POST", "/api/clear") => post_clear(worker),
+            ("POST", "/api/protection") => post_protection(state, worker, request),
             ("POST", "/api/export") => post_export(state, request),
             ("POST", "/api/rules/share") => post_rules_share(state, request),
             ("POST", "/api/rules/import") => post_rules_import(state, worker, request),
@@ -203,6 +204,33 @@ fn post_clear(worker: &WfpWorker) -> Result<Response> {
     let outcome = worker.ask(StoreWork::Clear)?;
 
     Response::json(200, &outcome)
+}
+
+/// What `POST /api/protection` answers: the state as the firewall settled on it.
+///
+/// The switch is the run-time pause PLAN.md section 1 promises, and it is the store that feels it:
+/// paused means our filters are out of it, which leaves the machine on whatever the operating
+/// system and any other firewall decide. Resuming rebuilds from the rules that are loaded, so a
+/// rule edited while paused is installed by the resume rather than lost.
+fn post_protection(state: &AppState, worker: &WfpWorker, request: &Request) -> Result<Response> {
+    let body: Protection = parse_or_default(&request.body)?;
+    let on = state.set_protection(body.enabled.unwrap_or_else(|| !state.protection()));
+
+    let outcome = if on {
+        let rules = state.rules.lock().expect("rules lock poisoned").clone();
+
+        worker.ask(StoreWork::Apply {
+            rules,
+            known: state.detector.apps(),
+            policy: state.policy(),
+        })?
+    } else {
+        worker.ask(StoreWork::Clear)?
+    };
+
+    info!(protection = on, store = %outcome.describe(), "protection switched");
+
+    Response::json(200, &StateJson::new(state, &outcome))
 }
 
 /// What `POST /api/export` answers: the report of the files that were copied.
@@ -375,6 +403,8 @@ fn post_profiles_switch(
 struct StateJson {
     port: u16,
     learn_mode: bool,
+    /// Whether our filters are in the store. False is a paused firewall rather than a broken one.
+    protection: bool,
     /// `allow` or `deny`: what an application no rule mentions gets.
     default_policy: &'static str,
     /// Whether the installed filters go out with the process. Read at startup; changing it takes
@@ -435,6 +465,7 @@ impl StateJson {
         Self {
             port: state.settings.port,
             learn_mode: state.learn_mode(),
+            protection: state.protection(),
             default_policy: state.policy().name(),
             volatile_filters: state.settings.volatile_filters,
             log_level: state.log_level(),
@@ -492,6 +523,14 @@ struct Backup {
     area: Option<Area>,
 }
 
+/// The body of `POST /api/protection`: what protection should be. Absent means flip, which is what
+/// the tray menu and the header on the page send.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct Protection {
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
 /// The body of `POST /api/rules/share`: which rule to encode.
 #[derive(Debug, Clone, Deserialize)]
 struct ShareIndex {
@@ -543,11 +582,107 @@ mod tests {
     /// off the Detected list, and an unelevated run is refused by the store, which is a fact about
     /// the machine rather than about the code. The store tests cover the accepted case.
     fn store_accepted(body: &str) -> bool {
-        serde_json::from_str::<serde_json::Value>(body)
-            .expect("a state body is JSON")
+        json_str(body)
             .pointer("/store/ok")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
+    }
+
+    /// The JSON a route answered with.
+    fn json(response: &Response) -> serde_json::Value {
+        json_str(std::str::from_utf8(&response.body).expect("a state body is UTF-8"))
+    }
+
+    fn json_str(body: &str) -> serde_json::Value {
+        serde_json::from_str(body).expect("a state body is JSON")
+    }
+
+    /// The pause PLAN.md section 1 promises is a route rather than a tray detail, so the flip has
+    /// to be visible in the answer and in the state the process holds.
+    #[test]
+    fn the_protection_endpoint_flips_and_reports_what_it_became() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let post = |body: &str| {
+            Server::route(
+                &server_state,
+                &worker,
+                &Request::new("POST", "/api/protection", body.as_bytes().to_vec()),
+            )
+            .expect("route")
+        };
+
+        let paused = post("");
+
+        assert_eq!(paused.status, 200);
+
+        let body = json(&paused);
+
+        assert_eq!(
+            body["protection"], false,
+            "an empty body means flip, and it started enforcing"
+        );
+        assert!(!server_state.protection());
+
+        let resumed = post("");
+
+        assert_eq!(json(&resumed)["protection"], true);
+        assert!(server_state.protection());
+    }
+
+    /// An explicit value is not a flip: two requests that both ask for paused leave it paused,
+    /// which is what lets the page and the menu ask for the same thing without arguing.
+    #[test]
+    fn the_protection_endpoint_takes_an_explicit_value() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        for _ in 0..2 {
+            let response = Server::route(
+                &server_state,
+                &worker,
+                &Request::new("POST", "/api/protection", br#"{"enabled":false}"#.to_vec()),
+            )
+            .expect("route");
+
+            assert_eq!(json(&response)["protection"], false);
+        }
+
+        assert!(!server_state.protection());
+    }
+
+    /// The point of the switch living in the worker: saving a rule while paused must not be what
+    /// resumes the firewall.
+    #[test]
+    fn a_rule_saved_while_paused_leaves_protection_paused() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/protection", br#"{"enabled":false}"#.to_vec()),
+        )
+        .expect("pause");
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"browser","action":"allow","pattern":"C:\\Program Files\\*\\browser.exe","enabled":true}]}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            json(&response)["protection"],
+            false,
+            "a save is not a resume"
+        );
     }
 
     /// A decided application becomes an ordinary rule, leaves the detected list, and the rules
@@ -555,7 +690,7 @@ mod tests {
     #[test]
     fn a_detected_application_becomes_a_rule() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         server_state.detector.observe(
             &connection("\\device\\harddiskvolume3\\windows\\system32\\thing.exe"),
@@ -603,7 +738,7 @@ mod tests {
     #[test]
     fn a_detected_destination_becomes_a_rule_that_reaches_it() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let covered = RuleFile {
             rule: vec![Rule {
@@ -660,7 +795,7 @@ mod tests {
     #[test]
     fn the_state_endpoint_carries_the_session_token() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -681,7 +816,7 @@ mod tests {
     #[test]
     fn a_save_by_the_tool_leaves_no_notice() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         Server::route(
             &server_state,
@@ -714,7 +849,7 @@ mod tests {
     #[test]
     fn a_change_to_the_rules_file_is_noticed() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         Server::route(
             &server_state,
@@ -754,7 +889,7 @@ mod tests {
     #[test]
     fn a_whole_file_replaces_the_rule_list() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let text = r#"version = 1
 
@@ -811,7 +946,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn a_whole_file_that_cannot_be_read_leaves_the_rules_alone() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -840,7 +975,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn an_index_outside_the_rule_list_is_refused() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -856,7 +991,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn an_unknown_path_is_not_found() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -873,7 +1008,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn a_shutdown_request_stops_the_accept_loop() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -906,7 +1041,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn the_index_page_is_served_from_the_binary() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(&server_state, &worker, &Request::new("GET", "/", vec![]))
             .expect("route");
@@ -923,7 +1058,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn the_favicon_is_served_from_the_binary_too() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -946,7 +1081,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn the_export_endpoint_copies_the_files_of_every_area() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -964,7 +1099,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn a_rule_can_be_shared_and_imported_again() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let shared = Server::route(
             &server_state,
@@ -1005,7 +1140,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn a_narrowed_rule_travels_through_the_api() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -1038,7 +1173,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn the_rules_endpoint_refuses_an_address_it_cannot_read() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let refused = Server::route(
             &server_state,
@@ -1076,7 +1211,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn the_rules_endpoint_refuses_a_port_it_cannot_read() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -1094,7 +1229,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn the_state_endpoint_answers_with_the_loaded_rules() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -1116,7 +1251,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn the_state_endpoint_reports_the_monitor_and_what_it_delivered() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let body = |label: &str| {
             let response = Server::route(
@@ -1168,7 +1303,7 @@ pattern = "C:\\Windows\\two.exe"
             differs: true,
         };
 
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -1190,7 +1325,7 @@ pattern = "C:\\Windows\\two.exe"
     #[test]
     fn a_state_that_never_rebuilt_the_store_says_the_startup_was_not_measured() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -1215,7 +1350,7 @@ pattern = "C:\\Windows\\two.exe"
         events.push(connection("newer.exe"));
 
         let server_state = state_with(Arc::clone(&events), Live::default());
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -1245,7 +1380,7 @@ pattern = "C:\\Windows\\two.exe"
         events.push(event);
 
         let server_state = state_with(Arc::clone(&events), Live::default());
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -1271,7 +1406,7 @@ pattern = "C:\\Windows\\two.exe"
         events.push(event);
 
         let server_state = state_with(Arc::clone(&events), Live::default());
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -1298,7 +1433,7 @@ pattern = "C:\\Windows\\two.exe"
         events.push(event);
 
         let server_state = state_with(Arc::clone(&events), Live::default());
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -1328,7 +1463,7 @@ pattern = "C:\\Windows\\two.exe"
         events.push(event);
 
         let server_state = state_with(Arc::clone(&events), Live::default());
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,

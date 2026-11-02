@@ -181,6 +181,16 @@ impl AppState {
         self.live.policy()
     }
 
+    /// Whether the filters are in the store, which is what the protection switch answers.
+    pub(super) fn protection(&self) -> bool {
+        self.live.protection()
+    }
+
+    /// Ask for protection on or off and report what it became.
+    pub(super) fn set_protection(&self, on: bool) -> bool {
+        self.live.set_protection(on)
+    }
+
     /// Record that the rules file on disk is now the tool's own work.
     ///
     /// Called after every write the tool does, so the next comparison measures the difference
@@ -232,17 +242,23 @@ impl AppState {
     }
 }
 
-/// The three settings that may change while the process runs.
+/// The settings that may change while the process runs.
 ///
 /// Everything else in `Settings` is read once at startup and cannot be honoured afterwards: only
-/// the port is, because the listener is already bound. The other three are
-/// consulted again on every read, so they live in atomics the monitor thread and the request
-/// threads both see. `settings` keeps the file-shaped copy, which is what gets written back to
-/// `config.toml`.
+/// the port is, because the listener is already bound. These are consulted again on every read, so
+/// they live in atomics the monitor thread, the WFP worker and the request threads all see.
+/// `settings` keeps the file-shaped copy, which is what gets written back to `config.toml`. The
+/// protection switch is not in `Settings` at all: it is a pause for this run, and a start is
+/// enforcing.
 #[derive(Debug)]
 pub struct Live {
     learning: AtomicBool,
     deny: AtomicBool,
+    /// Whether the filters are in the store, which the tray and the page may pause.
+    ///
+    /// It is an atomic for the same reason the two above it are: the worker thread reads it on
+    /// every piece of store work, so a value in `settings` would be the value the last run had.
+    protection: AtomicBool,
     /// Which colour scheme the page should show, as the index of a [`Theme`] variant.
     ///
     /// A theme changes nothing the server itself does; it is published here so that a settings
@@ -259,6 +275,7 @@ impl Live {
         Self {
             learning: AtomicBool::new(learning),
             deny: AtomicBool::new(policy == Policy::Deny),
+            protection: AtomicBool::new(true),
             theme: AtomicU8::new(theme.index()),
             monitor: Mutex::new(MonitorStatus::default()),
         }
@@ -290,6 +307,21 @@ impl Live {
         !self.learning.fetch_not(Ordering::SeqCst)
     }
 
+    /// Whether our filters are in the store right now.
+    ///
+    /// Pausing protection is not a setting and reaches no file: it is the run-time switch PLAN.md
+    /// section 1 promises, and a restart is enforcing again, which is what a firewall is for.
+    pub fn protection(&self) -> bool {
+        self.protection.load(Ordering::SeqCst)
+    }
+
+    /// Ask for protection on or off and report what it became.
+    pub fn set_protection(&self, on: bool) -> bool {
+        self.protection.store(on, Ordering::SeqCst);
+
+        on
+    }
+
     /// What the event subscription did about being asked to listen.
     pub fn monitor(&self) -> MonitorStatus {
         self.monitor
@@ -315,8 +347,9 @@ impl Live {
 }
 
 impl Default for Live {
-    /// The same theme `config.toml` is written with, so a state built without a settings file
-    /// cannot report a theme the tool would never have started with.
+    /// The same theme and policy `config.toml` is written with, so a state built without a
+    /// settings file cannot report values the tool would never have started with. Protection is
+    /// on, because that is what a start means.
     fn default() -> Self {
         Self::new(false, Policy::default(), Theme::default())
     }

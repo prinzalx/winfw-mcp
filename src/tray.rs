@@ -3,18 +3,19 @@
 //! PLAN.md section 1 asked for a start popup that says the tool is running and shows its address.
 //! That popup is the balloon the icon arrives with: it needs no window of its own, it closes
 //! itself, and it holds nobody up. Clicking the icon opens the browser on the UI, the right button
-//! offers `Open`, `Pause learning` and `Quit`, and nothing else happens at startup, so the tool
-//! stays out of the way until it is asked for.
+//! offers `Open`, `Pause learning`, `Pause protection` and `Quit`, and nothing else happens at
+//! startup, so the tool stays out of the way until it is asked for.
 //!
 //! A tray icon is not a widget: `Shell_NotifyIconW` binds an icon to a *window* and delivers its
 //! clicks as messages to that window's procedure. So this module owns a message-only window and the
 //! thread that pumps its messages, which is also why the tray cannot live on one of the server's
 //! request threads.
 //!
-//! The right button opens a menu with `Open`, `Pause learning` and `Quit`. The pause flips the
-//! running [`live`](crate::server::Live) flag only and writes no file: it lasts for this run,
-//! which is what a pause means, and a settings change through the web remains the way to decide it
-//! permanently.
+//! The right button opens a menu with `Open`, `Pause learning`, `Pause protection` and `Quit`. The
+//! learning pause flips the running [`live`](crate::server::Live) flag only and writes no file: it
+//! lasts for this run, which is what a pause means, and a settings change through the web remains
+//! the way to decide it permanently. The protection pause is not even flipped here — it is a POST
+//! to the server's own route, because that is the code that knows what pausing the firewall means.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
@@ -60,6 +61,9 @@ const MENU_OPEN: usize = 0x101;
 
 #[cfg(windows)]
 const MENU_PAUSE: usize = 0x102;
+
+#[cfg(windows)]
+const MENU_PROTECTION: usize = 0x103;
 
 /// The icon in the notification area, plus the thread that answers its clicks.
 pub struct Tray {
@@ -367,6 +371,82 @@ fn open_browser() {
     open_url(&url);
 }
 
+/// The authority and the session token of a tray URL.
+///
+/// The tray URL is what the browser gets — `http://127.0.0.1:8788/?token=…` — and a request the
+/// tray makes itself needs exactly two things out of it: where to connect, and what to write with.
+/// `None` for a URL that carries no token, which is the second instance's plain URL rather than
+/// this process's.
+fn split_url(url: &str) -> Option<(&str, &str)> {
+    let rest = url.trim().strip_prefix("http://")?;
+
+    let (authority, query) = rest.split_once('/')?;
+    let query = query.strip_prefix('?').unwrap_or(query);
+    let query = query.split('&').next().unwrap_or_default();
+
+    let token = query
+        .strip_prefix("token=")
+        .filter(|token| !token.is_empty())?;
+
+    Some((authority, token))
+}
+
+/// Ask the running server to flip protection, over loopback.
+///
+/// The tray is a client of the API exactly like the page is, which is deliberate: the flag, the
+/// store work and the log line all live in the one route, so the menu cannot end up disagreeing
+/// with the server about what the firewall is doing. A tray that rebuilt the store itself would be
+/// a second implementation of the same decision, and the one the tests do not reach.
+#[cfg(windows)]
+fn post_protection() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+    use tracing::{info, warn};
+
+    let url = UI_URL.lock().expect("url lock poisoned").clone();
+
+    let Some((authority, token)) = split_url(&url) else {
+        warn!(url = %url, "the tray could not read the server address");
+
+        return;
+    };
+
+    let request = format!(
+        "POST /api/protection HTTP/1.1\r\nHost: {authority}\r\nOrigin: http://{authority}\
+         \r\nContent-Type: application/json\r\nx-winfw-token: {token}\
+         \r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+    );
+
+    let answer = TcpStream::connect(authority).and_then(|mut stream| {
+        // Bounded, because the tray thread answers the icon: a server that stopped reading must
+        // not take the notification area down with it.
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+
+        stream.write_all(request.as_bytes())?;
+        stream.flush()?;
+
+        // Only the status line is read. The body is the whole state, which the tray has no use
+        // for, and reading it would mean trusting the server to close the connection.
+        let mut line = String::new();
+        BufReader::new(&mut stream).read_line(&mut line)?;
+
+        Ok(line)
+    });
+
+    match answer {
+        Ok(line) if line.starts_with("HTTP/1.1 200") => {
+            info!("the tray switched protection through the API");
+        }
+        Ok(line) => warn!(
+            status = line.trim(),
+            "the server refused the tray's protection request"
+        ),
+        Err(error) => warn!(reason = %error, "the tray could not reach the server"),
+    }
+}
+
 /// Show the right-button menu and act on what was chosen.
 #[cfg(windows)]
 fn show_menu(handle: windows::Win32::Foundation::HWND) {
@@ -381,14 +461,14 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
         return;
     };
 
-    // The menu says what pausing would do, which is only honest while it reflects the flag the
-    // server reads. A settings change made in the web between two openings is picked up the same
-    // way, because the label is read from the flag every time the menu is built.
-    let learning = LIVE
+    // The menu says what pausing would do, which is only honest while it reflects the flags the
+    // server reads. A change made in the web between two openings is picked up the same way,
+    // because both labels are read from the flags every time the menu is built.
+    let (learning, protection) = LIVE
         .lock()
         .expect("live lock poisoned")
         .as_ref()
-        .is_some_and(|live| live.learning());
+        .map_or((false, true), |live| (live.learning(), live.protection()));
 
     unsafe {
         AppendMenuW(menu, MF_STRING, MENU_OPEN, w!("Open")).ok();
@@ -402,6 +482,18 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
                 w!("Pause learning")
             } else {
                 w!("Resume learning")
+            },
+        )
+        .ok();
+
+        AppendMenuW(
+            menu,
+            MF_STRING,
+            MENU_PROTECTION,
+            if protection {
+                w!("Pause protection")
+            } else {
+                w!("Resume protection")
             },
         )
         .ok();
@@ -446,6 +538,12 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
             } else {
                 warn!("tray pause found no live settings");
             }
+
+            return;
+        }
+
+        if choice.0 == MENU_PROTECTION as i32 {
+            post_protection();
 
             return;
         }
@@ -536,6 +634,27 @@ mod tests {
             balloon_text("http://127.0.0.1:8788"),
             "http://127.0.0.1:8788"
         );
+    }
+
+    /// The self-request the protection menu item makes reads two things out of the tray URL, and
+    /// the plain URL a second instance hands to the shell has neither of them.
+    #[test]
+    fn a_tray_url_yields_the_authority_and_the_token() {
+        assert_eq!(
+            split_url("http://127.0.0.1:8788/?token=0f3a"),
+            Some(("127.0.0.1:8788", "0f3a"))
+        );
+        assert_eq!(
+            split_url("http://localhost:8788/?token=0f3a"),
+            Some(("localhost:8788", "0f3a"))
+        );
+    }
+
+    #[test]
+    fn a_tray_url_without_a_token_has_nothing_to_write_with() {
+        assert_eq!(split_url("http://127.0.0.1:8788"), None);
+        assert_eq!(split_url("http://127.0.0.1:8788/"), None);
+        assert_eq!(split_url("http://127.0.0.1:8788/?token="), None);
     }
 
     #[cfg(windows)]

@@ -50,8 +50,9 @@ connections over SSE — only the ones that leave the machine — and learning m
 application no rule speaks about yet in a Detected list, where each entry can be allowed, denied or
 dismissed from the browser. In a release build it runs without a console window and lives as a tray
 icon. Any area can be copied into `export\` on demand, one rule travels as a Base64 string, and an
-MCP agent talks JSON-RPC to `POST /mcp`. Rules are organised into named profiles, and stopping the
-tool — from the page, from the tray or over MCP — leaves the filters in place.
+MCP agent talks JSON-RPC to `POST /mcp`. Rules are organised into named profiles, protection can be
+paused from the page or from the tray menu, and stopping the tool — from either — leaves the filters
+in place.
 
 The MCP endpoint reads only, on purpose: an agent that could write a rule could open its own gate,
 and that is the one thing a firewall in front of an agent should not allow.
@@ -72,12 +73,13 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.42.0**. A rule can now carry a `comment`: optional free text, shown in a
-column of its own, sent along in the Base64 share string, and kept out of the store. Starting the
-tool also says something now — the tray icon arrives with a balloon naming the address, which is the
-start popup PLAN.md section 1 promised. The handbook reads like an operating manual rather than a
-development diary: version numbers are gone from the chapters and the release history has its own
-file, [CHANGELOG.md](CHANGELOG.md).
+The current release is **0.43.0**. The firewall can be paused: a header switch on the page and
+`Pause protection` in the tray menu take our filters out of the store and put them back, without
+writing a setting and without waiting for a restart. The flag lives in the worker that talks to the
+store, so a rule saved while the firewall is paused stays paused. A rule can carry a `comment`, and
+starting the tool says something — the tray icon arrives with a balloon naming the address. The
+handbook reads like an operating manual rather than a development diary, and the release history has
+its own file, [CHANGELOG.md](CHANGELOG.md).
 [SECURITY_REVIEW.md](SECURITY_REVIEW.md) is a brief for an outside reviewer of the request
 path; the security chapter it reviews is
 [the security model](docs/10-security-model.md#the-guard).

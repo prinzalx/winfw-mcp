@@ -25,6 +25,7 @@
 //! | POST | `/api/detected` | turn a detected application into a rule and rebuild the store |
 //! | POST | `/api/detected/dismiss` | drop a detected application without allowing it |
 //! | POST | `/api/clear` | remove our filters from the store |
+//! | POST | `/api/protection` | pause or resume protection: a rebuild while it is paused clears instead |
 //! | POST | `/api/shutdown` | stop the server, which ends the process |
 //! | POST | `/api/export` | copy rules, config, the Detected list and the profiles into `export\` |
 //! | POST | `/api/rules/share` | one rule as a Base64 string, for copy and paste |
@@ -467,7 +468,7 @@ mod tests {
         let server = Server::bind(
             0,
             state_with(Arc::clone(&events), Live::default()),
-            Arc::new(WfpWorker::start()),
+            Arc::new(WfpWorker::start_enforcing()),
         )
         .expect("bind");
         let addr = server.addr();
@@ -522,7 +523,8 @@ mod tests {
     /// The whole loop over a real socket, on an ephemeral port.
     #[test]
     fn a_real_socket_answers_the_state_request() {
-        let server = Server::bind(0, state(), Arc::new(WfpWorker::start())).expect("bind");
+        let server =
+            Server::bind(0, state(), Arc::new(WfpWorker::start_enforcing())).expect("bind");
         let addr = server.addr();
 
         let join = thread::spawn(move || server.serve_once());
@@ -550,7 +552,8 @@ mod tests {
         let blocker = TcpListener::bind("127.0.0.1:0").expect("blocker");
         let port = blocker.local_addr().expect("blocker address").port();
 
-        let server = Server::bind(port, state(), Arc::new(WfpWorker::start())).expect("bind");
+        let server =
+            Server::bind(port, state(), Arc::new(WfpWorker::start_enforcing())).expect("bind");
         let bound = server.addr().port();
 
         assert_ne!(bound, port, "the busy port cannot be taken twice");

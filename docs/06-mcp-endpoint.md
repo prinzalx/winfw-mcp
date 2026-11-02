@@ -15,7 +15,7 @@ Six tools, and every one of them reads.
 
 | Tool | Purpose |
 |---|---|
-| `status` | settings, rule count, store health, the state of the event feed, what the rebuild at startup found |
+| `status` | settings, rule count, whether protection is on, store health, the state of the event feed, what the rebuild at startup found |
 | `rules.list` | every rule, in file order |
 | `rules.share` | one rule as a Base64 string (takes `index`) |
 | `detected.list` | what learning mode collected |

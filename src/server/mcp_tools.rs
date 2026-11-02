@@ -164,6 +164,7 @@ fn mcp_tool(
             Ok(mcp::tool_json(serde_json::json!({
                 "port": state.settings.port,
                 "learn_mode": state.learn_mode(),
+                "protection": state.protection(),
                 "default_policy": state.settings.default_policy.name(),
                 "theme": state.live.theme().name(),
                 "profile": state.active_name(),
@@ -241,7 +242,7 @@ mod tests {
     #[test]
     fn calling_a_removed_tool_is_a_method_not_found() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
         let rules_path = server_state.rules_path();
 
         let before = std::fs::read_to_string(&rules_path).ok();
@@ -275,7 +276,7 @@ mod tests {
     #[test]
     fn the_tool_list_offers_only_reading_tools() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -317,7 +318,7 @@ mod tests {
     #[test]
     fn a_tool_can_be_called_by_its_own_name() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,

@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn switching_profile_moves_the_live_rules_to_a_new_file() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn a_new_profile_copies_the_rules_it_was_made_from_and_becomes_live() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn creating_a_profile_that_exists_is_refused() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         for attempt in 0..2 {
             let response = Server::route(
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn deleting_the_live_profile_falls_back_to_the_default_rules() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         Server::route(
             &server_state,
@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn the_default_rules_cannot_be_deleted_as_a_profile() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let error = Server::route(
             &server_state,
@@ -367,7 +367,7 @@ mod tests {
     #[test]
     fn renaming_the_live_profile_keeps_it_live_under_the_new_name() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         Server::route(
             &server_state,

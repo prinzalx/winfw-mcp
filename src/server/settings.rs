@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn the_settings_endpoint_writes_the_file_and_takes_effect_at_once() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn the_state_endpoint_reports_the_theme() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn a_theme_change_takes_effect_at_once_and_reaches_the_file() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn the_settings_endpoint_refuses_a_theme_it_cannot_read() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn the_settings_endpoint_refuses_a_field_it_does_not_know() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn a_log_level_change_is_answered_with_the_new_level() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn the_settings_endpoint_refuses_a_log_level_it_cannot_read() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = Server::route(
             &server_state,

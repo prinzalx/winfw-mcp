@@ -12,6 +12,8 @@ use tracing::warn;
 
 use crate::rules::RuleFile;
 
+use super::state::Live;
+
 /// What the WFP worker does on behalf of a request thread.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -91,7 +93,10 @@ pub struct WfpWorker {
 impl WfpWorker {
     /// Start the worker. On non-Windows builds the worker still runs, so the server behaves the
     /// same and reports the store as unavailable.
-    pub fn start() -> Self {
+    ///
+    /// `live` carries the protection switch, which the worker honours on every piece of work: a
+    /// rebuild asked for while protection is paused must not put filters back into the store.
+    pub fn start(live: Arc<Live>) -> Self {
         // A bounded queue of one is deliberate: a second change waits for the first to be carried
         // out, which is also what keeps two full filter rebuilds from racing.
         let (sender, receiver) = sync_channel::<WorkItem>(1);
@@ -116,6 +121,10 @@ impl WfpWorker {
             };
 
             while let Ok((work, reply)) = receiver.recv() {
+                // Read per item rather than remembered, so a pause made a moment ago is honoured
+                // by the work that arrives after it.
+                let work = honouring_protection(work, live.protection());
+
                 let outcome = handle_work(
                     #[cfg(windows)]
                     engine.as_ref(),
@@ -134,6 +143,15 @@ impl WfpWorker {
             join: Some(join),
             owners,
         }
+    }
+
+    /// The worker a test wants: protection on, because a test that pauses it says so.
+    ///
+    /// It owns its switch rather than sharing the one in the state, which is exactly what a test
+    /// that never pauses protection cannot tell the difference about.
+    #[cfg(test)]
+    pub fn start_enforcing() -> Self {
+        Self::start(Arc::new(Live::default()))
     }
 
     /// A second handle on the request queue, for a caller that has work but no interest in the
@@ -180,6 +198,19 @@ impl Drop for WfpWorker {
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
+    }
+}
+
+/// What a piece of store work becomes when protection is paused.
+///
+/// A rebuild is the only thing that changes: paused means "take our filters out", which is exactly
+/// what the store route already asks for by hand, so doing the swap here means every caller that
+/// pushes rules to the store — the page, an import, a profile switch, a settings change — cannot
+/// quietly resume protection by writing a rule.
+fn honouring_protection(work: StoreWork, protection: bool) -> StoreWork {
+    match work {
+        StoreWork::Apply { .. } if !protection => StoreWork::Clear,
+        other => other,
     }
 }
 
@@ -307,4 +338,59 @@ fn handle_work(work: StoreWork) -> Result<StoreOutcome> {
         inventory: InventorySummary::default(),
         reason: Some(format!("no WFP on this platform, asked for {work:?}")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Policy;
+
+    fn apply() -> StoreWork {
+        StoreWork::Apply {
+            rules: RuleFile::default(),
+            known: Vec::new(),
+            policy: Policy::Allow,
+        }
+    }
+
+    /// The whole point of the switch: a rule written while protection is paused must not be what
+    /// resumes it, or pausing on the tray would last exactly until the next click on the page.
+    #[test]
+    fn a_rebuild_while_protection_is_paused_becomes_a_clear() {
+        assert!(matches!(
+            honouring_protection(apply(), false),
+            StoreWork::Clear
+        ));
+    }
+
+    #[test]
+    fn a_rebuild_with_protection_on_is_still_a_rebuild() {
+        assert!(matches!(
+            honouring_protection(apply(), true),
+            StoreWork::Apply { .. }
+        ));
+    }
+
+    /// Clearing is what the protection route asks for on its own, so it must not be turned into
+    /// anything else by the same rule.
+    #[test]
+    fn a_clear_is_a_clear_whatever_protection_does() {
+        assert!(matches!(
+            honouring_protection(StoreWork::Clear, false),
+            StoreWork::Clear
+        ));
+        assert!(matches!(
+            honouring_protection(StoreWork::Clear, true),
+            StoreWork::Clear
+        ));
+    }
+
+    /// A read of the store is not a change to it, and a paused firewall still has to be readable.
+    #[test]
+    fn an_inventory_is_never_touched_by_the_switch() {
+        assert!(matches!(
+            honouring_protection(StoreWork::Inventory, false),
+            StoreWork::Inventory
+        ));
+    }
 }

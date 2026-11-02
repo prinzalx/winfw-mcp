@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn an_unreadable_settings_body_answers_bad_request() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         for body in [r#"{"theme":"neon"}"#, r#"{"policy":"deny"}"#, "{"] {
             let response = respond(Server::route(
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn a_failure_that_is_not_a_bad_body_stays_internal() {
         let server_state = state();
-        let worker = WfpWorker::start();
+        let worker = WfpWorker::start_enforcing();
 
         let response = respond(Server::route(
             &server_state,
