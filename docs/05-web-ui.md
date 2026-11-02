@@ -13,65 +13,134 @@ actually got.
 The page is served from the binary and so is its icon: `GET /favicon.ico` answers with the same
 file the tray and the shell use, so a browser tab shows the logo without a single file on disk.
 
+Everything the page needs is in that one file: the style and the script are inline, there is no CDN,
+no webfont and no image fetched from outside, which is what makes the page work on a machine whose
+network the firewall has just closed. It asks for about 64 KB. Light and dark are the same file; the
+choice is made through CSS variables, so nothing is fetched and nothing is rebuilt.
+
+| Light, 1100 px | Dark, 1100 px |
+|---|---|
+| ![The page in a light theme at 1100 pixels](screenshots/ui-light-1100.png) | ![The page in a dark theme at 1100 pixels](screenshots/ui-dark-1100.png) |
+
+| Light, 600 px | Dark, 600 px |
+|---|---|
+| ![The page in a light theme at 600 pixels](screenshots/ui-light-600.png) | ![The page in a dark theme at 600 pixels](screenshots/ui-dark-600.png) |
+
 ## What is on the page
 
-- **Profile** selector, which switches the live rule file, with `New`, `Rename` and `Delete` beside
-  it. `New` copies the rules on screen into a new profile and switches to it; `Rename` and
-  `Delete` work on the profile the selector holds, and `Delete` asks first because it takes the
-  rules file with it. Renaming or deleting the unnamed `default` is refused: it is `rules.toml`
-  itself rather than a file in `profiles\`.
-- **Header** line: address, protection, learning mode, default policy, theme. All four are
-  underlined because they are clickable. Under it a single line names what the default policy means
-  for a program the rules say nothing about: under `deny` *Programs without a rule are blocked. Loopback
-  and the IPv6 base functions stay reachable.*, under `allow` that they may go out and only appear in
-  the Detected list. The policy belongs in the header and not only in the settings because it decides
-  whether an empty rules table is a fresh install or a closed firewall. Protection reads **on** or **paused** and asks the server
-  to put our filters into the store or take them out, which is the pause the
-  [lifecycle chapter](08-lifecycle.md#pausing-protection) describes. Learning mode and the default
-  policy switch to the other value, which writes `config.toml` and rebuilds the store in the same
-  request. The theme cycles `light -> dark -> auto`, where `auto` follows the operating system.
-  This is not decoration: the choice is applied to the page in the same request and
-  survives a reload, so a bright terminal and a dark browser stop fighting each other.
-  On a tab the tray did not open, the same line ends with *read only · open from the tray icon to
-  make changes*, because a tab without a session token can ask questions but cannot answer them.
-- **Rules** table: order, enabled flag, name, action, pattern, protocol, direction, port, remote
-  address, comment, remove, share. The order column moves a rule up or down with the same effect the
-  file's order has on the filters. Every field is edited in place and saved on change. Protocol and
-  direction are dropdowns whose first entry is `any`, which is sent as no value at all; the port
-  box takes `443` or `1024-2048` and the remote box `10.0.0.5`, `192.168.1.0/24` or a span such as
-  `10.0.0.1-10.0.0.9`, both left empty for anything goes. The comment box holds free text for the
-  row and is empty on a rule that has nothing to say;
-  clearing it removes the field from the file. A value the server cannot read bounces back as an
-  error and the row is redrawn from what the server has. A wildcard pattern that matches more
-  applications than 32 shows a note under the pattern box — *pattern has 42 matches, only 32
-  installed* — so the cut is visible where the rule is edited rather than only in the log.
-- **Detected** table: the learning mode, with `allow`, `deny` and `dismiss` per row. An entry for a
-  destination a covered application reached is marked `to <address>` and decides that destination
-  alone.
-- **Recent connections**: fed over SSE, newest first, as `local -> remote`. Each line names the
-  destination it went to and the rule the firewall blamed for its verdict — `by browser` for one of
-  ours, `by other` for a filter another firewall owns. A destination on the local segment is marked
-  `local network` and can be hidden with the checkbox under the heading. An endpoint the event named
-  no address for is left out of the line; an address with no port still shows the port.
-- **The feed's state**, next to that heading: `running, 128 events, last event 42s ago`,
-  `no feed: 0x00000005`, `starting` or `stopped`. It is the answer to "is this list empty because
-  nothing happened or because nothing was delivered?", which an unelevated run can only answer the
-  second way. The age of the newest event answers the harder version of that question over time: a
-  running feed whose newest event is hours old while the machine is in use is a subscription that
-  stopped delivering though it stayed open.
-- **Actions**: Add rule, Apply to WFP, Clear our filters, Export, Import, Restore, Quit.
-  Restore is the file half of an export: a file chooser takes a rules file back in, and the
-  interface asks first, because replacing the list is the one action on the page that can lose
-  rules rather than only fail to add them.
-- **Banner**: what the store reported. A refused store is shown as a banner with its reason rather
-  than as an empty list. Under it, what the rebuild at startup found: a line naming the filters the
-  store held and the filters the rules describe, followed by the rules the file gained, flipped or
-  lost while the tool was closed, shown only when there is a difference to report. An unchanged
-  restart says nothing, and a refused store needs no second notice because the banner above already
-  names it. A third notice appears when `rules.toml` on disk is not the file
-  the tool itself wrote: someone edited it, restored a backup over it, or deleted it, and the rules
-  the page shows are the ones in memory rather than the ones in the file. Saving a rule makes the
-  file ours again and the notice goes away.
+The page is one column, at most about 1100 pixels wide and centred. Reading it top to bottom:
+
+- **Header**, one row: the name on the left, three status chips on the right.
+  - **protection** reads `on` or `paused` and asks the server to put our filters into the store or
+    take them out, which is the pause the [lifecycle chapter](08-lifecycle.md#pausing-protection)
+    describes.
+  - **policy** is `Block unknown` in green under `deny` and `Allow unknown` in yellow under `allow`.
+    It is a chip rather than a word in a settings list because it decides whether an empty rules
+    table is a fresh install or a closed firewall. The sentence that explains the exceptions lives
+    in the chip's tooltip: under `deny`, loopback and the IPv6 base functions stay reachable; under
+    `allow`, programs without a rule go out and only appear in the Detected list.
+  - **learning** says whether new applications are collected.
+- **Read only band**, shown only on a tab that has no session token: *Read only · open the page from
+  the tray icon to make changes*. It is a band rather than a word in the header because a person who
+  cannot click anything needs to see why before the first click, not after it.
+- **Status line**: what the store reported and the address the page is talking to.
+- **Banner**, when there is something the store wants the person to know: a refused store, what the
+  rebuild at startup found, or a `rules.toml` that is not the file the tool itself wrote. Details
+  under [Banners](#banners).
+- **Tabs**: Connections, Rules, Detected, Settings. The Detected tab carries a badge with the number
+  of open entries. The page opens on Detected when that list holds something, and on Connections
+  when it does not: an unanswered question outranks a list of what already happened.
+
+### Connections
+
+The default tab answers *what reached out*. Connections are grouped by program, newest activity on
+top, one row per program:
+
+- the file name in large type, the full path under it in small grey drive form (`C:\...`);
+- how many connections of this run the tool has seen for that program;
+- a badge for the verdict: **blocked** in red, **allowed** in green, or *by rule &lt;name&gt;* when
+  one of our rules decided it;
+- **Allow** and **Deny** on the right, which turn the program into a rule at once.
+
+A row expands to the destinations behind it: address and port, protocol, and the time, in a
+monospace table with aligned columns.
+
+The monitor's own state sits as a small grey line next to the heading:
+`running, 128 events, last event 42s ago`, `no feed: 0x00000005`, `starting` or `stopped`. It is the
+answer to "is this list empty because nothing happened or because nothing was delivered?", which an
+unelevated run can only answer the second way. The age of the newest event answers the harder version
+of that question over time: a running feed whose newest event is hours old while the machine is in use
+is a subscription that stopped delivering though it stayed open.
+
+A **local network** switch at the right of the list hides connections to a private, link-local or
+unique local address. See [Connections worth showing](#connections-worth-showing).
+
+### Rules
+
+A table with fixed column widths: Name, Action, Program, Protocol, Direction, Port, Remote, Comment,
+Order, and the remove button. Action is a badge, Order is a pair of arrows, and a pattern the cap cut
+carries a small warning badge — *pattern has 42 matches, only 32 installed* — so the cut is visible
+where the rule is read rather than only in the log.
+
+A rule is edited in a dialog, not in nine fields that stay on screen: **Add rule** above the table
+appends a rule and opens it, and a click on a row opens that one. The dialog holds name, action,
+program, protocol, direction, port, remote address, comment and the enabled flag. Protocol is a text
+box rather than a list because a rule may name a protocol number such as `47`; the port box takes
+`443` or `1024-2048` and the remote box `10.0.0.5`, `192.168.1.0/24` or a span such as
+`10.0.0.1-10.0.0.9`, both left empty for anything goes. A value the server cannot read bounces back
+as an error and the row is redrawn from what the server has.
+
+An empty table is not an error and says so in a sentence: under `deny` it means every program is
+blocked until it appears in the Detected list.
+
+### Detected
+
+One card per application no rule speaks about yet: the file name in large type with the path under it,
+the destination it reached, how often it was seen, and four buttons. **Allow** and **Deny** are the two
+primary ones and are the widest on the card; **Edit** and **Dismiss** are secondary.
+
+**Edit** opens the application path before the rule is written, which is where a path becomes a
+pattern: widening `C:\Program Files\Mozilla Firefox\firefox.exe` to
+`C:\Program Files\*\firefox.exe` covers the other installs too. **Dismiss** drops the entry without
+deciding, and the tool remembers that it was dismissed, so it does not come back.
+
+An entry for a destination a covered application reached is marked `to <address>` and decides that
+destination alone.
+
+### Settings
+
+The switches come first, each with a line that says what it does: **Default policy**, **Learning**,
+**Protection**, **Theme** (`light -> dark -> auto`, where `auto` follows the operating system) and
+**Log level** (`off` through `trace`). All five take effect in the same request and are written to
+`config.toml`; the theme is not decoration, it survives a reload, so a bright terminal and a dark
+browser stop fighting each other.
+
+**Profile** comes next: the selector switches the live rule file, and `New`, `Rename` and `Delete` sit
+beside it. `New` copies the rules on screen into a new profile and switches to it; `Rename` and
+`Delete` work on the profile the selector holds, and `Delete` asks first because it takes the rules
+file with it. Renaming or deleting the unnamed `default` is refused: it is `rules.toml` itself rather
+than a file in `profiles\`.
+
+**Tools** holds the rest: Export, Import, Restore, Apply to WFP, Clear our filters and Quit. Clear and
+Quit are set apart from the others and ask before they act, because *Clear* takes the filters out of
+the live store and *Quit* ends the process. Restore is the file half of an export: a file chooser takes
+a rules file back in, and the interface asks first, because replacing the list is the one action on the
+page that can lose rules rather than only fail to add them.
+
+**Help** at the end is a collapsed block. It states the two rules worth knowing without opening the
+handbook: a deny always beats an allow whatever the order of the list, and a detected application is
+one no rule speaks about yet.
+
+### Banners
+
+The banner is what the store reported. A refused store is shown with its reason rather than as an
+empty list. Under it, what the rebuild at startup found: a line naming the filters the store held and
+the filters the rules describe, followed by the rules the file gained, flipped or lost while the tool
+was closed, shown only when there is a difference to report. An unchanged restart says nothing, and a
+refused store needs no second notice because the banner above already names it. A third notice appears
+when `rules.toml` on disk is not the file the tool itself wrote: someone edited it, restored a backup
+over it, or deleted it, and the rules the page shows are the ones in memory rather than the ones in the
+file. Saving a rule makes the file ours again and the notice goes away.
 
 ## Connections worth showing
 
@@ -83,7 +152,7 @@ tool's own web server would otherwise crowd the connections a user could act on 
 
 A destination on the local segment does leave the machine, so it is shown rather than dropped, but
 it is marked `local network`: the private ranges, link-local and unique local addresses. The
-checkbox under the heading hides exactly those rows, for someone who only wants the Internet. The
+switch at the head of the list hides exactly those rows, for someone who only wants the Internet. The
 filter is presentation only and is not remembered across reloads.
 
 None of this touches the rules. In particular the loopback permits of the default-deny policy are
@@ -157,6 +226,9 @@ says *open from the tray icon to make changes* rather than letting the first cli
 cannot change anything, and the MCP endpoint is configured with a URL rather than with a session. The
 `Host` check is not exempt, because that is exactly the check a read needs too. What this buys and
 what it does not is the subject of [the security model](10-security-model.md).
+
+The page's own responses carry a `Content-Security-Policy` header that allows nothing but this
+origin, with inline style and script, because both live in the one embedded file.
 
 A request body the server cannot read answers **400 Bad Request**, and only a
 body: a JSON syntax error, a field of the wrong type, a name outside an enum like a theme that is

@@ -123,8 +123,8 @@ the old process to the new one.
 ## Pausing protection
 
 A firewall that is in the way is normally switched off rather than reconfigured, and that is what
-the header switch and `Pause protection` in the tray menu are for. Protection is a flag the worker
-holds, not a setting in `config.toml`: it starts **on**, and a restart enforces again.
+the protection chip in the header and `Pause protection` in the tray menu are for. Protection is a
+flag the worker holds, not a setting in `config.toml`: it starts **on**, and a restart enforces again.
 
 What pauses is our filters, not Windows. The switch lives in the worker that talks to the store, so
 the worker honours it on every piece of work it is given: while protection is paused, a rebuild that

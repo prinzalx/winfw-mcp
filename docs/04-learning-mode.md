@@ -67,16 +67,16 @@ refreshed from the event stream, so what the user is typing in the rules table i
 ## The switch
 
 Collection is controlled by `learn_mode` in `config.toml`. While it is off, nothing new reaches the
-Detected list, but the connection log keeps filling, so the events panel is unaffected. The set of
+Detected list, but the connection log keeps filling, so the connections panel is unaffected. The set of
 seen applications that wildcard rules are expanded against grows either way; see
 [the wildcards](03-rules-and-profiles.md#wildcards). The setting
 is read when the process starts, which means changing it takes a restart; a way to flip it from the
-web page is on the [backlog](../BACKLOG.md). With learning off the Detected table says so instead of
+web page is on the [backlog](../BACKLOG.md). With learning off the Detected list says so instead of
 claiming that nothing is waiting for a decision.
 
 ## What learning mode is not
 
-It is not a log of every connection. The event panel is fed separately; see
+It is not a log of every connection. The connections panel is fed separately; see
 [the web UI](05-web-ui.md) and [the WFP internals](07-wfp-internals.md#the-event-stream). Whether a
 blocked connection that no rule mentions should also be remembered as its own entry is an open
 question, tracked in the [backlog](../BACKLOG.md).

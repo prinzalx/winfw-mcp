@@ -100,12 +100,17 @@ impl Response {
     }
 
     /// The status line plus framing, for the tests and for `write_all`.
+    ///
+    /// The content security policy is part of the framing rather than of one route: the page is
+    /// embedded, so it can only ever come from this server, and a policy that names no origin
+    /// outside is what keeps a future template from quietly pulling in a CDN.
     pub(super) fn header(&self) -> String {
         format!(
-            "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n",
+            "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\ncache-control: no-store\r\ncontent-security-policy: {}\r\nconnection: close\r\n\r\n",
             status_text(self.status),
             self.content_type,
             self.body.len(),
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'",
         )
     }
 }

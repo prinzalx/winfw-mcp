@@ -7,8 +7,9 @@ enabled. Rules live in `rules.toml` in the order they were written, and that ord
 
 ## The first two rules
 
-A rules file that does not exist yet is not created empty. It is created with two example rules, so
-the first screen already shows what a rule looks like instead of an empty table:
+A rules file that does not exist yet is not created empty. It is created with two example rules, so a
+new install does not start from an empty table. The rules are on the Rules tab; the page itself opens
+on the Detected list whenever an application is waiting for a decision there:
 
 ```toml
 [[rule]]

@@ -442,8 +442,8 @@ Roughly by how much they cost to change later:
 4. ~~**A settings write path** (§3.2)~~ — done in 0.13.0 for the two settings that matter at runtime.
    `POST /api/settings` and the MCP tool `settings.set` change `learn_mode` and `default_policy` on a
    running process, write `config.toml`, and rebuild the store. `theme` joined them in 0.32.0. What
-   is left is small: `port` needs a restart because the listener is already bound, and `log_level`
-   is written by the same endpoint but only takes effect on the next run.
+   is left is small: `port` needs a restart because the listener is already bound. `log_level` takes
+   effect at once now, so all four settings the route names are live in the same request.
 5. **The four bugs in §1**, all small.
 6. ~~**Storage hardening**~~ — done in 0.24.0: rule-string validation (an absolute path, no
    characters a path cannot hold), a previous-generation backup with a fallback on load, and a
@@ -453,6 +453,15 @@ Roughly by how much they cost to change later:
    the tray menu (`Open`, `Pause learning`, `Quit`) in 0.21.0 and volatile filter mode
    (`volatile_filters`, taken out on a clean stop) in 0.22.0. Log rotation, which was the last
    open part of it, landed in 0.26.0. Nothing of the item is left.
+8. **The Detected list is short in the answer, not in the data** (§62.1). `/api/state` truncates to
+   the twenty most recently *inserted* entries, so a program that has been connecting since before
+   that is blocked, present in `learn.json` and invisible to the page. Ordering the answer by
+   `seen_ms` is the cheap half; deciding whether the page should paginate the whole list is the part
+   that needs a thought.
+9. **No test loads the page** (§62.2). A script that stopped parsing shipped for twelve releases, and
+   the redesign of 0.64.0 carries the same risk: the suite greps a handful of strings out of
+   `web/index.html`, which passes happily while the markup is broken. A test that parses the file and
+   checks every id the script asks for exists would have caught both.
 
 ## 7. Extension round notes (2026-11-01)
 
@@ -1747,3 +1756,78 @@ The fix is small and belongs with the next test-touching release, not with a doc
 by setting it in the tests that build a `Server` or open the store, and leave the real data directory
 to the running tool. Until then the handbook notes the caveat where it describes the data directory,
 and the `--clear` check is run against the store rather than the directory listing.
+
+## 61. Started by hand: four things the first manual run asked for (2026-11-02)
+
+The tool was started by hand from PowerShell and from Explorer, elevated. Four findings, in the order
+the owner gave them. These are decisions, not open questions.
+
+1. **No parameters should do nothing but say so.** A run without arguments currently applies the rules
+   to the live store and exits, which the owner calls counter-productive: nothing on screen explains
+   the choice, and the release binary has no console (`windows_subsystem = "windows"`), so a double
+   click appears to do nothing at all. Wanted: without parameters, make no change to the store and
+   print the parameters and a minimal start example (`winfw-mcp.exe --serve`). Whether a double click
+   should simply mean `--serve` is a follow-up decision, not assumed here.
+2. **An unelevated start should ask, not limp.** Reading and writing the WFP store needs elevation;
+   today an unelevated start runs and logs `0x00000005` access-denied warnings. Wanted: on an
+   unelevated start, ask whether to relaunch elevated with the same parameters, and say in one or two
+   lines what is lost by staying unelevated (the store cannot be read or written, so rules are not
+   installed and the page shows a store it cannot confirm).
+3. **`Quit` should mean as if nothing had been done.** `Quit` today leaves the persistent filters in
+   place (see §2 item 6, and the note behind B1 in §1). Wanted: a `Quit` that also deactivates the
+   rules it installed, block and allow alike. The existing `shutdown` behaviour stays reachable, so a
+   user who wants the protection to outlive the process keeps that option.
+4. **No button in the web page did anything (biggest finding).** Import and Export at the top, `Quit`
+   and `Add rule` at the bottom all failed to act. Two suspicions, neither proven yet:
+   - the page was opened without a session token, because no tray was running to open `#token=` for
+     it (that start path is exactly what findings 1 and 2 are about), and a page without a token may
+     read but must not write since 0.58.0 (§53). If so, the refusal was correct but the page gave no
+     usable hint, which is itself the bug;
+   - the page's script is broken again. The same failure shipped for twelve releases until 0.58.0,
+     where a stray `const text =` line above a `var text = ""` stopped the whole script from parsing,
+     and no test loads the page. A dead script also explains top and bottom buttons failing at once.
+
+   The cheapest first check is the browser console, then a request to see whether a write reaches the
+   server at all.
+
+Live note from the same session: the one-shot run at 17:46 left 17 filters in the live store while no
+process was running, and `curl https://example.com` returned nothing (exit 7). A firewall whose rules
+outlive the process needs a visible way back, which is finding 3.
+
+## 62. Two findings the page redesign produced (2026-11-02)
+
+The redesign brief asked for two observations to be reported rather than fixed. Both are now
+explained; neither was changed by the redesign.
+
+1. **A blocked program can be missing from the Detected list.** `/api/state` answers at most
+   `STATE_DETECTED` entries, which is 20 (`src/server/mod.rs`, truncated in
+   `src/server/routes.rs`). A new entry is inserted at the front, but an entry that is only refreshed
+   keeps its place: `Detector::observe` updates `seen_ms`, `hits` and `allowed` and returns without
+   moving the entry. A program that has been connecting since before the twenty entries newer than it
+   arrived is therefore present in `learn.json` and invisible to the page, which is how Waterfox came
+   to be blocked and undetected at the same time. The data is right and the answer is short. For the
+   extension plan: answer the newest twenty by `seen_ms` rather than by insertion order — cheap, and
+   it also makes the list mean *what needs a decision lately* — or answer the whole list and let the
+   page paginate, which is honest but grows the body on a busy machine.
+
+2. **The empty rules table was a dead script, not missing data.** At the time of the report
+   `/api/state` answered `rules=2` (the two example rules), and the page assigns `state.rules.rule`
+   and calls `renderRules()` on every state update, so the rules reached the browser. "No button works
+   and the table is empty" is the signature of a script that never ran, which is the failure §61 item
+   4 describes and the same class of bug that shipped for twelve releases until 0.58.0. The redesign
+   moves the table onto the Rules tab, so a person looking for it has to open that tab; the page opens
+   on Detected when an entry is waiting and on Connections otherwise.
+
+*Not verified, and worth knowing:* this session has no way to look at a rendered page. Edge's
+`--dump-dom` writes nothing to stdout on Windows, the headless screenshot is written asynchronously so
+the file only appears a moment after the process returns, and the model in this session cannot view
+images. The four files in `docs/screenshots/` are therefore recorded as artifacts and the visual check
+is the owner's. What was checked instead is structure: the page parses as HTML with no mismatched or
+unclosed tag, every one of the 48 element ids the script asks for exists in the markup, the four tab
+panels are reached through `data-tab`, and `state.token` is gone from the file.
+
+The page is 64 KB where the brief asked for under 60 KB; the owner accepted the overage.
+
+Found on the way and not changed: the comment above the theme test in `src/server/settings.rs` still
+says `log_level` "waits for" a restart, while `state.set_log_level` and the `tracing_subscriber::reload`
+handle in `src/main.rs` have applied a new level to the running process since the reload layer landed.

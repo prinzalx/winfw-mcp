@@ -73,14 +73,21 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.63.0**: a click on the tray icon does what it says. The shell reports the
-icon event in the low word of the callback and the icon id in the high word, but the window
-procedure read only the high word, so a click matched the icon id against a mouse message and did
-nothing; both words are read now, the icon declares version 4 so the shell sends `NIN_SELECT` and
-`WM_CONTEXTMENU` at all, and a tooltip names the address beside the tool. Before it, **0.62.0** made
-one application one Detected entry, comparing paths without regard to case, so `C:\Test\Tool.exe`
-and `c:\test\tool.exe` collect into one entry, one dismiss and one decision. Before that,
-**0.61.0** made the tool start as a
+The current release is **0.64.0**: the page reads like an operating manual. Presentation only — no
+route, field, status code or behaviour moved. One row of header with three chips (protection, policy,
+learning) replaced the header sentence, the four areas became tabs, and the page opens on Detected
+whenever an entry is waiting there. Connections are grouped by program with the verdict and Allow/Deny
+per program, the rules table is edited in a dialog, the Detected cards put Allow and Deny first, and
+Settings hold the switches plus a Tools group where Clear and Quit ask first. The policy chip says
+*Block unknown* in green under `deny` and *Allow unknown* in yellow under `allow`, with the loopback and
+IPv6 exceptions in its tooltip, and responses carry a `Content-Security-Policy` of `default-src 'self'`.
+Before it, **0.63.0** made a click on the tray icon do what it says: the shell reports the icon event in
+the low word of the callback and the icon id in the high word, but the window procedure read only the
+high word, so a click matched the icon id against a mouse message and did nothing; both words are read
+now, the icon declares version 4 so the shell sends `NIN_SELECT` and `WM_CONTEXTMENU` at all, and a
+tooltip names the address beside the tool. Before that, **0.62.0** made one application one Detected
+entry, comparing paths without regard to case, so `C:\Test\Tool.exe` and `c:\test\tool.exe` collect
+into one entry, one dismiss and one decision. Before that, **0.61.0** made the tool start as a
 firewall: `default_policy` defaults to `deny`, so an application no ALLOW rule mentions cannot
 connect, outbound or inbound, and the policy is stated in the page header instead of hiding in the
 settings. Before that, **0.60.0** made a wildcard pattern that exceeds the cap of 32 say so in the

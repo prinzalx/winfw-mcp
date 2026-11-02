@@ -5,15 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>winfw-mcp</title>
     <style>
+      /* Design tokens. Everything the page paints comes from here, so a colour scheme is a list of
+         values rather than a hunt through the rules. */
       :root {
         --bg: #ffffff;
         --fg: #1b1f24;
         --muted: #5b6570;
         --line: #d7dee6;
+        --field: #f6f8fa;
         --accent: #0b62d0;
-        --deny: #a11111;
-        --banner: #fff4e5;
-        --banner-line: #e2b877;
+        --ok: #1b7a3d;
+        --warn: #8a6100;
+        --bad: #a11111;
+        --band: #fff4e5;
+        --band-line: #e2b877;
+
+        --sp-1: 0.25rem;
+        --sp-2: 0.5rem;
+        --sp-3: 0.75rem;
+        --sp-4: 1rem;
+        --sp-5: 1.5rem;
+        --radius: 6px;
       }
 
       /* The dark values appear twice on purpose: once for an operating system that asks for dark
@@ -26,10 +38,13 @@
           --fg: #e6eaef;
           --muted: #9aa4af;
           --line: #2c3238;
+          --field: #1a1e22;
           --accent: #6ab0ff;
-          --deny: #ff6b6b;
-          --banner: #2a2115;
-          --banner-line: #6b5326;
+          --ok: #4ec97e;
+          --warn: #e0b455;
+          --bad: #ff6b6b;
+          --band: #2a2115;
+          --band-line: #6b5326;
         }
       }
 
@@ -38,101 +53,250 @@
         --fg: #e6eaef;
         --muted: #9aa4af;
         --line: #2c3238;
+        --field: #1a1e22;
         --accent: #6ab0ff;
-        --deny: #ff6b6b;
-        --banner: #2a2115;
-        --banner-line: #6b5326;
+        --ok: #4ec97e;
+        --warn: #e0b455;
+        --bad: #ff6b6b;
+        --band: #2a2115;
+        --band-line: #6b5326;
+      }
+
+      * {
+        box-sizing: border-box;
       }
 
       body {
         background: var(--bg);
         color: var(--fg);
         font: 15px/1.45 system-ui, "Segoe UI", sans-serif;
-        margin: 0 auto;
-        max-width: 60rem;
-        padding: 1.5rem 1rem 3rem;
+        margin: 0;
+        padding: var(--sp-4);
       }
 
-      header {
-        align-items: baseline;
+      .wrap {
+        margin: 0 auto;
+        max-width: 1100px;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      /* 1. Header: one row, the name on the left, the state of the machine on the right. */
+      .topbar {
+        align-items: center;
         display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-3);
         justify-content: space-between;
       }
 
       h1 {
-        font-size: 1.35rem;
-        margin: 0 0 0.25rem;
+        font-size: 1.2rem;
+        letter-spacing: 0.01em;
+        margin: 0;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-2);
+      }
+
+      .chip {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 0.8rem;
+        padding: 0.15rem 0.6rem;
+        white-space: nowrap;
+      }
+
+      .chip.ok {
+        border-color: var(--ok);
+        color: var(--ok);
+      }
+
+      .chip.bad {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+
+      .chip.warn {
+        border-color: var(--warn);
+        color: var(--warn);
+      }
+
+      .chip.off {
+        color: var(--muted);
+      }
+
+      /* The read-only hint is a band across the page rather than a clause at the end of a line: a
+         tab that cannot write has to say so before the first click, not after it. */
+      .band {
+        background: var(--band);
+        border: 1px solid var(--band-line);
+        border-radius: var(--radius);
+        font-size: 0.9rem;
+        margin: var(--sp-3) 0;
+        padding: var(--sp-2) var(--sp-3);
+      }
+
+      .banner {
+        background: var(--band);
+        border: 1px solid var(--band-line);
+        border-radius: var(--radius);
+        margin: var(--sp-3) 0 0;
+        padding: var(--sp-2) var(--sp-3);
+      }
+
+      .banner p {
+        margin: var(--sp-1) 0;
+      }
+
+      .statusline {
+        align-items: baseline;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-3);
+        justify-content: space-between;
+        margin-top: var(--sp-3);
+        min-height: 1.2rem;
+      }
+
+      .status {
+        color: var(--accent);
+        font-size: 0.85rem;
       }
 
       .sub {
         color: var(--muted);
-        font-size: 0.85rem;
+        font-size: 0.82rem;
       }
 
-      /* Two of the header values are settings, so they invite a click. */
-      .sub .toggle {
-        cursor: pointer;
-        text-decoration: underline dotted;
-      }
-
-      .banner {
-        background: var(--banner);
-        border: 1px solid var(--banner-line);
-        border-radius: 6px;
-        margin: 1rem 0;
-        padding: 0.6rem 0.8rem;
-      }
-
-      .banner code {
-        font-size: 0.8rem;
-      }
-
-      table {
-        border-collapse: collapse;
-        margin-top: 0.75rem;
-        width: 100%;
-      }
-
-      th,
-      td {
+      /* 2. Tabs. */
+      .tabs {
         border-bottom: 1px solid var(--line);
-        padding: 0.35rem 0.4rem;
-        text-align: left;
+        display: flex;
+        gap: var(--sp-1);
+        margin-top: var(--sp-4);
       }
 
-      th {
+      .tab {
+        background: transparent;
+        border: 1px solid transparent;
+        border-bottom: none;
+        border-radius: var(--radius) var(--radius) 0 0;
+        color: var(--muted);
+        cursor: pointer;
+        font: inherit;
+        padding: var(--sp-2) var(--sp-3);
+        position: relative;
+        top: 1px;
+      }
+
+      .tab.active {
+        border-color: var(--line);
+        color: var(--fg);
+        font-weight: 600;
+      }
+
+      .badge {
+        background: var(--field);
+        border: 1px solid var(--line);
+        border-radius: 999px;
         color: var(--muted);
         font-size: 0.75rem;
-        font-weight: 600;
-        letter-spacing: 0.04em;
+        padding: 0 0.4rem;
+      }
+
+      .panel {
+        padding-top: var(--sp-3);
+      }
+
+      .panel h2 {
+        font-size: 1rem;
+        margin: 0;
+      }
+
+      .panel h3 {
+        color: var(--muted);
+        font-size: 0.78rem;
+        letter-spacing: 0.05em;
+        margin: var(--sp-5) 0 var(--sp-2);
         text-transform: uppercase;
       }
 
-      td.pattern {
-        font-family: ui-monospace, Consolas, monospace;
-        font-size: 0.85rem;
-        word-break: break-all;
+      .panel-head {
+        align-items: baseline;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-3);
+        justify-content: space-between;
       }
 
-      /* A note under an input, such as the warning about a truncated wildcard pattern. */
-      td .sub {
-        margin: 0.2rem 0 0;
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-2);
+      }
+
+      .actions + .actions {
+        margin-top: var(--sp-2);
+      }
+
+      button {
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.85rem;
+        padding: 0.3rem 0.7rem;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      button:disabled {
+        color: var(--muted);
+        cursor: default;
+        opacity: 0.55;
+      }
+
+      button.primary.ok {
+        border-color: var(--ok);
+        color: var(--ok);
+      }
+
+      button.primary.bad {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+
+      button.ghost {
+        border-color: transparent;
+        color: var(--muted);
+      }
+
+      button.danger {
+        border-color: var(--bad);
+        color: var(--bad);
       }
 
       input[type="text"],
       select {
-        background: transparent;
-        border: 1px solid transparent;
-        border-radius: 4px;
+        background: var(--field);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
         color: inherit;
         font: inherit;
-        padding: 0.2rem 0.3rem;
+        font-size: 0.9rem;
+        padding: 0.3rem 0.4rem;
         width: 100%;
-      }
-
-      input[type="text"]:hover,
-      select:hover {
-        border-color: var(--line);
       }
 
       input[type="text"]:focus,
@@ -141,199 +305,467 @@
         outline: none;
       }
 
-      button {
-        background: transparent;
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        color: inherit;
-        cursor: pointer;
-        font: inherit;
-        padding: 0.25rem 0.6rem;
-      }
-
-      button:hover {
-        border-color: var(--accent);
-        color: var(--accent);
-      }
-
-      .actions {
-        display: flex;
-        gap: 0.5rem;
-        margin-top: 1rem;
-      }
-
-      .status {
-        color: var(--muted);
-        font-size: 0.85rem;
-        min-height: 1.2rem;
-      }
-
-      .deny {
-        color: var(--deny);
-      }
-
       .empty {
         color: var(--muted);
-        padding: 1rem 0;
+        list-style: none;
+        padding: var(--sp-5) 0;
+        text-align: center;
       }
 
-      ul.events {
+      /* 3. Connections: one card per program, its targets in a monospace table below. */
+      ul.cards {
         list-style: none;
-        margin: 0;
-        max-height: 16rem;
-        overflow-y: auto;
+        margin: var(--sp-3) 0 0;
         padding: 0;
       }
 
-      ul.events li {
+      ul.cards > li {
         border-bottom: 1px solid var(--line);
-        display: flex;
-        font-size: 0.85rem;
-        gap: 0.75rem;
-        justify-content: space-between;
-        padding: 0.25rem 0;
+        padding: var(--sp-3) 0;
       }
 
-      ul.events li .app {
-        font-family: ui-monospace, Consolas, monospace;
+      .rowline {
+        align-items: flex-start;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-3);
+      }
+
+      .who {
+        flex: 1 1 16rem;
+        min-width: 0;
+      }
+
+      .who .name {
+        display: block;
+        font-size: 1rem;
+        font-weight: 600;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
 
-      ul.events li .meta {
+      .who .path {
         color: var(--muted);
-        text-align: right;
+        display: block;
+        font-size: 0.75rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
-      ul.events li.blocked .meta {
-        color: var(--deny);
-      }
-
-      /* A destination on the local segment is marked with this class, and the filter next to the
-         heading hides exactly those rows. Hiding them by class rather than by the `hidden`
-         attribute is deliberate: the rule above sets `display: flex`, and an author rule beats the
-         user agent's `[hidden]`, so the attribute alone would not hide anything. */
-      ul.events.hide-lan li.lan {
-        display: none;
-      }
-
-      .lan-filter {
+      .count {
         color: var(--muted);
+        font-size: 0.82rem;
+        white-space: nowrap;
+      }
+
+      .ops {
+        display: flex;
+        gap: var(--sp-1);
+        margin-left: auto;
+      }
+
+      table.targets {
+        border-collapse: collapse;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 0.78rem;
+        margin-top: var(--sp-2);
+        width: 100%;
+      }
+
+      table.targets th {
+        color: var(--muted);
+        font-weight: 500;
+        text-align: left;
+      }
+
+      table.targets th,
+      table.targets td {
+        padding: 0.1rem 0.6rem 0.1rem 0;
+        white-space: nowrap;
+      }
+
+      .caret {
+        border-color: transparent;
+        color: var(--muted);
+        padding: 0 var(--sp-1);
+      }
+
+      /* 4. Rules: fixed columns, so a row reads at the same place every time. */
+      table.rules {
+        border-collapse: collapse;
+        margin-top: var(--sp-3);
+        table-layout: fixed;
+        width: 100%;
+      }
+
+      table.rules th {
+        color: var(--muted);
+        font-size: 0.72rem;
+        letter-spacing: 0.04em;
+        text-align: left;
+        text-transform: uppercase;
+      }
+
+      table.rules td,
+      table.rules th {
+        border-bottom: 1px solid var(--line);
         font-size: 0.85rem;
+        overflow: hidden;
+        padding: var(--sp-2);
+        text-overflow: ellipsis;
+        vertical-align: top;
       }
 
-      /* A header switch is a span rather than a button, so it has no disabled state of its own.
-         Without the pointer events a tab that may not write cannot click its way past the hint. */
-      .toggle[aria-disabled="true"] {
+      table.rules td.mono {
+        font-family: ui-monospace, Consolas, monospace;
+      }
+
+      /* The truncation badge sits under the pattern, so it gets its own line rather than eating
+         into the ellipsis the path is already fighting for. */
+      table.rules td.mono .tag {
+        display: inline-block;
+        margin-top: 0.2rem;
+      }
+
+      .tag {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 0.75rem;
+        padding: 0 0.45rem;
+        white-space: nowrap;
+      }
+
+      .tag.allow {
+        border-color: var(--ok);
+        color: var(--ok);
+      }
+
+      .tag.deny {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+
+      .tag.cut {
+        border-color: var(--warn);
+        color: var(--warn);
+      }
+
+      /* 5. Settings: one row per value, the explanation next to it rather than under the page. */
+      .rows {
+        margin-top: var(--sp-3);
+      }
+
+      .setting {
+        align-items: baseline;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-3);
+        padding: var(--sp-3) 0;
+      }
+
+      .setting .label {
+        flex: 0 0 10rem;
+        font-weight: 600;
+      }
+
+      /* A switch is a span rather than a button, so it has no disabled state of its own; see the
+         aria-disabled rule. Keeping it a span is what lets the word itself be the control. */
+      .switch {
+        border-bottom: 1px dotted var(--muted);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .switch[aria-disabled="true"] {
+        cursor: default;
         opacity: 0.5;
         pointer-events: none;
+      }
+
+      details.help {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        margin-top: var(--sp-5);
+        padding: var(--sp-2) var(--sp-3);
+      }
+
+      details.help summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      dialog {
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        color: inherit;
+        padding: var(--sp-4);
+        width: min(30rem, 90vw);
+      }
+
+      dialog::backdrop {
+        background: rgba(0, 0, 0, 0.45);
+      }
+
+      dialog h2 {
+        font-size: 1rem;
+        margin: 0 0 var(--sp-3);
+      }
+
+      dialog .field {
+        align-items: center;
+        display: flex;
+        gap: var(--sp-3);
+        margin-bottom: var(--sp-2);
+      }
+
+      dialog .field span {
+        color: var(--muted);
+        flex: 0 0 6.5rem;
+        font-size: 0.82rem;
+      }
+
+      dialog .actions {
+        justify-content: flex-end;
+        margin-top: var(--sp-4);
+      }
+
+      @media (max-width: 700px) {
+        table.rules td:nth-child(4),
+        table.rules th:nth-child(4),
+        table.rules td:nth-child(7),
+        table.rules th:nth-child(7) {
+          display: none;
+        }
+
+        .ops {
+          margin-left: 0;
+        }
       }
     </style>
   </head>
   <body>
-    <header>
-      <div>
+    <div class="wrap">
+      <header class="topbar">
         <h1>winfw-mcp</h1>
-        <div class="sub">
-          <span id="addr">localhost</span> &middot; protection
-          <span id="protection" class="toggle" title="click to pause or resume the firewall">on</span>
-          &middot; learning mode
-          <span id="learn-mode" class="toggle" title="click to toggle learning mode">off</span>
-          &middot; default
-          <span id="default-policy" class="toggle" title="click to toggle the default policy">allow</span>
-          &middot; theme
-          <span id="theme" class="toggle" title="click to cycle light, dark and auto">dark</span>
-          &middot;
+        <div class="chips">
           <span
-            id="read-only"
-            title="this tab has no session token, so it reads but does not write"
-            hidden
-          >read only &middot; open from the tray icon to make changes</span>
+            class="chip"
+            id="chip-protection"
+            title="whether our filters are in the firewall store right now"
+            >protection</span
+          >
+          <span
+            class="chip"
+            id="chip-policy"
+            title="the default policy"
+            >policy</span
+          >
+          <span class="chip" id="chip-learning" title="whether new applications are collected">learning</span>
         </div>
-        <div class="sub" id="policy-note"></div>
+      </header>
+
+      <div
+        class="band"
+        id="read-only"
+        title="this tab has no session token, so it reads but does not write"
+        hidden
+      >
+        Read only &middot; open the page from the tray icon to make changes
       </div>
-      <div class="status" id="status"></div>
-    </header>
 
-    <div id="banner"></div>
+      <div id="banner"></div>
 
-    <div class="actions">
-      <span class="sub">Profile</span>
-      <select id="profile" title="Named rule set"></select>
-      <button id="profile-new" title="Copy the live rules into a new profile and switch to it">New</button>
-      <button id="profile-rename" title="Give the live profile another name">Rename</button>
-      <button id="profile-delete" title="Remove the live profile and fall back to rules.toml">Delete</button>
+      <div class="statusline">
+        <span class="status" id="status"></span>
+        <span class="sub" id="addr"></span>
+      </div>
+
+      <nav class="tabs">
+        <button class="tab active" data-tab="connections" type="button">Connections</button>
+        <button class="tab" data-tab="rules" type="button">Rules</button>
+        <button class="tab" data-tab="detected" type="button">
+          Detected <span class="badge" id="detected-count" hidden>0</span>
+        </button>
+        <button class="tab" data-tab="settings" type="button">Settings</button>
+      </nav>
+
+      <section class="panel" id="tab-connections">
+        <div class="panel-head">
+          <h2>Connections <span class="sub" id="monitor"></span></h2>
+          <label
+            class="sub"
+            title="connections to a private, link-local or unique local address; the machine does leave home for these, so they are shown rather than dropped"
+          >
+            <input type="checkbox" id="hide-lan" />
+            local network
+          </label>
+        </div>
+        <ul class="cards" id="events"></ul>
+      </section>
+
+      <section class="panel" id="tab-rules" hidden>
+        <div class="panel-head">
+          <h2>Rules</h2>
+          <div class="actions">
+            <button id="add" title="Append a rule and edit it">Add rule</button>
+          </div>
+        </div>
+        <table class="rules">
+          <colgroup>
+            <col style="width: 9rem" />
+            <col style="width: 4.5rem" />
+            <col />
+            <col style="width: 5rem" />
+            <col style="width: 5rem" />
+            <col style="width: 4.5rem" />
+            <col style="width: 7rem" />
+            <col style="width: 8rem" />
+            <col style="width: 4rem" />
+            <col style="width: 8rem" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Action</th>
+              <th>Program</th>
+              <th>Protocol</th>
+              <th>Direction</th>
+              <th>Port</th>
+              <th>Remote</th>
+              <th>Comment</th>
+              <th>Order</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="rules"></tbody>
+        </table>
+        <p class="sub" id="share"></p>
+      </section>
+
+      <section class="panel" id="tab-detected" hidden>
+        <div class="panel-head">
+          <h2>Detected</h2>
+          <span class="sub">Applications no rule speaks about yet.</span>
+        </div>
+        <ul class="cards" id="detected"></ul>
+      </section>
+
+      <section class="panel" id="tab-settings" hidden>
+        <h2>Settings</h2>
+        <div class="rows">
+          <div class="setting">
+            <span class="label">Default policy</span>
+            <span class="switch" id="default-policy" title="click to toggle the default policy">deny</span>
+            <span class="sub" id="policy-note"></span>
+          </div>
+          <div class="setting">
+            <span class="label">Learning</span>
+            <span class="switch" id="learn-mode" title="click to toggle learning mode">off</span>
+            <span class="sub">Collect new applications in the Detected list.</span>
+          </div>
+          <div class="setting">
+            <span class="label">Protection</span>
+            <span class="switch" id="protection" title="click to pause or resume the firewall">on</span>
+            <span class="sub">Paused takes our filters out of the store.</span>
+          </div>
+          <div class="setting">
+            <span class="label">Theme</span>
+            <span class="switch" id="theme" title="click to cycle light, dark and auto">auto</span>
+          </div>
+          <div class="setting">
+            <span class="label">Log level</span>
+            <span class="switch" id="log-level" title="click to cycle the verbosity of the log">info</span>
+            <span class="sub">Takes effect at once and is written to config.toml.</span>
+          </div>
+        </div>
+
+        <h3>Profile</h3>
+        <div class="actions">
+          <select id="profile" title="Named rule set" style="width: 14rem"></select>
+          <button id="profile-new" title="Copy the live rules into a new profile and switch to it">New</button>
+          <button id="profile-rename" title="Give the live profile another name">Rename</button>
+          <button id="profile-delete" title="Remove the live profile and fall back to rules.toml">Delete</button>
+        </div>
+
+        <h3>Tools</h3>
+        <div class="actions">
+          <button id="export" title="Write a backup copy of the settings and rules">Export</button>
+          <button id="import" title="Add one rule from a share string">Import</button>
+          <button id="restore" title="Replace the rules with an exported file">Restore</button>
+          <input type="file" id="restore-file" accept=".toml,text/plain" hidden />
+        </div>
+        <div class="actions">
+          <button id="apply" title="Write rules.toml and rebuild the filters">Apply to WFP</button>
+          <button id="clear" title="Take our filters out of the store">Clear our filters</button>
+        </div>
+        <div class="actions">
+          <button id="quit" class="danger" title="Stop this tool; the rules stay in the firewall">Quit</button>
+        </div>
+
+        <details class="help">
+          <summary>Help</summary>
+          <p class="sub">
+            A deny always beats an allow, whatever the order of the list. Patterns accept the
+            wildcards <code>*</code> and <code>?</code>. A rule can be narrowed to one protocol
+            (<code>tcp</code>, <code>udp</code>, or a number such as <code>47</code>), one
+            direction, one port or port range such as <code>1024-2048</code>, one remote address or
+            network such as <code>192.168.1.0/24</code>, or a span of addresses such as
+            <code>10.0.0.1-10.0.0.9</code>; a rule that names none of them is about all of them.
+            Every change is written to <code>rules.toml</code> and pushed to the store immediately.
+            A detected application is one no rule speaks about yet; widen its path into a pattern
+            such as <code>C:\\Program Files\\*\\app.exe</code> before you allow or deny it, if you want
+            to cover more than that one file.
+          </p>
+        </details>
+      </section>
     </div>
 
-    <h2>Rules</h2>
-    <table>
-      <thead>
-        <tr>
-          <th style="width: 2rem"></th>
-          <th style="width: 12rem">Name</th>
-          <th style="width: 7rem">Action</th>
-          <th>Pattern</th>
-          <th style="width: 6rem">Protocol</th>
-          <th style="width: 6rem">Direction</th>
-          <th style="width: 7rem">Port</th>
-          <th style="width: 10rem">Remote</th>
-          <th style="width: 12rem">Comment</th>
-          <th style="width: 7rem">Order</th>
-          <th style="width: 4rem"></th>
-          <th style="width: 5rem"></th>
-        </tr>
-      </thead>
-      <tbody id="rules"></tbody>
-    </table>
+    <dialog id="rule-dialog">
+      <h2>Rule</h2>
+      <div class="field"><span>Name</span><input type="text" id="rule-name" /></div>
+      <div class="field"><span>Action</span><select id="rule-action"></select></div>
+      <div class="field"><span>Program</span><input type="text" id="rule-pattern" spellcheck="false" /></div>
+      <div class="field">
+        <span>Protocol</span><input type="text" id="rule-protocol" placeholder="any" title="tcp, udp, or a protocol number such as 47" />
+      </div>
+      <div class="field"><span>Direction</span><select id="rule-direction"></select></div>
+      <div class="field">
+        <span>Port</span><input type="text" id="rule-port" placeholder="any" title="a port such as 443 or a range such as 1024-2048" />
+      </div>
+      <div class="field">
+        <span>Remote</span>
+        <input
+          type="text"
+          id="rule-remote"
+          placeholder="any"
+          title="a remote address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9"
+        />
+      </div>
+      <div class="field"><span>Comment</span><input type="text" id="rule-comment" placeholder="why" spellcheck="false" /></div>
+      <div class="field">
+        <span>Enabled</span><input type="checkbox" id="rule-enabled" style="width: auto" />
+      </div>
+      <div class="actions">
+        <button id="rule-cancel" type="button">Cancel</button>
+        <button id="rule-save" class="primary ok" type="button">Save</button>
+      </div>
+    </dialog>
 
-    <h2>Detected</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Application</th>
-          <th style="width: 8rem">Seen</th>
-          <th style="width: 12rem"></th>
-        </tr>
-      </thead>
-      <tbody id="detected"></tbody>
-    </table>
-
-    <h2>Recent connections <span class="sub" id="monitor"></span></h2>
-    <label
-      class="lan-filter"
-      title="connections to a private, link-local or unique local address; the machine does leave home for these, so they are shown rather than dropped"
-    >
-      <input type="checkbox" id="hide-lan" />
-      Hide the local network
-    </label>
-    <ul id="events" class="events"></ul>
-
-    <div class="actions">
-      <button id="add">Add rule</button>
-      <button id="apply">Apply to WFP</button>
-      <button id="clear">Clear our filters</button>
-      <button id="export">Export</button>
-      <button id="import">Import</button>
-      <button id="restore">Restore</button>
-      <input type="file" id="restore-file" accept=".toml,text/plain" hidden />
-      <button id="quit" title="Stop this tool; the rules stay in the firewall">Quit</button>
-    </div>
-
-    <p class="sub" id="share"></p>
-
-    <p class="sub">
-      A deny always beats an allow, whatever the order of the list. Patterns accept the wildcards
-      <code>*</code> and <code>?</code>. A rule can be narrowed to one protocol (<code>tcp</code>,
-      <code>udp</code>, or a number such as <code>47</code>), one direction, one port or port range
-      such as <code>1024-2048</code>, one remote address or network such as
-      <code>192.168.1.0/24</code>, or a span of addresses such as <code>10.0.0.1-10.0.0.9</code>;
-      a rule that names none of them is about
-      all of them. Every change is written to <code>rules.toml</code> and
-      pushed to the store immediately. A detected application is one no rule speaks about yet; edit
-      its path into a pattern such as <code>C:\Program Files\*\app.exe</code> before you allow or
-      deny it, if you want to cover more than that one file.
-    </p>
+    <dialog id="detected-dialog">
+      <h2>Application path</h2>
+      <div class="field"><span>Pattern</span><input type="text" id="detected-pattern" spellcheck="false" /></div>
+      <p class="sub">
+        The pattern is what the new rule will match, not what the firewall reported.
+      </p>
+      <div class="actions">
+        <button id="detected-cancel" type="button">Cancel</button>
+        <button id="detected-save" class="primary ok" type="button">Save</button>
+      </div>
+    </dialog>
 
     <script>
       "use strict";
@@ -343,6 +775,8 @@
       // name and pattern, which together identify a rule the way the table shows it.
       let truncations = new Map();
       let detected = [];
+      // The newest events first, so a reload of the state and the stream feed the same list.
+      let events = [];
       let learnMode = false;
       let protection = true;
       // `allow` or `deny`, which the header spells out in a sentence because a firewall whose
@@ -366,7 +800,7 @@
         if (text !== undefined) {
           node.textContent = text;
         }
-        // Covers the buttons the tables and the banner build at render time: a tab without a token
+        // Covers the buttons the lists and the banner build at render time: a tab without a token
         // offers no write at all, `token` included, which is settled before the first render.
         if (tag === "button" && token === "") {
           node.disabled = true;
@@ -378,8 +812,10 @@
       // A dropdown of the choices an optional rule field allows. The empty choice is shown as
       // "any" and sent as null, because the server reads a field it is not told about as absent
       // rather than as the word "any".
-      function select_choices(choices, current, on_change) {
-        const select = element("select");
+      function select_choices(id, choices, current, on_change) {
+        const select = el(id);
+
+        select.replaceChildren();
 
         for (const choice of choices) {
           const option = element("option", null, choice === "" ? "any" : choice);
@@ -388,10 +824,31 @@
           option.selected = (current ?? "") === choice;
           select.appendChild(option);
         }
-        select.addEventListener("change", () => on_change(select.value || null));
+        if (on_change) {
+          select.addEventListener("change", () => on_change(select.value || null));
+        }
 
         return select;
       }
+
+      // Which of the four panels is on screen. Only the tab buttons and the sections carry the
+      // names, so showing one panel is hiding the other three.
+      function showTab(name) {
+        document.querySelectorAll(".tab").forEach((tab) => {
+          tab.classList.toggle("active", tab.dataset.tab === name);
+        });
+        document.querySelectorAll(".panel").forEach((panel) => {
+          panel.hidden = panel.id !== "tab-" + name;
+        });
+      }
+
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.addEventListener("click", () => showTab(tab.dataset.tab));
+      });
+
+      // The panel is only opened once per load: once the user has picked a tab themselves, a
+      // refresh of the state must not pull them back to another one.
+      let startTabSettled = false;
 
       function renderBanner(store) {
         const banner = el("banner");
@@ -420,9 +877,7 @@
             read.push(store.inventory.filters + " filters");
           }
 
-          banner.appendChild(
-            element("p", "sub", "Store readable (" + read.join(", ") + ")."),
-          );
+          banner.appendChild(element("p", "sub", "Store readable (" + read.join(", ") + ")."));
 
           return;
         }
@@ -445,15 +900,13 @@
         );
         if (!elevated) {
           const button = element("button", null, "Relaunch elevated");
+
           button.addEventListener("click", relaunch);
           note.appendChild(button);
         }
         banner.appendChild(note);
       }
 
-      /* What the rebuild at startup found, next to the store's own report. It is only said once per
-         load and only when the two counts differ: a first run had an empty store, and an unchanged
-         restart has nothing to report. */
       /* Which scheme the style sheet should use. Only the two names it knows get the attribute;
          `auto` removes it, which is what leaves the decision to the media query. */
       function renderTheme(theme) {
@@ -464,6 +917,9 @@
         }
       }
 
+      /* What the rebuild at startup found, next to the store's own report. It is only said once per
+         load and only when the two counts differ: a first run had an empty store, and an unchanged
+         restart has nothing to report. */
       function renderStartup(startup) {
         if (!startup || !startup.measured || !startup.differs) {
           return;
@@ -479,6 +935,7 @@
         /* Names as far as the store can tell: a rule that only lost a port looks unchanged here.
            The counts alone could not tell a restarted tool from a reconfigured one. */
         var named = [];
+
         if (startup.added && startup.added.length) {
           named.push("added " + startup.added.join(", "));
         }
@@ -516,6 +973,57 @@
         return rule.name + "\u0000" + rule.pattern;
       }
 
+      // The dialog holds whichever rule the last click named, and a rule appended by "Add rule"
+      // takes its slot the same way.
+      let editingRule = -1;
+
+      function openRuleDialog(index) {
+        const rule = rules[index];
+
+        editingRule = index;
+        el("rule-name").value = rule.name;
+        select_choices("rule-action", ["allow", "deny"], rule.action);
+        el("rule-pattern").value = rule.pattern;
+        el("rule-protocol").value = rule.protocol ?? "";
+        select_choices("rule-direction", ["", "out", "in"], rule.direction);
+        el("rule-port").value = rule.port ?? "";
+        el("rule-remote").value = rule.remote ?? "";
+        el("rule-comment").value = rule.comment ?? "";
+        el("rule-enabled").checked = rule.enabled;
+        el("rule-dialog").showModal();
+      }
+
+      el("rule-cancel").addEventListener("click", () => el("rule-dialog").close());
+
+      el("rule-save").addEventListener("click", () => {
+        const rule = rules[editingRule];
+
+        if (!rule) {
+          el("rule-dialog").close();
+          return;
+        }
+
+        rule.name = el("rule-name").value;
+        rule.action = el("rule-action").value;
+        rule.pattern = el("rule-pattern").value;
+
+        // The four narrowing fields are optional on a rule, which the server reads as null, so an
+        // empty choice is sent as absent rather than as the word "any".
+        const protocol = el("rule-protocol").value.trim();
+        const port = el("rule-port").value.trim();
+        const remote = el("rule-remote").value.trim();
+        const comment = el("rule-comment").value.trim();
+
+        rule.protocol = protocol === "" ? null : protocol;
+        rule.direction = el("rule-direction").value || null;
+        rule.port = port === "" ? null : port;
+        rule.remote = remote === "" ? null : remote;
+        rule.comment = comment === "" ? null : comment;
+        rule.enabled = el("rule-enabled").checked;
+        el("rule-dialog").close();
+        save();
+      });
+
       function renderRules() {
         const body = el("rules");
 
@@ -523,16 +1031,14 @@
 
         if (rules.length === 0) {
           const row = element("tr");
+          const cell = element("td", "empty", null);
 
-          row.appendChild(
-            element(
-              "td",
-              "empty",
-              defaultPolicy === "deny"
-                ? "No rules yet. Unknown programs are blocked; allow them from the Detected list."
-                : "No rules yet. Use “Add rule”.",
-            ),
-          );
+          cell.colSpan = 10;
+          cell.textContent =
+            defaultPolicy === "deny"
+              ? "No rules yet. Unknown programs are blocked; allow them from the Detected list."
+              : "No rules yet. Use “Add rule”.";
+          row.appendChild(cell);
           body.appendChild(row);
 
           return;
@@ -541,231 +1047,173 @@
         rules.forEach((rule, index) => {
           const row = element("tr");
 
-          const enabled = element("input");
-          enabled.type = "checkbox";
-          enabled.checked = rule.enabled;
-          enabled.title = rule.enabled ? "enabled" : "disabled";
-          enabled.addEventListener("change", () => {
-            rule.enabled = enabled.checked;
-            save();
-          });
-          row.appendChild(element("td", null)).appendChild(enabled);
+          const name = element("td", null, rule.name);
 
-          const name = element("input");
-          name.type = "text";
-          name.value = rule.name;
-          name.addEventListener("change", () => {
-            rule.name = name.value;
-            save();
-          });
-          row.appendChild(element("td", null)).appendChild(name);
-
-          const action = element("select");
-
-          for (const choice of ["allow", "deny"]) {
-            const option = element("option", null, choice);
-
-            option.value = choice;
-            option.selected = rule.action === choice;
-            action.appendChild(option);
+          if (!rule.enabled) {
+            name.classList.add("sub");
+          } else if (rule.action === "deny") {
+            name.classList.add("deny");
           }
-          action.addEventListener("change", () => {
-            rule.action = action.value;
-            save();
-          });
-          row.appendChild(element("td", null)).appendChild(action);
+          row.appendChild(name);
 
-          const pattern = element("input");
-          pattern.type = "text";
-          pattern.value = rule.pattern;
-          pattern.spellcheck = false;
-          pattern.addEventListener("change", () => {
-            rule.pattern = pattern.value;
-            save();
-          });
-          const patternCell = row.appendChild(element("td", "pattern"));
+          row.appendChild(element("td", null)).appendChild(
+            element("span", "tag " + rule.action, rule.action),
+          );
 
-          patternCell.appendChild(pattern);
+          const program = element("td", "mono", rule.pattern);
 
-          const cut = truncations.get(ruleKey(rule));
+          program.title = rule.pattern;
+          row.appendChild(program);
 
-          if (cut) {
-            patternCell.appendChild(
-              element(
-                "p",
-                "sub",
-                "pattern has " + cut.matches + " matches, only " + cut.installed + " installed",
-              ),
-            );
-          }
-
-          // The four narrowing columns are optional on a rule, which the server reads as null.
-          // An empty choice is therefore sent as null rather than as the word "any".
-          //
-          // Protocol is a text field rather than a choice list because a transport can be named by
-          // number, and a list would have to hold every number a rule could mean.
-          const protocol = element("input");
-          protocol.type = "text";
-          protocol.value = rule.protocol ?? "";
-          protocol.placeholder = "any";
-          protocol.title = "tcp, udp, or a protocol number such as 47";
-          protocol.addEventListener("change", () => {
-            const text = protocol.value.trim();
-            rule.protocol = text === "" ? null : text;
-            save();
-          });
-          row.appendChild(element("td", null)).appendChild(protocol);
-
-          const direction = select_choices(["", "out", "in"], rule.direction, (value) => {
-            rule.direction = value;
-            save();
-          });
-          row.appendChild(element("td", null)).appendChild(direction);
-
-          const port = element("input");
-          port.type = "text";
-          port.value = rule.port ?? "";
-          port.placeholder = "any";
-          port.title = "a port such as 443 or a range such as 1024-2048";
-          port.addEventListener("change", () => {
-            const text = port.value.trim();
-
-            rule.port = text === "" ? null : text;
-            save();
-          });
-          row.appendChild(element("td", null)).appendChild(port);
-
-          const remote = element("input");
-          remote.type = "text";
-          remote.value = rule.remote ?? "";
-          remote.placeholder = "any";
-          remote.title =
-            "a remote address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9";
-          remote.addEventListener("change", () => {
-            const text = remote.value.trim();
-
-            rule.remote = text === "" ? null : text;
-            save();
-          });
-          row.appendChild(element("td", null)).appendChild(remote);
-
-          // The comment decides nothing; it is the sentence the person who wrote the rule leaves
-          // for the person who reads it next. Empty is stored as absent rather than as "".
-          const comment = element("input");
-          comment.type = "text";
-          comment.value = rule.comment ?? "";
-          comment.placeholder = "why";
-          comment.spellcheck = false;
-          comment.title = "why this rule exists";
-          comment.addEventListener("change", () => {
-            const text = comment.value.trim();
-
-            rule.comment = text === "" ? null : text;
-            save();
-          });
-          row.appendChild(element("td", null)).appendChild(comment);
+          row.appendChild(element("td", null, rule.protocol ?? "any"));
+          row.appendChild(element("td", null, rule.direction ?? "any"));
+          row.appendChild(element("td", null, rule.port ?? "any"));
+          row.appendChild(element("td", null, rule.remote ?? "any"));
+          row.appendChild(element("td", null, rule.comment ?? ""));
 
           // Order is not cosmetic: the file's order decides which rule wins, so the table offers
           // a step in each direction and the server does the move on its own list.
-          const order = element("td");
-          const up = element("button", null, "up");
+          const order = element("td", null);
+          const up = element("button", "ghost", "\u2191");
+
           up.disabled = index === 0;
           up.title = "move this rule one step up";
           up.addEventListener("click", () => moveRule(index, index - 1));
-          const down = element("button", null, "down");
+
+          const down = element("button", "ghost", "\u2193");
+
           down.disabled = index === rules.length - 1;
           down.title = "move this rule one step down";
           down.addEventListener("click", () => moveRule(index, index + 1));
           order.appendChild(up);
           order.appendChild(down);
-          row.appendChild(order);
 
-          const remove = element("button", null, "remove");
+          const ops = element("td", null);
+          const edit = element("button", "ghost", "edit");
+
+          edit.title = "name, action, program and the narrowing fields";
+          edit.addEventListener("click", () => openRuleDialog(index));
+
+          // The Base64 form is for copy and paste, so it goes into the line under the table and
+          // into the clipboard, whichever of the two the user reaches for.
+          const share = element("button", "ghost", "share");
+
+          share.addEventListener("click", () => shareRule(index));
+
+          const remove = element("button", "danger", "remove");
+
           remove.addEventListener("click", () => {
             rules.splice(index, 1);
             save();
           });
-          row.appendChild(element("td", null)).appendChild(remove);
+          ops.appendChild(edit);
+          ops.appendChild(share);
+          ops.appendChild(remove);
+          row.appendChild(order);
+          row.appendChild(ops);
 
-          // The Base64 form is for copy and paste, so it goes into the line under the table and
-          // into the clipboard, whichever of the two the user reaches for.
-          const share = element("button", null, "share");
-          share.addEventListener("click", () => shareRule(index));
-          row.appendChild(element("td", null)).appendChild(share);
+          // The cap is worth a word: a pattern that matched more applications than were installed
+          // is a rule that quietly does less than it reads.
+          const cut = truncations.get(ruleKey(rule));
 
-          if (rule.action === "deny") {
-            name.classList.add("deny");
+          if (cut) {
+            program.title =
+              "pattern has " + cut.matches + " matches, only " + cut.installed + " installed";
+            program.appendChild(element("span", "tag cut", cut.matches + "\u2192" + cut.installed));
           }
         });
       }
+
+      let editingDetected = null;
+
+      function openDetectedDialog(entry) {
+        editingDetected = entry;
+        el("detected-pattern").value = entry.display;
+        el("detected-dialog").showModal();
+      }
+
+      el("detected-cancel").addEventListener("click", () => el("detected-dialog").close());
+
+      el("detected-save").addEventListener("click", () => {
+        if (editingDetected) {
+          // The pattern is editable on purpose: widening it to a wildcard before deciding is the
+          // usual wish, and an ordinary rule is created either way.
+          editingDetected.display = el("detected-pattern").value;
+          renderDetected();
+        }
+        el("detected-dialog").close();
+      });
 
       function renderDetected() {
         const body = el("detected");
 
         body.replaceChildren();
 
-        if (detected.length === 0) {
-          const row = element("tr");
+        el("detected-count").textContent = String(detected.length);
+        el("detected-count").hidden = detected.length === 0;
 
-          row.appendChild(
+        if (detected.length === 0) {
+          body.appendChild(
             element(
-              "td",
+              "li",
               "empty",
               learnMode
                 ? "Nothing waiting for a decision."
                 : "Learning mode is off, so nothing new is collected here.",
             ),
           );
-          body.appendChild(row);
 
           return;
         }
 
         detected.forEach((entry) => {
-          const row = element("tr");
+          const row = element("li");
+          const who = element("div", "who");
 
-          // The path is editable on purpose: widening it to a wildcard before deciding is the
-          // usual wish, and an ordinary rule is created either way.
-          const pattern = element("input");
-
-          pattern.type = "text";
-          pattern.value = entry.display;
-          pattern.spellcheck = false;
-          pattern.addEventListener("change", () => {
-            entry.display = pattern.value;
-          });
-          row.appendChild(element("td", "pattern")).appendChild(pattern);
-
-          const when = new Date(entry.seen_ms).toLocaleTimeString();
+          who.appendChild(element("span", "name", fileName(entry.display)));
+          who.appendChild(element("span", "path", entry.display));
+          row.appendChild(who);
 
           // An entry with a destination is about that address rather than about the application,
           // so the address is said first: it is the reason the row exists at all.
-          const meta =
-            (entry.remote ? "to " + entry.remote + " " : "") +
-            entry.hits +
-            " hits " +
-            when +
-            (entry.allowed ? " allowed" : " blocked");
+          const meta = element(
+            "span",
+            "count",
+            (entry.remote ? "to " + entry.remote + " · " : "") +
+              entry.hits +
+              " hits · " +
+              new Date(entry.seen_ms).toLocaleTimeString() +
+              " · " +
+              (entry.allowed ? "allowed" : "blocked"),
+          );
 
-          row.appendChild(element("td", "sub", meta));
+          row.appendChild(meta);
 
-          const buttons = element("td");
+          const ops = element("div", "ops");
 
-          for (const [label, action] of [
-            ["allow", "allow"],
-            ["deny", "deny"],
-            ["dismiss", null],
+          for (const [label, className, action] of [
+            ["Allow", "primary ok", "allow"],
+            ["Deny", "primary bad", "deny"],
+            ["Edit", "ghost", null],
+            ["Dismiss", "ghost", null],
           ]) {
-            const button = element("button", null, label);
+            const button = element("button", className, label);
 
-            if (action === "deny") {
-              button.classList.add("deny");
-            }
-            button.addEventListener("click", () => decide(entry, action));
-            buttons.appendChild(button);
+            button.addEventListener("click", () => {
+              if (action === null) {
+                if (label === "Edit") {
+                  openDetectedDialog(entry);
+                } else {
+                  decide(entry, null);
+                }
+
+                return;
+              }
+              decide(entry, action);
+            });
+            ops.appendChild(button);
           }
-
-          row.appendChild(buttons);
+          row.appendChild(ops);
         });
       }
 
@@ -819,73 +1267,186 @@
         }, 1000);
       }
 
-      function renderEvent(event) {
-        // A connection that stayed on this machine never reaches the feed at all, so everything
-        // here left it. What did not leave the local segment is marked, and hidden while the
-        // filter is on.
-        if (event.local_network && el("hide-lan").checked) {
+      // The last part of a Windows path, which is the name the list shows above the path itself.
+      function fileName(path) {
+        const at = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+
+        return at === -1 ? path : path.slice(at + 1);
+      }
+
+      // An endpoint is shown as address:port. An event that names no address still has a port
+      // worth showing, and an event that names neither has nothing to say about that end.
+      function endpoint(addr, port) {
+        if (addr) {
+          return addr + ":" + port;
+        }
+
+        return port ? "port " + port : "";
+      }
+
+      /* The feed grouped by program. The events arrive newest first, so the first event of a
+         program decides where its card sits: newest activity on top.
+
+         A connection that stayed on this machine never reaches the feed at all, so everything here
+         left it. What did not leave the local segment is marked, and left out while the filter is
+         on. */
+      function renderConnections() {
+        const list = el("events");
+        const hideLan = el("hide-lan").checked;
+        const groups = new Map();
+
+        events.forEach((event) => {
+          if (event.local_network && hideLan) {
+            return;
+          }
+
+          const key = event.app || "(no application)";
+          let group = groups.get(key);
+
+          if (!group) {
+            group = {
+              app: event.app || "",
+              hits: 0,
+              blocked: 0,
+              rule: null,
+              lan: 0,
+              targets: [],
+            };
+            groups.set(key, group);
+          }
+
+          group.hits += 1;
+          if (event.allowed) {
+            group.blocked += 0;
+          } else {
+            group.blocked += 1;
+          }
+          if (event.local_network) {
+            group.lan += 1;
+          }
+          // The last rule named wins: it is the one the newest verdict blamed, which is the
+          // sentence the row has room for.
+          if (event.rule) {
+            group.rule = event.rule;
+          }
+          group.targets.push(event);
+        });
+
+        list.replaceChildren();
+
+        if (groups.size === 0) {
+          list.appendChild(
+            element("li", "empty", "No connection has left this machine since the page opened."),
+          );
+
           return;
         }
 
-        const list = el("events");
-        const row = element("li", event.allowed ? "allowed" : "blocked");
+        groups.forEach((group) => {
+          const row = element("li");
+          const line = element("div", "rowline");
+          const who = element("div", "who");
 
-        if (event.local_network) {
-          row.classList.add("lan");
-        }
+          who.appendChild(
+            element("span", "name", group.app === "" ? "(no application)" : fileName(group.app)),
+          );
+          who.appendChild(element("span", "path", group.app));
 
-        row.appendChild(element("span", "app", event.app || "(no application)"));
-
-        const when = new Date(event.time_ms).toLocaleTimeString();
-
-        // Name the rule the firewall blamed for this verdict. "other" means a filter we did not
-        // install (another firewall) that a later rebuild will not account for.
-        const blame = event.rule
-          ? " by " + event.rule
-          : event.filter_id
-            ? " by other"
-            : "";
-
-        // An endpoint is shown as address:port. An event that names no address still has a port
-        // worth showing, and an event that names neither has nothing to say about that end.
-        const endpoint = (addr, port) => {
-          if (addr) {
-            return addr + ":" + port;
-          }
-
-          return port ? "port " + port : "";
-        };
-
-        // The destination is what tells two connections from one application apart, so it is
-        // shown with the port rather than instead of it.
-        const target = endpoint(event.remote_addr, event.remote_port);
-
-        // The local end says which socket answered, which is how a listener bound to every
-        // interface is told apart from one bound to a single address.
-        const source = endpoint(event.local_addr, event.local_port);
-
-        const where = source === "" ? target : source + " -> " + target;
-
-        row.appendChild(
-          element(
+          const count = element(
             "span",
-            "meta",
-            event.kind +
-              " " +
-              when +
-              " " +
-              where +
-              (event.loopback ? " loopback" : "") +
-              (event.local_network ? " local network" : "") +
-              blame,
-          ),
-        );
+            "count",
+            group.hits + (group.lan > 0 ? " connections · " + group.lan + " local net" : ""),
+          );
 
-        list.prepend(row);
+          // A blocked connection is the one worth colouring: green over red would hide a refusal
+          // behind a permission from the same program.
+          const verdict = element(
+            "span",
+            "tag " + (group.blocked > 0 ? "deny" : "allow"),
+            group.blocked > 0 ? "blocked" : group.rule ? "by rule " + group.rule : "allowed",
+          );
 
-        while (list.children.length > MAX_EVENTS) {
-          list.lastChild.remove();
+          line.appendChild(who);
+          line.appendChild(count);
+          line.appendChild(verdict);
+
+          const ops = element("div", "ops");
+
+          for (const [label, className, action] of [
+            ["Allow", "primary ok", "allow"],
+            ["Deny", "primary bad", "deny"],
+          ]) {
+            const button = element("button", className, label);
+
+            // The connection is the evidence, the program is what a rule names: no remote, so the
+            // rule covers every destination this program asked for.
+            button.addEventListener("click", () =>
+              decide({ app: group.app, display: group.app, remote: null }, action),
+            );
+            ops.appendChild(button);
+          }
+          line.appendChild(ops);
+          row.appendChild(line);
+
+          const targets = element("table", "targets");
+
+          targets.hidden = true;
+          targets.appendChild(
+            element("tbody").appendChild(
+              (() => {
+                const head = element("tr");
+
+                for (const label of ["target", "local", "protocol", "time"]) {
+                  head.appendChild(element("th", null, label));
+                }
+
+                group.targets.forEach((event) => {
+                  const tr = element("tr");
+
+                  // Name the rule the firewall blamed for this verdict. "other" means a filter we
+                  // did not install (another firewall) that a later rebuild will not account for.
+                  const blame = event.rule
+                    ? " by " + event.rule
+                    : event.filter_id
+                      ? " by other"
+                      : "";
+
+                  tr.appendChild(
+                    element("td", null, endpoint(event.remote_addr, event.remote_port)),
+                  );
+                  tr.appendChild(
+                    element("td", null, endpoint(event.local_addr, event.local_port)),
+                  );
+                  tr.appendChild(element("td", null, event.kind + blame));
+                  tr.appendChild(
+                    element("td", null, new Date(event.time_ms).toLocaleTimeString()),
+                  );
+                  targets.querySelector("tbody").appendChild(tr);
+                });
+
+                return head;
+              })(),
+            ),
+          );
+          row.appendChild(targets);
+
+          const caret = element("button", "caret", group.targets.length + " targets");
+
+          caret.addEventListener("click", () => {
+            targets.hidden = !targets.hidden;
+          });
+          ops.appendChild(caret);
+          list.appendChild(row);
+        });
+      }
+
+      function renderEvent(event) {
+        events.unshift(event);
+
+        while (events.length > MAX_EVENTS) {
+          events.pop();
         }
+        renderConnections();
       }
 
       function watchEvents() {
@@ -931,6 +1492,7 @@
           text = "running, " + monitor.events + " events";
           if (monitor.last_event_ms) {
             var quiet = Math.round((Date.now() - monitor.last_event_ms) / 1000);
+
             text += ", last event " + quiet + "s ago";
           } else {
             text += ", no event yet";
@@ -946,6 +1508,29 @@
           monitor.state === "refused"
             ? "the event subscription was refused, so no connection can be listed"
             : "the state of the connection feed";
+      }
+
+      // The three header chips only say what the state already told us; the controls that change
+      // these values live in Settings, where their explanations have room.
+      function renderChips(state) {
+        const protectionChip = el("chip-protection");
+
+        protectionChip.textContent = state.protection ? "protected" : "paused";
+        protectionChip.className = "chip " + (state.protection ? "ok" : "off");
+
+        const policyChip = el("chip-policy");
+
+        policyChip.textContent = state.default_policy === "deny" ? "Block unknown" : "Allow unknown";
+        policyChip.className = "chip " + (state.default_policy === "deny" ? "ok" : "warn");
+        policyChip.title =
+          state.default_policy === "deny"
+            ? "Programs without a rule are blocked. Loopback and the IPv6 base functions stay reachable."
+            : "Programs without a rule may go out; they only appear in the Detected list.";
+
+        const learningChip = el("chip-learning");
+
+        learningChip.textContent = state.learn_mode ? "learning on" : "learning off";
+        learningChip.className = "chip " + (state.learn_mode ? "warn" : "off");
       }
 
       function apply(state) {
@@ -968,7 +1553,9 @@
             ? "Programs without a rule are blocked. Loopback and the IPv6 base functions stay reachable."
             : "Programs without a rule may go out; they only appear in the Detected list.";
         el("theme").textContent = state.theme;
+        el("log-level").textContent = state.log_level;
         renderTheme(state.theme);
+        renderChips(state);
         renderRules();
         renderDetected();
         renderBanner(state.store);
@@ -977,13 +1564,20 @@
 
         // The state carries the newest events first, so the panel needs no second request.
         if (state.events.length > 0) {
-          el("events").replaceChildren();
-          state.events.forEach(renderEvent);
+          events = state.events.slice();
+          renderConnections();
         }
 
         renderMonitor(state.monitor);
 
         watchEvents();
+
+        if (!startTabSettled) {
+          startTabSettled = true;
+          // Applications waiting for a decision are the reason the page was opened most often, so
+          // they win over a quiet Connections panel.
+          showTab(detected.length > 0 ? "detected" : "connections");
+        }
 
         const store = state.store;
 
@@ -1008,7 +1602,7 @@
 
       // Every control on the page that sends a writing request. A tab without a token can read the
       // whole state but may not change it, and saying so before the first click is kinder than
-      // answering 401 after it. The buttons the tables build are handled where they are made.
+      // answering 401 after it. The buttons the lists build are handled where they are made.
       const WRITE_CONTROLS = [
         "add",
         "apply",
@@ -1026,6 +1620,7 @@
         "default-policy",
         "protection",
         "theme",
+        "log-level",
       ];
 
       WRITE_CONTROLS.forEach((id) => {
@@ -1034,7 +1629,7 @@
         if (node.tagName === "BUTTON" || node.tagName === "SELECT") {
           node.disabled = token === "";
         } else {
-          // A header switch is a span, so it has no disabled state; see the aria-disabled rule.
+          // A settings switch is a span, so it has no disabled state; see the aria-disabled rule.
           node.setAttribute("aria-disabled", token === "" ? "true" : "false");
         }
       });
@@ -1106,6 +1701,7 @@
           select.replaceChildren();
           for (const name of ["", ...profiles.names]) {
             const option = document.createElement("option");
+
             option.value = name;
             option.textContent = name === "" ? "default" : name;
             select.appendChild(option);
@@ -1119,6 +1715,7 @@
       async function save() {
         try {
           const state = await request("POST", "/api/rules", { rule: rules, generation: generation });
+
           apply(state);
           if (state.conflict) {
             status("the rule list changed underneath you — save again");
@@ -1130,7 +1727,12 @@
 
       async function moveRule(index, to) {
         try {
-          const state = await request("POST", "/api/rules/move", { index: index, to: to, generation: generation });
+          const state = await request("POST", "/api/rules/move", {
+            index: index,
+            to: to,
+            generation: generation,
+          });
+
           apply(state);
           if (state.conflict) {
             status("the rule list changed underneath you — move again");
@@ -1156,7 +1758,13 @@
 
       el("apply").addEventListener("click", save);
 
+      // Clearing takes the filters out of the store while the rules stay in the file, so it is
+      // worth asking before doing it.
       el("clear").addEventListener("click", async () => {
+        if (!confirm("Take our filters out of the store? The rules stay in rules.toml.")) {
+          return;
+        }
+
         try {
           const store = await request("POST", "/api/clear", {});
 
@@ -1212,7 +1820,11 @@
         try {
           const text = await picked.text();
 
-          const state = await request("POST", "/api/rules/replace", { text: text, generation: generation });
+          const state = await request("POST", "/api/rules/replace", {
+            text: text,
+            generation: generation,
+          });
+
           apply(state);
           if (state.conflict) {
             status("the rule list changed underneath you — restore again");
@@ -1230,6 +1842,10 @@
       // that is no longer there. The filters stay installed; `Clear our filters` is what removes
       // them.
       el("quit").addEventListener("click", async () => {
+        if (!confirm("Stop winfw-mcp? The rules stay in the firewall.")) {
+          return;
+        }
+
         try {
           await request("POST", "/api/shutdown", {});
 
@@ -1239,7 +1855,7 @@
         }
       });
 
-      // Both header values are settings the server changes while it runs, so the shortest route to
+      // Both settings values are things the server changes while it runs, so the shortest route to
       // flipping one is to click the word you want the other one of.
       el("learn-mode").addEventListener("click", async () => {
         try {
@@ -1250,11 +1866,9 @@
         }
       });
 
-      // Toggling the filter only sets a class on the list, so rows that arrived over the event
-      // stream are affected exactly like rows the state carried.
-      el("hide-lan").addEventListener("change", () => {
-        el("events").classList.toggle("hide-lan", el("hide-lan").checked);
-      });
+      // Toggling the filter re-groups the list, so rows that arrived over the event stream are
+      // affected exactly like rows the state carried.
+      el("hide-lan").addEventListener("change", renderConnections);
 
       el("default-policy").addEventListener("click", async () => {
         const next = el("default-policy").textContent === "allow" ? "deny" : "allow";
@@ -1292,6 +1906,21 @@
         }
       });
 
+      // Six levels rather than a text field, because the filter the server parses accepts a
+      // hundred spellings and a typo would only show up in the log itself.
+      el("log-level").addEventListener("click", async () => {
+        const order = ["off", "error", "warn", "info", "debug", "trace"];
+        const at = order.indexOf(el("log-level").textContent);
+        const next = order[(at + 1) % order.length];
+
+        try {
+          apply(await request("POST", "/api/settings", { log_level: next }));
+          status("log level is " + next);
+        } catch (error) {
+          status("could not change the log level: " + error.message);
+        }
+      });
+
       el("profile").addEventListener("change", async () => {
         const name = el("profile").value;
 
@@ -1325,9 +1954,7 @@
 
       el("profile-rename").addEventListener("click", async () => {
         const name = el("profile").value;
-        const next = prompt(
-          "New name for profile '" + (name === "" ? "default" : name) + "':",
-        );
+        const next = prompt("New name for profile '" + (name === "" ? "default" : name) + "':");
 
         if (next === null || next.trim() === "") {
           return;
