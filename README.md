@@ -73,17 +73,18 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.61.0**: the tool now starts as a firewall. `default_policy` defaults to
-`deny`, so an application no ALLOW rule mentions cannot connect, outbound or inbound, and the policy
-is stated in the page header instead of hiding in the settings — *Programs without a rule are
-blocked*. Loopback and the IPv6 base functions stay reachable, and Pause protection remains the
-not-a-firewall switch for anyone who locks themselves out. Before it,
-**0.59.0** ended a second start quietly: no browser, no token exchange, one warning in the log and a
-non-zero status. Before it, **0.58.0** moved the session token out of `/api/state` and into the URL
-fragment the tray opens, so a local process can no longer read the right to write off the state body
-with `curl`. Before those, **0.57.0** made a profile written by the C original readable: `--import
-<file>` takes the XML simplewall exports and replaces the rule file of the active profile with
-them; nothing reaches the live store, so the result is looked at on the page first. **0.56.0**
+The current release is **0.62.0**: one application is one entry. Windows paths are compared without
+regard to case, so `C:\Test\Tool.exe` and `c:\test\tool.exe` collect into a single Detected entry,
+single dismiss and single decision, and a `learn.json` that still holds both spellings is folded
+together on load without losing a hit count. Before it, **0.61.0** made the tool start as a
+firewall: `default_policy` defaults to `deny`, so an application no ALLOW rule mentions cannot
+connect, outbound or inbound, and the policy is stated in the page header instead of hiding in the
+settings. Before that, **0.60.0** made a wildcard pattern that exceeds the cap of 32 say so in the
+log, in `/api/state` and under the pattern box, and **0.59.0** ended a second start quietly: no
+browser, no token exchange, one warning in the log and a non-zero status. Before those,
+**0.58.0** moved the session token out of `/api/state` and into the URL fragment the tray opens, so
+a local process can no longer read the right to write off the state body with `curl`, and
+**0.57.0** made a profile written by the C original readable through `--import <file>`. **0.56.0**
 let a rule name a span of addresses — `remote` took one address or one network, and a network
 cannot cover nine hosts without also covering the fifteen around them, so `10.0.0.1-10.0.0.9` is
 now written, stored, shown and installed as a range condition. Before it, **0.55.0** made the

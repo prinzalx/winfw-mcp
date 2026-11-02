@@ -1660,3 +1660,31 @@ afterwards.
 - Two tests (the default value, the policy line on the page), 238 green, `cargo fmt --check` clean,
   clippy still at its four warning groups. Docs: the config table, the rules chapter, the WFP chapter,
   and a new section in the security model naming what default deny leaves open. (2026-11-02)
+
+## 58. One application, whatever the spelling (2026-11-02)
+
+Point 5 of the five corrections. The identity of a Detected entry, the dismiss, and the seen pool
+all compared application paths byte for byte, which on Windows means a second entry for nothing: the
+firewall reports a device path in lower case, a person types what the shell shows them, and PLAN.md
+section 4 already promised case-insensitive wildcards.
+
+- The comparison ignores case in three places (`same_app`): finding an existing entry in `observe`,
+  finding the path in the seen pool (`note_app`), and the retain in `dismiss`. Rule matching was
+  already case-insensitive, because `wildcard_match` lowercases both sides.
+- **The path handed to WFP was not lowercased, and measured live it does not need to be.** A rule
+  written `C:\WINDOWS\system32\CURL.EXE` allowed the program the firewall reports as
+  `C:\Windows\System32\curl.exe` (HTTP 200 under a deny policy), so `FwpmGetAppIdFromFileName0`
+  resolves a path without regard to case. That is the check the brief asked for before copying the
+  reference's `wfp.c:2176`; the outcome is that the path stays exactly as it was typed.
+- Migration is done on load rather than by rewriting the file: for every profile the entries that
+  differ only in spelling are folded into one, hits are added, the newer timestamp and the newer
+  `allowed` win, and the `app`/`display` are taken from the older entry so the screen keeps the
+  spelling a person has already read. The seen list keeps the newest occurrence, because that is the
+  list a wildcard expansion builds filters from.
+- A live incident belongs here: the deny window for this measurement ran while the user was at the
+  machine, and the rule of thumb going forward is that a live test that installs deny is followed
+  immediately by taking the filters out again. That is not a code change, it is how the tool is
+  driven during development, and it is written into the development chapter.
+- Four tests, 242 green, `cargo fmt --check` clean, clippy unchanged at four warnings. Docs: the
+  learning-mode chapter names the comparison, and the WFP chapter gained the section on the
+  application condition with the measurement in it. (2026-11-02)

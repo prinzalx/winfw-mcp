@@ -23,6 +23,16 @@ const DETECTED_CAP: usize = 100;
 /// against, so it is wider than the Detected list and grows whether or not learning mode is on.
 const SEEN_CAP: usize = 512;
 
+/// Whether two application paths name the same application.
+///
+/// Windows paths are case-insensitive, and the firewall reports a device path in lower case while
+/// a human types what the shell shows them, so `\Device\HarddiskVolume3\Windows\...` and
+/// `\device\harddiskvolume3\windows\...` are the same program. Comparing them exactly would give
+/// one application two Detected entries and let a dismiss miss the other.
+fn same_app(one: &str, other: &str) -> bool {
+    one.eq_ignore_ascii_case(other)
+}
+
 /// One application waiting for a decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Detected {
@@ -75,6 +85,54 @@ struct LearnFile {
     seen: Vec<String>,
 }
 
+/// Fold the entries of one list that name the same application in another spelling together.
+///
+/// The list arrives newest first and stays that way: the merged entry keeps the position of the
+/// newer one, while its `app` and `display` are taken from the older one, because that is the
+/// spelling a human has already read on this screen. Hits are added and the newer timestamp wins,
+/// so folding loses neither traffic nor recency.
+fn merge_entries(entries: &mut Vec<Detected>) {
+    let mut merged: Vec<Detected> = Vec::with_capacity(entries.len());
+
+    for entry in entries.drain(..) {
+        match merged
+            .iter_mut()
+            .find(|kept| same_app(&kept.app, &entry.app) && kept.remote == entry.remote)
+        {
+            Some(existing) => {
+                existing.hits += entry.hits;
+
+                if entry.seen_ms > existing.seen_ms {
+                    existing.seen_ms = entry.seen_ms;
+                    existing.allowed = entry.allowed;
+                } else {
+                    existing.app = entry.app;
+                    existing.display = entry.display;
+                }
+            }
+            None => merged.push(entry),
+        }
+    }
+
+    *entries = merged;
+}
+
+/// Drop the paths of a seen list that repeat an application under another spelling.
+///
+/// The first occurrence is the newest and is the one kept, which is what a wildcard expansion is
+/// built from: one filter per application rather than one per spelling.
+fn merge_seen(seen: &mut Vec<String>) {
+    let mut merged: Vec<String> = Vec::with_capacity(seen.len());
+
+    for path in seen.drain(..) {
+        if !merged.iter().any(|kept| same_app(kept, &path)) {
+            merged.push(path);
+        }
+    }
+
+    *seen = merged;
+}
+
 /// The Detected list, shared between the monitor's callbacks and the request threads.
 #[derive(Debug)]
 pub struct Detector {
@@ -107,6 +165,14 @@ impl Detector {
             file.entry.clear();
         }
         file.profiles.entry(active.to_owned()).or_default();
+
+        // A file written before the comparison ignored case can hold two entries for one
+        // application, and a seen list with both spellings of a path would hand a wildcard rule the
+        // same application twice. Merging on load is the whole migration; nothing is rewritten.
+        for entries in file.profiles.values_mut() {
+            merge_entries(entries);
+        }
+        merge_seen(&mut file.seen);
 
         Ok(Self {
             inner: Mutex::new(file),
@@ -203,7 +269,7 @@ impl Detector {
 
         if let Some(existing) = entries
             .iter_mut()
-            .find(|entry| entry.app == event.app && entry.remote == remote)
+            .find(|entry| same_app(&entry.app, &event.app) && entry.remote == remote)
         {
             existing.seen_ms = event.time_ms;
             existing.hits += 1;
@@ -241,7 +307,7 @@ impl Detector {
 
         let mut list = self.inner.lock().expect("learn lock poisoned");
 
-        if list.seen.iter().any(|known| known == app) {
+        if list.seen.iter().any(|known| same_app(known, app)) {
             return false;
         }
 
@@ -278,7 +344,7 @@ impl Detector {
         let entries = list.profiles.entry(active.clone()).or_default();
         let before = entries.len();
 
-        entries.retain(|entry| entry.app != app || entry.remote.as_deref() != remote);
+        entries.retain(|entry| !same_app(&entry.app, app) || entry.remote.as_deref() != remote);
 
         let removed = entries.len() != before;
 
@@ -728,6 +794,105 @@ mod tests {
         assert_eq!(
             detector.apps(),
             vec!["\\device\\harddiskvolume3\\a.exe".to_owned()],
+        );
+    }
+
+    /// Windows paths are case-insensitive, and the firewall lowercases the device path it reports,
+    /// so the same program can arrive in two spellings. It is one decision, not two.
+    #[test]
+    fn two_spellings_of_one_application_are_one_entry() {
+        let detector = detector("detect-spelling");
+        let rules = RuleFile::default();
+
+        assert!(
+            detector.observe(&event("\\device\\HarddiskVolume3\\A.exe", 10), &rules),
+            "the first spelling is a new entry",
+        );
+        assert!(
+            !detector.observe(&event("\\DEVICE\\harddiskvolume3\\a.exe", 20), &rules),
+            "the second one is the same application, so the file does not change",
+        );
+
+        let list = detector.snapshot();
+
+        assert_eq!(list.len(), 1, "one application is one entry");
+        assert_eq!(list[0].hits, 2, "both connections counted");
+        assert_eq!(list[0].seen_ms, 20, "and the newer one is the timestamp");
+        assert_eq!(
+            list[0].app,
+            "\\device\\HarddiskVolume3\\A.exe".to_owned(),
+            "the entry keeps the spelling it was created with",
+        );
+    }
+
+    /// A dismiss addresses the application, not the bytes someone typed, so it has to reach an
+    /// entry that was collected under another spelling.
+    #[test]
+    fn a_dismiss_reaches_an_entry_collected_under_another_spelling() {
+        let detector = detector("detect-dismiss-spelling");
+        let rules = RuleFile::default();
+
+        detector.observe(&event("\\device\\HarddiskVolume3\\A.exe", 10), &rules);
+        detector.observe(&event("\\device\\harddiskvolume3\\a.exe", 20), &rules);
+
+        assert!(
+            detector
+                .dismiss("\\DEVICE\\HARDDISKVOLUME3\\a.exe", None)
+                .expect("dismiss"),
+            "a third spelling dismisses it too",
+        );
+        assert!(
+            detector.snapshot().is_empty(),
+            "and there was only one entry to dismiss",
+        );
+    }
+
+    /// The seen list is what a wildcard rule expands against. Two spellings of one application
+    /// there would install two filters for one program, so the second spelling is not new.
+    #[test]
+    fn the_seen_pool_does_not_grow_on_another_spelling() {
+        let detector = detector("detect-seen-spelling");
+
+        assert!(
+            detector.note_app("\\device\\HarddiskVolume3\\A.exe"),
+            "the first spelling is new",
+        );
+        assert!(
+            !detector.note_app("\\device\\harddiskvolume3\\a.exe"),
+            "the other spelling of the same path is not",
+        );
+        assert_eq!(detector.apps().len(), 1, "and the pool holds one path");
+    }
+
+    /// A file written while the comparison was exact can hold both spellings of one application,
+    /// in the Detected list as well as in the seen list. Loading folds them together per profile.
+    #[test]
+    fn a_file_holding_both_spellings_is_folded_on_load() {
+        let path = crate::testutil::scratch_dir("detect-fold").join("learn.json");
+
+        std::fs::write(
+            &path,
+            r#"{"profiles":{"":[{"app":"\\device\\HarddiskVolume3\\A.exe","display":"C:\\A.exe","remote":null,"seen_ms":20,"hits":1,"allowed":true},{"app":"\\device\\harddiskvolume3\\a.exe","display":"C:\\a.exe","remote":null,"seen_ms":10,"hits":4,"allowed":false}],"work":[{"app":"\\device\\HarddiskVolume3\\B.exe","display":"C:\\B.exe","remote":"8.8.8.8","seen_ms":5,"hits":1,"allowed":false}]},"seen":["\\device\\HarddiskVolume3\\A.exe","\\device\\harddiskvolume3\\b.exe","\\device\\harddiskvolume3\\a.exe"]}"#,
+        )
+        .expect("write the legacy file");
+
+        let detector = Detector::load(&path, "").expect("load the legacy file");
+        let list = detector.snapshot();
+
+        assert_eq!(list.len(), 1, "the two spellings became one entry");
+        assert_eq!(list[0].hits, 5, "and no connection was lost in the fold");
+        assert_eq!(list[0].seen_ms, 20, "the newer timestamp is kept");
+        assert_eq!(
+            list[0].display, "C:\\a.exe",
+            "the display keeps the spelling that was seen first",
+        );
+        assert_eq!(
+            detector.apps(),
+            vec![
+                "\\device\\HarddiskVolume3\\A.exe".to_owned(),
+                "\\device\\harddiskvolume3\\b.exe".to_owned(),
+            ],
+            "the seen list holds one path per application",
         );
     }
 

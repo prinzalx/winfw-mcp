@@ -30,6 +30,15 @@ the monitor before learning mode is asked about it, so an agent talking to this 
 server does not add entries anyone has to dismiss
 ([WFP internals](07-wfp-internals.md#the-event-stream)).
 
+**The application is compared without regard to case.** Windows paths are case-insensitive, and the
+firewall reports a device path in lower case while a person types what the shell shows them, so
+`C:\Test\Tool.exe` and `c:\test\tool.exe` are one application, one Detected entry and one decision.
+The entry keeps the spelling it was first collected under, which is the one already on the screen,
+and a dismiss reaches it under any spelling. A `learn.json` written before 0.62.0 can hold both
+spellings of one application; loading folds them together, adds the hit counters, and loses nothing.
+The seen list that a wildcard pattern is expanded against is folded the same way, so one
+application becomes one filter rather than one filter per spelling.
+
 ## Deciding
 
 Each row can be allowed, denied or dismissed:

@@ -90,6 +90,19 @@ the same reason, and a v6 span adds a pointer of its own inside each bound.
 > the four shapes rather than an `Option` of each, and why the bounds of a span are held next to the
 > `FWP_RANGE0` that points at them instead of inside it.
 
+## The application condition
+
+A rule about one application is installed as a `FWP_BYTE_BLOB` condition obtained from
+`FwpmGetAppIdFromFileName0`, which resolves a file that exists into the device path WFP matches on.
+A pattern that names no existing file is handed over as it stands, and the match becomes exact.
+
+Measured on a live store: a rule written `C:\WINDOWS\system32\CURL.EXE` allowed a program whose
+path the firewall reports as `C:\Windows\System32\curl.exe`. The resolution does not care about
+case, so the path is stored exactly as it was typed rather than lowercased the way the C original
+does (`wfp.c:2176`). What this tool compares case-insensitively itself is the Detected list and the
+seen pool, where a second spelling would otherwise mean a second entry
+([learning mode](04-learning-mode.md)).
+
 ## The default-deny base
 
 `default_policy = "deny"` in `config.toml` installs thirteen base filters next to the rule filters:
