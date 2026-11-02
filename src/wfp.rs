@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
+use tracing::warn;
 use windows::Win32::Foundation::{FWP_E_ALREADY_EXISTS, HANDLE};
 use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTION_TYPE, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE,
@@ -576,7 +577,23 @@ impl Engine {
     /// the direction of the rule; with no direction both an outbound and an inbound connection are
     /// covered, for both address families. Returns the number of filters installed.
     fn add_rule(&self, rule: &Rule, known: &[String], owners: &mut Owners) -> Result<usize> {
-        let apps = app_ids(&rule.pattern, known);
+        let expansion = app_ids(&rule.pattern, known);
+        let truncated = expansion.truncated();
+        let matches = expansion.matches;
+        let installed = expansion.installed();
+        let apps = expansion.apps;
+
+        if truncated {
+            // A firewall that quietly stops matching is a firewall nobody can reason about, so the
+            // cap is named out loud with the numbers behind it.
+            warn!(
+                rule = %rule.name,
+                pattern = %rule.pattern,
+                matches,
+                installed,
+                "the wildcard pattern matched more applications than the cap allows",
+            );
+        }
 
         let mut provider_key = PROVIDER_KEY;
 
@@ -990,23 +1007,77 @@ impl Engine {
 ///
 /// A pattern is allowed to be broad, but the store is shared and every match costs four filters.
 /// The cap keeps a careless `*` from turning one rule into thousands.
-const MAX_WILDCARD_MATCHES: usize = 32;
+pub(crate) const MAX_WILDCARD_MATCHES: usize = 32;
+
+/// What a pattern resolves to: the applications to install filters for, and how many applications
+/// matched in total.
+///
+/// The two numbers differ only when a wildcard pattern was held down by [`MAX_WILDCARD_MATCHES`],
+/// which is the truncation the user has to be told about.
+struct Expansion {
+    /// The applications to install filters for, at most [`MAX_WILDCARD_MATCHES`] of them.
+    apps: Vec<AppId>,
+    /// How many applications the pattern matched before the cap was applied.
+    matches: usize,
+}
+
+impl Expansion {
+    /// How many applications are installed. For an exact pattern this is the pattern itself.
+    pub(crate) fn installed(&self) -> usize {
+        self.apps.len()
+    }
+
+    /// Whether the cap left matches out.
+    pub(crate) fn truncated(&self) -> bool {
+        self.matches > self.installed()
+    }
+}
+
+/// How far one rule's pattern reaches: the number of applications it matched and the number of
+/// them the cap allows to be installed. Only a wildcard pattern can be truncated, and the two
+/// numbers differ exactly then, which is what [`pattern_reach`] is asked for by `/api/state`.
+///
+/// Unlike [`app_ids`] nothing is resolved with WFP, so this only counts and never touches the
+/// filter store.
+pub(crate) fn pattern_reach(pattern: &str, known: &[String]) -> (usize, usize) {
+    if !is_wildcard(pattern) {
+        return (1, 1);
+    }
+
+    let device_pattern = crate::device::to_device_path(pattern);
+    let matches = known
+        .iter()
+        .filter(|path| wildcard_match(&device_pattern, path))
+        .count();
+
+    // A wildcard that matches nothing installs the pattern itself, so one filter is always the
+    // minimum; anything above the cap is left out.
+    (matches, matches.clamp(1, MAX_WILDCARD_MATCHES))
+}
 
 /// Build the application identities one rule needs.
 ///
 /// An exact pattern is resolved on its own, which is the normal case a Detected entry produces.
 /// A wildcard pattern is matched against the paths this tool has seen; when nothing has been seen
 /// yet the pattern itself goes into the store, so the rule is at least visible to the user.
-fn app_ids(pattern: &str, known: &[String]) -> Vec<AppId> {
+fn app_ids(pattern: &str, known: &[String]) -> Expansion {
     if !is_wildcard(pattern) {
-        return vec![AppId::resolve(pattern)];
+        return Expansion {
+            apps: vec![AppId::resolve(pattern)],
+            matches: 1,
+        };
     }
 
     let device_pattern = crate::device::to_device_path(pattern);
 
-    let mut ids: Vec<AppId> = known
+    let matched: Vec<&String> = known
         .iter()
         .filter(|path| wildcard_match(&device_pattern, path))
+        .collect();
+    let matches = matched.len();
+
+    let mut ids: Vec<AppId> = matched
+        .into_iter()
         .take(MAX_WILDCARD_MATCHES)
         .map(|path| AppId::resolve(path))
         .collect();
@@ -1015,7 +1086,7 @@ fn app_ids(pattern: &str, known: &[String]) -> Vec<AppId> {
         ids.push(AppId::resolve(pattern));
     }
 
-    ids
+    Expansion { apps: ids, matches }
 }
 
 impl Drop for Engine {
@@ -1276,9 +1347,9 @@ mod tests {
         assert_eq!(both.len(), LAYERS.len());
     }
 
-    /// A broad pattern is capped, and the cap is silent: the store gets the applications up to the
-    /// limit and nothing says that the rest were left out. Without the cap one careless `*` turns
-    /// into thousands of filters in a store that is shared with everything else on the machine.
+    /// A broad pattern is capped: the store gets the applications up to the limit. Without the cap
+    /// one careless `*` turns into thousands of filters in a store that is shared with everything
+    /// else on the machine.
     #[test]
     fn a_wildcard_pattern_is_expanded_up_to_the_cap() {
         let known: Vec<String> = (0..MAX_WILDCARD_MATCHES + 8)
@@ -1286,9 +1357,53 @@ mod tests {
             .collect();
 
         assert_eq!(
-            app_ids("C:\\test\\*.exe", &known).len(),
+            app_ids("C:\\test\\*.exe", &known).apps.len(),
             MAX_WILDCARD_MATCHES,
             "the cap holds the expansion down",
+        );
+    }
+
+    /// The cap is not silent any more. The expansion carries the number of matches next to the
+    /// number of applications it hands out, so a pattern over the limit reports itself as
+    /// truncated and a pattern within the limit does not.
+    #[test]
+    fn a_pattern_over_the_cap_reports_its_truncation() {
+        let known: Vec<String> = (0..MAX_WILDCARD_MATCHES + 8)
+            .map(|index| crate::device::to_device_path(&format!("C:\\test\\app{index}.exe")))
+            .collect();
+
+        let over = app_ids("C:\\test\\*.exe", &known);
+        assert_eq!(
+            over.matches,
+            MAX_WILDCARD_MATCHES + 8,
+            "all matches are counted"
+        );
+        assert!(over.truncated(), "a pattern over the cap is truncated");
+
+        let within = app_ids("C:\\test\\app*.exe", &known[..MAX_WILDCARD_MATCHES]);
+        assert_eq!(
+            within.matches, MAX_WILDCARD_MATCHES,
+            "the matches within the cap"
+        );
+        assert!(!within.truncated(), "a pattern at the cap is not truncated");
+
+        let exact = app_ids("C:\\test\\app0.exe", &known[..4]);
+        assert!(!exact.truncated(), "an exact pattern is never truncated");
+
+        assert_eq!(
+            pattern_reach("C:\\test\\*.exe", &known),
+            (MAX_WILDCARD_MATCHES + 8, MAX_WILDCARD_MATCHES),
+            "the state view reports the same numbers",
+        );
+        assert_eq!(
+            pattern_reach("C:\\test\\app*.exe", &known[..MAX_WILDCARD_MATCHES]),
+            (MAX_WILDCARD_MATCHES, MAX_WILDCARD_MATCHES),
+            "a pattern at the cap is not truncated in the state view either",
+        );
+        assert_eq!(
+            pattern_reach("C:\\test\\app0.exe", &known),
+            (1, 1),
+            "an exact pattern reaches exactly itself",
         );
     }
 
@@ -1300,7 +1415,7 @@ mod tests {
             .map(|index| crate::device::to_device_path(&format!("C:\\other\\app{index}.exe")))
             .collect();
 
-        assert_eq!(app_ids(TEST_APP, &known).len(), 1);
+        assert_eq!(app_ids(TEST_APP, &known).apps.len(), 1);
     }
 
     /// A wildcard that has matched nothing so far still goes into the store as its own text. The
@@ -1308,7 +1423,7 @@ mod tests {
     /// store and cannot explain.
     #[test]
     fn a_wildcard_that_matches_nothing_seen_yet_still_installs_its_pattern() {
-        assert_eq!(app_ids("C:\\test\\*.exe", &[]).len(), 1);
+        assert_eq!(app_ids("C:\\test\\*.exe", &[]).apps.len(), 1);
     }
 
     /// The port a user means is the remote one on the way out and the local one on the way in.

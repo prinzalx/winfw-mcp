@@ -114,6 +114,11 @@
         word-break: break-all;
       }
 
+      /* A note under an input, such as the warning about a truncated wildcard pattern. */
+      td .sub {
+        margin: 0.2rem 0 0;
+      }
+
       input[type="text"],
       select {
         background: transparent;
@@ -333,6 +338,9 @@
       "use strict";
 
       let rules = [];
+      // The rules whose wildcard pattern matched more applications than the cap allows, keyed by
+      // name and pattern, which together identify a rule the way the table shows it.
+      let truncations = new Map();
       let detected = [];
       let learnMode = false;
       let protection = true;
@@ -499,6 +507,11 @@
         );
       }
 
+      // Key of a rule for the truncation lookup, mirroring `pattern_truncations` from the server.
+      function ruleKey(rule) {
+        return rule.name + "\u0000" + rule.pattern;
+      }
+
       function renderRules() {
         const body = el("rules");
 
@@ -558,7 +571,21 @@
             rule.pattern = pattern.value;
             save();
           });
-          row.appendChild(element("td", "pattern")).appendChild(pattern);
+          const patternCell = row.appendChild(element("td", "pattern"));
+
+          patternCell.appendChild(pattern);
+
+          const cut = truncations.get(ruleKey(rule));
+
+          if (cut) {
+            patternCell.appendChild(
+              element(
+                "p",
+                "sub",
+                "pattern has " + cut.matches + " matches, only " + cut.installed + " installed",
+              ),
+            );
+          }
 
           // The four narrowing columns are optional on a rule, which the server reads as null.
           // An empty choice is therefore sent as null rather than as the word "any".
@@ -911,6 +938,9 @@
 
       function apply(state) {
         rules = state.rules.rule;
+        truncations = new Map(
+          (state.pattern_truncations || []).map((cut) => [ruleKey(cut), cut]),
+        );
         generation = state.generation;
         elevated = state.elevated;
         detected = state.detected;

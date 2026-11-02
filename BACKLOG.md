@@ -371,7 +371,8 @@ Item 4 of the original list, and the news is mostly good:
   that case now instead.
 - Wildcards are **our invention**: the reference has none for application paths and matches the
   application-ID blob exactly. Because WFP cannot match `*` or `?`, we expand a pattern against
-  observed paths under a fixed cap of 32 (`src/wfp.rs:557`), and that truncation is silent.
+  observed paths under a fixed cap of 32 (`src/wfp.rs`), which the log and the page report since 0.60.0
+  rather than swallowing: a pattern over the cap names its matches and what was installed.
 
 ### 4.5 Runtime
 
@@ -1598,3 +1599,23 @@ tag and CI could not run. The shipped binary was not affected, because the broke
 - Lesson for the process: a batch of parallel git calls in the same turn can interleave with an
   `edit_file` on the same repository. The `index.lock` complaint was the visible symptom; the
   invisible one was that the commit ran before the fix to the test. (2026-11-02)
+
+## 56. The cap on wildcard expansion is not silent any more
+
+Closing the half of §4.4 that was still open. The cap of 32 stays exactly where it was; what
+changed is that a pattern over it says so in three places.
+
+- `app_ids` returns the applications it hands out together with the number of matches it counted
+  before the cap, and `Engine::add_rule` warns with the rule name, the pattern, the matches and the
+  number installed. The count is taken before `take`, which is the part that is easy to get wrong:
+  counting inside the filter would stop at the cap and report 32 matches for a pattern with 57.
+- `/api/state` gained `pattern_truncations`, one entry per rule over the cap with `name`, `pattern`,
+  `matches` and `installed`. Rules within the cap are absent rather than listed with `false`, so the
+  array is empty in the normal case. The numbers come from the same seen list the worker expands
+  against, and `pattern_reach` counts without resolving anything through WFP.
+- The page shows *pattern has 42 matches, only 32 installed* under the pattern box of the affected
+  rule, which is where somebody editing the pattern is looking.
+- Measured live, elevated: a rule for `C:\Program Files\*` against 42 seen applications logged
+  `matches=42 installed=32` and reported the same in the state.
+- Two tests, 236 green, and the clippy count is back to the four groups it was, one of which the
+  first draft of this change added and then removed by using `clamp`. (2026-11-02)

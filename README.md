@@ -73,10 +73,17 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.57.0**: a profile written by the C original can be read. `--import
+The current release is **0.60.0**: a wildcard pattern that matches more applications than the cap of
+32 no longer stops matching in silence. The log names the rule, the pattern, the number of matches
+and the number installed, `/api/state` reports both numbers for every affected rule, and the page
+shows them under the pattern box — *pattern has 42 matches, only 32 installed*. Before it,
+**0.59.0** ended a second start quietly: no browser, no token exchange, one warning in the log and a
+non-zero status. Before it, **0.58.0** moved the session token out of `/api/state` and into the URL
+fragment the tray opens, so a local process can no longer read the right to write off the state body
+with `curl`. Before those, **0.57.0** made a profile written by the C original readable: `--import
 <file>` takes the XML simplewall exports, turns the items of its two rule sections into rules of
 this tool, and replaces the rule file of the active profile with them; nothing reaches the live
-store, so the result is looked at on the page before anything is installed. Before it, **0.56.0**
+store, so the result is looked at on the page before anything is installed. **0.56.0**
 let a rule name a span of addresses — `remote` took one address or one network, and a network
 cannot cover nine hosts without also covering the fifteen around them, so `10.0.0.1-10.0.0.9` is
 now written, stored, shown and installed as a range condition. Before it, **0.55.0** made the

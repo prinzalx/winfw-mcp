@@ -520,6 +520,24 @@ struct StateJson {
     /// this value rather than from whether the store opened, because the two fail for different
     /// reasons.
     elevated: bool,
+    /// The rules whose wildcard pattern matches more applications than the cap allows, so the page
+    /// can name the truncation rather than let the rule look like it matches everything.
+    ///
+    /// Rules within the cap are left out entirely; an empty list means nothing was cut.
+    pattern_truncations: Vec<PatternTruncation>,
+}
+
+/// One rule whose wildcard pattern was held down by the cap.
+#[derive(Debug, Clone, Serialize)]
+struct PatternTruncation {
+    /// The name of the rule as the user wrote it.
+    name: String,
+    /// The pattern in drive form, which is how the rule file and the page show it.
+    pattern: String,
+    /// How many applications this tool has seen under the pattern.
+    matches: usize,
+    /// How many of them get filters.
+    installed: usize,
 }
 
 /// The monitor's state together with the count the log holds, so an empty list can be told apart
@@ -551,6 +569,23 @@ impl StateJson {
         let mut detected = state.detector.snapshot();
         detected.truncate(STATE_DETECTED);
 
+        // Counting against the same seen list the worker expands against, so the number on the
+        // page is the number the store was built from.
+        let known = state.detector.apps();
+        let pattern_truncations = rules
+            .rule
+            .iter()
+            .filter_map(|rule| {
+                let (matches, installed) = crate::wfp::pattern_reach(&rule.pattern, &known);
+                (matches > installed).then(|| PatternTruncation {
+                    name: rule.name.clone(),
+                    pattern: rule.pattern.clone(),
+                    matches,
+                    installed,
+                })
+            })
+            .collect();
+
         Self {
             port: state.settings.port,
             learn_mode: state.learn_mode(),
@@ -569,6 +604,7 @@ impl StateJson {
             rules_changed: state.rules_changed_outside(),
             generation: state.rules_generation(),
             elevated: crate::elevated::is_elevated(),
+            pattern_truncations,
         }
     }
 }
@@ -1845,5 +1881,57 @@ pattern = "C:\\Windows\\two.exe"
 
         assert!(body.contains(r#""remote_addr":"192.168.1.20""#), "{body}");
         assert!(body.contains(r#""local_network":true"#), "{body}");
+    }
+
+    /// A wildcard rule that matches more applications than the cap allows is reported in the state
+    /// with both numbers, so the page can say what was left out instead of letting the rule look
+    /// complete. A rule within the cap is not reported at all.
+    #[test]
+    fn the_state_reports_a_wildcard_pattern_cut_by_the_cap() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let body = || {
+            let response = Server::route(
+                &server_state,
+                &worker,
+                &Request::new("GET", "/api/state", vec![]),
+            )
+            .expect("route");
+
+            json(&response)
+        };
+
+        assert_eq!(
+            body()["pattern_truncations"],
+            serde_json::json!([]),
+            "nothing has been seen yet, so nothing is cut",
+        );
+
+        for index in 0..crate::wfp::MAX_WILDCARD_MATCHES + 1 {
+            let app = crate::device::to_device_path(&format!(
+                "C:\\Program Files\\app{index}\\browser.exe"
+            ));
+
+            server_state.detector.note_app(&app);
+        }
+
+        let truncations = body()["pattern_truncations"]
+            .as_array()
+            .expect("an array")
+            .clone();
+
+        assert_eq!(truncations.len(), 1, "the one wildcard rule is reported");
+        assert_eq!(truncations[0]["name"], "browser", "the rule is named");
+        assert_eq!(
+            truncations[0]["matches"],
+            crate::wfp::MAX_WILDCARD_MATCHES + 1,
+            "the matches are counted past the cap",
+        );
+        assert_eq!(
+            truncations[0]["installed"],
+            crate::wfp::MAX_WILDCARD_MATCHES,
+            "only the cap is installed",
+        );
     }
 }

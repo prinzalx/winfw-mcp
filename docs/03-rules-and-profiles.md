@@ -136,8 +136,11 @@ the machine. The base filters behind this are in
 Rules match on `*` and `?`. Those wildcards are ours, not the kernel's: the translation to WFP is
 done by this program, in one place. WFP itself compares an application path exactly, so a pattern
 with a wildcard is expanded into the applications this tool has actually seen, and each of them
-gets its own filter (up to a fixed cap). A pattern nothing was seen for yet is installed as it
-stands, so the rule stays visible even before it can match.
+gets its own filter. The expansion is capped at 32 applications: a broader pattern is installed for
+the first 32 and says so, both as a warning in the log and as a note under the rule on the page
+("pattern has 42 matches, only 32 installed"), because a firewall that quietly stops matching is one
+nobody can reason about. A pattern nothing was seen for yet is installed as it stands, so the rule
+stays visible even before it can match.
 
 A pattern is checked on the way in, because a rule that cannot match anything is not a harmless
 typo in a firewall: the connection it was supposed to decide goes the other way. It must be an

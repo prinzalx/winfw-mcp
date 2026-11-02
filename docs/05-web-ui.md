@@ -38,7 +38,9 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   `10.0.0.1-10.0.0.9`, both left empty for anything goes. The comment box holds free text for the
   row and is empty on a rule that has nothing to say;
   clearing it removes the field from the file. A value the server cannot read bounces back as an
-  error and the row is redrawn from what the server has.
+  error and the row is redrawn from what the server has. A wildcard pattern that matches more
+  applications than 32 shows a note under the pattern box — *pattern has 42 matches, only 32
+  installed* — so the cut is visible where the rule is edited rather than only in the log.
 - **Detected** table: the learning mode, with `allow`, `deny` and `dismiss` per row. An entry for a
   destination a covered application reached is marked `to <address>` and decides that destination
   alone.
@@ -89,7 +91,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | Route | Purpose |
 |---|---|
 | `GET /` | the page itself |
-| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, how often the rules file has been written, whether the process is elevated, and whether `rules.toml` changed outside the tool |
+| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, how often the rules file has been written, whether the process is elevated, whether `rules.toml` changed outside the tool, and the rules whose wildcard pattern the cap cut |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
 | `POST /api/settings` | change `learn_mode`, `default_policy`, `theme` or `log_level` at runtime; all four take effect at once |
