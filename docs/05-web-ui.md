@@ -81,7 +81,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, the session token and whether `rules.toml` changed outside the tool |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
-| `POST /api/settings` | change `learn_mode`, `default_policy` or `theme` at runtime; only `log_level` is written for the next run |
+| `POST /api/settings` | change `learn_mode`, `default_policy`, `theme` or `log_level` at runtime; all four take effect at once |
 | `POST /api/detected/dismiss` | drop a detected application or destination without deciding |
 | `POST /api/clear` | remove our filters from the store |
 | `POST /api/shutdown` | stop the server, which ends the process; the filters stay installed |

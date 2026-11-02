@@ -425,7 +425,7 @@ impl StateJson {
             learn_mode: state.learn_mode(),
             default_policy: state.policy().name(),
             volatile_filters: state.settings.volatile_filters,
-            log_level: state.settings.log_level.clone(),
+            log_level: state.log_level(),
             theme: state.live.theme().name(),
             profile: state.active_name(),
             rules,

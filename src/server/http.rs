@@ -52,7 +52,7 @@ pub struct Request {
 }
 
 impl Request {
-    #[allow(dead_code)] // the tests route a request directly; the socket path uses `from_parts`
+    #[allow(dead_code)] // the tests route a request directly; the socket path uses `with_headers`
     pub fn new(method: &str, path: &str, body: Vec<u8>) -> Self {
         Self {
             method: method.to_owned(),

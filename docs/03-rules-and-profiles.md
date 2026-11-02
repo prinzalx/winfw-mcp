@@ -5,6 +5,33 @@
 A rule names an action (`allow` or `deny`), an application pattern, a name, and whether it is
 enabled. Rules live in `rules.toml` in the order they were written, and that order matters.
 
+## The first two rules
+
+A rules file that does not exist yet is not created empty. It is created with two example rules, so
+the first screen already shows what a rule looks like instead of an empty table:
+
+```toml
+[[rule]]
+name = "example allow"
+action = "allow"
+pattern = "C:\\test\\tool1.exe"
+enabled = true
+remote = "192.0.2.0/24"
+
+[[rule]]
+name = "example deny"
+action = "deny"
+pattern = "C:\\test\\tool2.exe"
+enabled = true
+remote = "198.51.100.0/24"
+```
+
+Both are deliberately inert. The paths name `C:\test\`, which a normal machine does not have, and
+the two networks are the documentation ranges of RFC 5737, which no host of a real network is ever
+in, so the pair explains the format without deciding a single connection. Delete them, or edit them
+into your first real rule; either way the file is ordinary from then on. A file you emptied yourself
+is left empty, because it exists by then and is not written again.
+
 ## Narrowing a rule
 
 Beyond the application, a rule can be narrowed by four optional fields. A rule that names none of

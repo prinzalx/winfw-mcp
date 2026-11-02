@@ -5,7 +5,7 @@
 A rewrite of [simplewall](https://github.com/henrypp/simplewall) in Rust. The C original is the
 functional specification, not a code base to port line by line. Instead of a native GUI it runs a
 small web server: start it, click the tray icon, the browser opens the UI. The same core answers an
-MCP client, so an agent can allow or deny a connection too.
+MCP client over JSON-RPC, which is where a local agent reads the firewall.
 
 - Target platform: **Windows only**, no cross-platform abstraction layer
 - Runs **portable**: no service, no installer, no registry state
@@ -43,13 +43,15 @@ Working documents next to this index: [PLAN.md](PLAN.md) is the plan and its rat
 Milestones 0 to 10 are all done, and each of them is released. The tool owns its data directory,
 reads its config and rules, reads the live WFP store, translates `rules.toml` into persistent WFP
 filters with deny ranked above allow, and serves a web UI that edits those rules. It follows live
-connections over SSE — the ones that leave the machine — and learning mode collects every application
-no rule speaks about yet in a
-Detected list where each entry can be allowed, denied or dismissed from the browser. In a release
-build it runs without a console window and lives as a tray icon. Any area can be copied into
-`export\` on demand, one rule travels as a Base64 string, and an MCP agent talks JSON-RPC to
-`POST /mcp`. Rules are organised into named profiles, and stopping the tool — from the page, from
-the tray or over MCP — leaves the filters in place.
+connections over SSE — only the ones that leave the machine — and learning mode collects every
+application no rule speaks about yet in a Detected list, where each entry can be allowed, denied or
+dismissed from the browser. In a release build it runs without a console window and lives as a tray
+icon. Any area can be copied into `export\` on demand, one rule travels as a Base64 string, and an
+MCP agent talks JSON-RPC to `POST /mcp`. Rules are organised into named profiles, and stopping the
+tool — from the page, from the tray or over MCP — leaves the filters in place.
+
+The MCP endpoint reads only, on purpose: an agent that could write a rule could open its own gate,
+and that is the one thing a firewall in front of an agent should not allow.
 
 | # | Milestone | State |
 |---|---|---|
@@ -65,7 +67,15 @@ the tray or over MCP — leaves the filters in place.
 | 9 | MCP endpoint | done |
 | 10 | Named profiles | done |
 
-The current release is **0.38.1**, a restructuring with nothing to observe from the outside:
+The current release is **0.39.0**, and it makes the first screen say something: a rules file that
+does not exist yet is created with two example rules — one allow, one deny — rather than empty, so
+the format is visible before there is anything to explain
+([rules and profiles](docs/03-rules-and-profiles.md#the-first-two-rules)). The same release made
+`log_level` a live setting: a change in the settings area takes effect in the running process, and
+the level in effect is reported in state rather than being readable only from the file
+([data and configuration](docs/02-data-and-configuration.md#the-log-file)).
+
+Before that, **0.38.1** was a restructuring with nothing to observe from the outside:
 `src/server.rs` became the `src/server/` directory, one job per file, so that the two files worth
 reviewing on their own are small enough to read whole. `guard.rs` is the entire answer to *who may
 write*, and `mcp_tools.rs` holds no write access to rules, settings, profiles or the store at all,

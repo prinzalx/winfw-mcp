@@ -3,15 +3,18 @@
 
 The icon is generated rather than authored: the tool needs a logo that reads as a firewall at
 16 pixels, and a few lines of arithmetic are easier to review and to redo than a binary blob
-committed without a history. Sizes: 16, 32 and 48 pixels, 32 bits per pixel.
+committed without a history. Sizes: 16, 24, 32 and 48 pixels, 32 bits per pixel.
 
-Run from anywhere: `python assets/make_icon.py`.
+24 pixels is in the list because Windows scales the 16-pixel image by a third at the display
+scaling common on laptops, and a scaled bitmap is blurry where a real image is sharp. Because
+`build.rs` compiles the icon into the executable, a rebuild is needed for a regenerated file to
+reach the tray, the executable's properties page and `GET /favicon.ico`.
 """
 
 import struct
 from pathlib import Path
 
-SIZES = (16, 32, 48)
+SIZES = (16, 24, 32, 48)
 
 # A blue disc with a light brick pattern on top.
 BLUE = (0x1F, 0x4E, 0x79)

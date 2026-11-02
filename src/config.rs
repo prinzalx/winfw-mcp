@@ -15,6 +15,10 @@ pub struct Settings {
     /// Loopback port for the web UI and, later, the MCP endpoint.
     pub port: u16,
     /// `tracing` filter. `RUST_LOG` still wins so a support case needs no file edit.
+    ///
+    /// A change through `POST /api/settings` reaches the running filter, so it needs no restart;
+    /// a process that was started with `RUST_LOG` set loses that override to the first such
+    /// change, because the new level replaces the filter the environment produced.
     pub log_level: String,
     /// Collect connections that match no rule into the Detected list (PLAN.md section 3).
     pub learn_mode: bool,
@@ -48,7 +52,7 @@ pub struct Settings {
     /// connections, and the connection panel exists for the traffic a user can act on, so those
     /// events are dropped before they reach the log. This switch brings them back for a diagnosis.
     ///
-    /// Like `log_level` it is read once at startup, and changing it takes a restart.
+    /// Like `port` it is read once at startup, and changing it takes a restart.
     pub debug_show_loopback: bool,
     /// What an application that no rule mentions should get: the Windows default (`allow`) or a
     /// firewall (`deny`).

@@ -26,6 +26,8 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::config::{Policy, Settings};
 use crate::paths::DataPaths;
@@ -98,9 +100,19 @@ fn main() -> Result<()> {
         "" => paths.rules.clone(),
         name => paths.profile_file(name),
     };
-    let rules = RuleFile::load_or_create(&active_rules)?;
+    // A rule file that does not exist yet is created with the two example rules, so the first
+    // screen shows what a rule looks like instead of an empty table. A file a person has emptied
+    // on purpose is not touched again, because it exists by then.
+    let rules = if active_rules.is_file() {
+        RuleFile::load_or_create(&active_rules)?
+    } else {
+        let examples = RuleFile::examples();
+        examples.save(&active_rules)?;
 
-    init_tracing(&settings, &logfile);
+        examples
+    };
+
+    let log_filter = init_tracing(&settings, &logfile);
 
     info!(root = %paths.root.display(), "data directory ready");
     info!(
@@ -118,7 +130,7 @@ fn main() -> Result<()> {
     info!(count = rules.rule.len(), "rules loaded");
 
     if command == Command::Serve {
-        return serve(paths, settings, rules, active_rules);
+        return serve(paths, settings, rules, active_rules, log_filter);
     }
 
     // A one-shot run has no live monitor, but the applications a previous `--serve` run saw are on
@@ -145,6 +157,7 @@ fn serve(
     settings: Settings,
     rules: RuleFile,
     active_rules: std::path::PathBuf,
+    log_filter: Option<LogFilterHandle>,
 ) -> Result<()> {
     let port = settings.port;
     let active_name = settings.active_profile.clone();
@@ -240,6 +253,7 @@ fn serve(
         startup,
         token.clone(),
         rules_written,
+        log_filter,
     );
     // Taken before `state` moves into the server, because `Quit` on the tray has to reach the same
     // flag the routes set.
@@ -351,30 +365,57 @@ fn report(category: &str, entries: &wfp::Entries) {
 #[cfg(not(windows))]
 fn sync_store(_rules: &RuleFile, _command: Command, _known: &[String], _policy: Policy) {}
 
+/// The filter `tracing` installed at startup, wrapped so a settings change can replace it.
+///
+/// The handle that may swap the filter `tracing` installed at startup, which is what makes
+/// `log_level` a setting a running process honours. `tracing_subscriber::reload` is the type that
+/// does this without a global of our own; the name `Registry` in it says what the layer is mounted
+/// on, not that the server keeps a registry of its own.
+pub type LogFilterHandle =
+    tracing_subscriber::reload::Handle<EnvFilter, tracing_subscriber::Registry>;
+
 /// Logging goes to the log file in the data dir and to stderr: stdout belongs to the MCP stdio
 /// transport.
 ///
 /// A log file that will not open is reported on the console and the run continues with the console
 /// alone. Refusing to start a firewall over a log would be the wrong way round.
-fn init_tracing(settings: &Settings, logfile: &std::path::Path) {
+///
+/// The handle is what makes `log_level` changeable without a restart, and it is handed to the
+/// caller rather than kept here because the state is the only place a request handler can reach.
+/// `None` means no filter can be swapped, which is the case the tests run in: they never install a
+/// subscriber, so there is nothing to reload.
+fn init_tracing(settings: &Settings, logfile: &std::path::Path) -> Option<LogFilterHandle> {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&settings.log_level));
 
+    let (reload, handle) = tracing_subscriber::reload::Layer::new(filter);
+
     match log::LogFile::open(logfile) {
-        Ok(log) => tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_writer(log)
-            // The same lines go to both halves of the tee, and escape codes in the file would be
-            // read by whoever opens it in an editor later.
-            .with_ansi(false)
-            .init(),
+        Ok(log) => {
+            tracing_subscriber::registry()
+                .with(reload)
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(log)
+                        // The same lines go to both halves of the tee, and escape codes in the file
+                        // would be read by whoever opens it in an editor later.
+                        .with_ansi(false),
+                )
+                .init();
+        }
         Err(error) => {
             eprintln!("could not open {} for writing: {error}", logfile.display());
 
-            tracing_subscriber::fmt()
-                .with_env_filter(filter)
-                .with_writer(std::io::stderr)
+            tracing_subscriber::registry()
+                .with(reload)
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(std::io::stderr)
+                        .with_ansi(false),
+                )
                 .init();
         }
     }
+
+    Some(handle)
 }

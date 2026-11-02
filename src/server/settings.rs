@@ -5,6 +5,8 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use tracing::info;
 
+use tracing_subscriber::EnvFilter;
+
 use crate::config::{Policy, Theme};
 
 use super::state::AppState;
@@ -26,8 +28,9 @@ pub(super) struct SettingsEdit {
 ///
 /// `learn_mode` and `default_policy` are consulted while the process runs, so they go into the
 /// atomics the monitor thread reads. `theme` takes effect at once too, because it is the page that
-/// renders it and the page reloads the state after every settings change. `log_level` is the filter
-/// `tracing` installed at startup, so it alone is written for the next run.
+/// renders it and the page reloads the state after every settings change. `log_level` reaches the
+/// running filter through the reload handle the state holds, so it takes effect at once as well.
+/// Only `port` still waits for the next run, because the listener is already bound.
 pub(super) fn apply_settings(
     state: &AppState,
     worker: &WfpWorker,
@@ -51,7 +54,17 @@ pub(super) fn apply_settings(
         next.theme = theme;
     }
 
+    // Whether this body named the level, which decides whether the filter gets swapped below. An
+    // edit that says nothing about it must leave the filter alone, because the filter a process
+    // started with may have come from `RUST_LOG` rather than from the file.
+    let named_level = edit.log_level.is_some();
+
     if let Some(log_level) = edit.log_level {
+        // Read it here rather than handing the text to `tracing` and hoping: a level the filter
+        // cannot parse would be written to the file and then silently do nothing, which is the
+        // failure this setting used to be content with.
+        EnvFilter::try_new(&log_level).context("read the log level")?;
+
         next.log_level = log_level;
     }
 
@@ -60,6 +73,10 @@ pub(super) fn apply_settings(
 
     state.live.set(next.learn_mode, next.default_policy);
     state.live.set_theme(next.theme);
+
+    if named_level {
+        state.set_log_level(&next.log_level);
+    }
 
     let rules = state.rules.lock().expect("rules lock poisoned").clone();
 
@@ -231,5 +248,65 @@ mod tests {
         );
 
         assert!(response.is_err(), "a typo must not be accepted silently");
+    }
+
+    /// The log level used to be the one setting a running process ignored, so the answer a client
+    /// got back described the file rather than the process. It is reported as a live value now.
+    #[test]
+    fn a_log_level_change_is_answered_with_the_new_level() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/settings",
+                br#"{"log_level": "debug"}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains(r#""log_level":"debug""#), "{body}");
+
+        let written =
+            std::fs::read_to_string(server_state.paths.config.clone()).expect("read the config");
+
+        assert!(
+            written.contains(r#"log_level = "debug""#),
+            "the level has to survive a restart too: {written}",
+        );
+    }
+
+    /// A level the filter cannot read would be written to the file and then do nothing at all,
+    /// which is exactly the silent behaviour this release set out to end, so it is refused on the
+    /// way in instead.
+    #[test]
+    fn the_settings_endpoint_refuses_a_log_level_it_cannot_read() {
+        let server_state = state();
+        let worker = WfpWorker::start();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/settings",
+                br#"{"log_level": "winfw_mcp=chatty"}"#.to_vec(),
+            ),
+        );
+
+        assert!(
+            response.is_err(),
+            "a name that is not a level must not be accepted"
+        );
+        assert_eq!(
+            server_state.log_level(),
+            "info",
+            "a refused level changes nothing"
+        );
     }
 }

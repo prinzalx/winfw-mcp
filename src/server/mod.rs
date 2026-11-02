@@ -6,8 +6,9 @@
 //! connection with the standard library keeps the binary small, starts instantly, and gives
 //! milestone 5 (SSE) exactly the long-lived connection it needs.
 //!
-//! `winfw-core` rule from PLAN.md section 6: this module is a transport. It reads and writes the
-//! files and forwards store work to the WFP worker, but it decides nothing about the firewall.
+//! `winfw-core` rule from PLAN.md section 6: the `server` modules are a transport. They read and
+//! write the files and forward store work to the WFP worker, but decide nothing about the
+//! firewall.
 //!
 //! ## Routes
 //!
@@ -115,11 +116,8 @@ pub struct Server {
     listener: TcpListener,
     addr: SocketAddr,
     state: Arc<AppState>,
-    worker: Arc<WFPWorkerAlias>,
+    worker: Arc<WfpWorker>,
 }
-
-/// Name chosen so the call sites read as what they are.
-type WFPWorkerAlias = WfpWorker;
 
 impl Server {
     /// Bind `127.0.0.1:{port}`. Port 0 is allowed and resolves to an ephemeral port, which is what
@@ -431,6 +429,8 @@ pub(crate) mod testsupport {
             String::new(),
             Startup::unmeasured(),
             TEST_TOKEN.to_owned(),
+            None,
+            // A test state installs no subscriber, so there is no filter to swap.
             None,
         )
     }

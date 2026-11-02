@@ -454,6 +454,36 @@ pub struct RuleFile {
     pub rule: Vec<Rule>,
 }
 
+impl RuleFile {
+    /// The two rules a first run writes into `rules.toml`.
+    ///
+    /// An empty file is a correct default and a poor first screen: nothing on it shows what a rule
+    /// is supposed to look like. These two are the shape of the common case - one application
+    /// allowed to one network, one denied - and they are deliberately the same pair the manual
+    /// talks about. The paths name `C:\test\`, which a normal machine does not have, so a rule
+    /// teaches without blocking anything a real program does, and the prefixes are the
+    /// documentation ranges of RFC 5737, which no host of this network is ever in.
+    pub fn examples() -> Self {
+        let mut allow = Rule::plain("example allow", Action::Allow, "C:\\test\\tool1.exe");
+        allow.remote = Some(
+            "192.0.2.0/24"
+                .parse()
+                .expect("the example prefix is a literal"),
+        );
+
+        let mut deny = Rule::plain("example deny", Action::Deny, "C:\\test\\tool2.exe");
+        deny.remote = Some(
+            "198.51.100.0/24"
+                .parse()
+                .expect("the example prefix is a literal"),
+        );
+
+        Self {
+            rule: vec![allow, deny],
+        }
+    }
+}
+
 /// The version written to a rule file.
 ///
 /// The reference keeps a schema version in its profile files and migrates when it reads an older
@@ -703,6 +733,34 @@ mod tests {
         rules.save(&path).expect("save");
 
         assert_eq!(RuleFile::load_or_create(&path).expect("load"), rules);
+    }
+
+    #[test]
+    fn the_examples_are_one_allow_and_one_deny() {
+        let examples = RuleFile::examples();
+
+        assert_eq!(examples.rule.len(), 2);
+        assert_eq!(examples.rule[0].action, Action::Allow);
+        assert_eq!(examples.rule[1].action, Action::Deny);
+
+        // Both are on, or neither teaches anything.
+        assert!(examples.rule.iter().all(|rule| rule.enabled));
+
+        // Each names one application and one network, which is the shape the manual describes.
+        for rule in &examples.rule {
+            assert!(rule.pattern.contains("C:\\test\\tool"));
+            assert!(rule.remote.is_some());
+        }
+    }
+
+    #[test]
+    fn the_examples_survive_a_round_trip_through_disk() {
+        let path = crate::testutil::scratch_dir("examples").join("rules.toml");
+        let examples = RuleFile::examples();
+
+        examples.save(&path).expect("save");
+
+        assert_eq!(RuleFile::load_or_create(&path).expect("load"), examples);
     }
 
     #[test]

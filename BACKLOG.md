@@ -74,10 +74,12 @@ Kept as asked, with the two audits now folded in below.
 
 ### 3.2 Settings
 
-- **`port` and `log_level` are still file-only.** `POST /api/settings` exists since 0.13.0
-  and so does the MCP `settings.set` tool, and `learn_mode` and `default_policy` take effect at
-  once. The other two are written to the file and only honoured on the next run: the port is
-  already bound, and the log level is the filter `tracing` installed at startup.
+- ~~**`port` and `log_level` are still file-only.**~~ — the log level closed in 0.39.0. The
+  filter `tracing` installs at startup is now wrapped in a `reload` layer whose handle the state
+  holds, so `POST /api/settings` swaps it and the next event is judged by the new level. A level the
+  filter cannot read is refused before the file is written, rather than written and then silently
+  ignored. What is left is `port` alone: the listener is already bound, and a server that moved its
+  own port while a browser tab held the old one would be worse than a restart.
 - ~~**A bad value in a settings body answers `500 Internal Server Error`.**~~ — closed in 0.34.0.
   A theme, policy or log level the server cannot read was refused before anything was written,
   which was right, but `status_text` had no branch for it and the client was told the server
@@ -95,8 +97,8 @@ Kept as asked, with the two audits now folded in below.
   the two fixed choices, removed for `auto`, which leaves the operating system in charge.
 - ~~**Logs do not rotate.**~~ — closed in 0.26.0. PLAN.md §2 calls `logs\` rotating, and it now does:
   tracing writes to the file and the console, the file rolls at a megabyte to `<name>.1`, and the
-  startup lines the ad-hoc helper appended are `info!` lines like every other. What is left is the
-  log level of a **running** process (above), which a rolling file cannot answer.
+  startup lines the ad-hoc helper appended are `info!` lines like every other. The level of a
+  **running** process, which a rolling file could never answer, followed in 0.39.0.
 
 ### 3.3 Files, export and import
 
@@ -283,9 +285,12 @@ The reference separates three things here; as of 0.18.0 so do we on the first tw
 
 Related, the reference also keeps a real **connection table** (state, local and remote address and
 port, byte counters, from `GetExtendedTcpTable` / `UdpTable`), not only an event stream. Our event
-record has had the **remote address** since 0.19.0; it still has no local address or port, no user
-name, no package SID, no loopback flag and no layer name (the deciding filter's *rule* name it does
-have since 0.18.0).
+record names both endpoints and both ports (`local_addr`, `local_port`, `remote_addr`,
+`remote_port`) since 0.25.0, and it carries the `loopback` marker the callback reports plus the
+`local_network` flag 0.37.0 added for the view that shows only traffic that left the machine. The
+deciding filter's *rule* name it has had since 0.18.0. What it still does not name is the **user**
+(the SID in the event header, which needs a lookup per event), the **package SID**, a **layer name**,
+and any **byte counter**, because an event is a moment rather than a table.
 
 ### 4.4 Storage, quoting and escaping
 
@@ -949,3 +954,39 @@ so the split lands on a clean tree rather than in the middle of a diff.
 - **One process lesson, written down because it cost a detour**: a batch of `cargo` commands fired
   in parallel produced three different failing test counts from the same tree. `cargo` blocked on
   each other's package-cache lock. Serial is not just the rule for the test *threads* here.
+
+## 32. First-run examples and a live log level round notes
+
+Both features are released in **0.39.0** and this section is closed. What is left is only what a
+local shell cannot reach:
+
+- A `--serve` run elevated has to show that the log file really starts and stops accepting lines
+  after a level change. The unit tests prove the reported value and the refusal; they cannot prove
+  that `logs\winfw-mcp.log` grows again after `error` becomes `debug`.
+- The new icon sizes (16, 24, 32 and 48) need a look on a display at 125 % or 150 % scaling, which
+  is the reason the 24-pixel entry was added.
+- `RuleFile::examples()` is written only when the file is absent. A file that exists but is empty
+  stays empty, and a profile that exists with nothing in it is the user's decision to keep it that
+  way; nothing prompts for examples afterwards. (2026-11-02)
+
+The decisions the round made, so that a later reader knows they were deliberate:
+
+- **The examples are inert by construction.** `RuleFile::examples()` answers a rules file that does
+  not exist yet with one allow and one deny: the applications `C:\test\tool1.exe` and
+  `C:\test\tool2.exe`, the destinations `192.0.2.0/24` and `198.51.100.0/24`. Both prefixes are
+  documentation ranges of RFC 5737 and both paths name a directory a normal machine does not have,
+  so the pair shows the shape of a rule without deciding a single real connection.
+- **`load_or_create` still means empty.** The examples are decided in `main.rs`, on the branch that
+  knows whether the file existed, not inside the reader. That keeps the reader's promise — a file
+  that is not there is empty — which is what the storage tests assert and what an emptied file
+  depends on: a person who deletes every rule is not handed the examples back on the next start.
+- **A remote address is CIDR, so the examples are not hostnames.** `example.com` and `evil.com` are
+  what a person would type, but `Cidr::FromStr` refuses a name, and resolving one is a feature of
+  the reference this build does not have yet (see section 4.2).
+- **The log filter is a `reload::Layer` on a registry**, and the handle lives in `AppState`. A
+  request that does not name the level leaves the filter alone, so editing the theme does not
+  quietly drop a `RUST_LOG` override; a body that does name it replaces that override, because
+  after an explicit write the file is what the user expects. A level the filter cannot read is
+  refused rather than written and then ignored.
+- **A state built without a subscriber remembers the level and changes nothing else.** That is
+  every test, and it is the honest limit of what the unit tests can prove about a live reload.

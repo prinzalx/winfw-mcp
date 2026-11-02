@@ -28,12 +28,14 @@ pub fn session_token() -> String {
 
 /// Reject a request the wire says should not reach a route (PLAN.md section 11).
 ///
-/// The three checks answer three different mistakes, so they answer with three different codes:
+/// The four checks answer four different mistakes, so they answer with four different codes:
 ///
 /// * a `Host` that is not loopback is DNS rebinding — a page under another name talked to us
 ///   because the name resolved here, and it may read nothing but it certainly may not write;
 /// * an `Origin` that is not ours is a cross-site request: the page is somewhere else and the
 ///   browser sent the request anyway;
+/// * a `content-type` that is not JSON is a body no page of ours sends, which a route would only
+///   misread;
 /// * a missing or wrong token is a page that does not know the secret the tray handed out.
 ///
 /// `GET` is held to the `Host` check only, which is what lets the page, the event stream and an

@@ -40,7 +40,7 @@ the result is never more than two files.
 | Key | Meaning |
 |---|---|
 | `port` | the loopback port the web server binds (8788 by default); if it is busy the server takes the next free one of the following eight instead of failing |
-| `log_level` | default tracing level; `RUST_LOG` overrides it for a single run |
+| `log_level` | default tracing level; `RUST_LOG` overrides it for a single run, and a change over the API takes effect at once |
 | `debug_show_loopback` | `false` by default. Connections that never left the machine are dropped from the event feed; `true` keeps them for a diagnosis. Read at startup, so changing it takes a restart (see [WFP internals](07-wfp-internals.md#the-event-stream)) |
 | `learn_mode` | whether learning mode collects applications; off means the Detected list stays empty while the connection log keeps filling |
 | `default_policy` | `allow` (default) or `deny`. `deny` puts an unconditional block at the bottom of the four authorization layers, so an application no rule mentions is denied rather than allowed; see [WFP internals](07-wfp-internals.md#the-default-deny-base) |
@@ -94,9 +94,12 @@ curl -X POST http://127.0.0.1:8788/api/settings \
 ```
 
 Every field is optional, and a field that is absent keeps its value, so a client flips one thing
-without having to know the rest. `log_level` is accepted but only takes effect on the
-next run, because the filter `tracing` installed at startup is not swapped out afterwards. The answer is the same body `GET /api/state` returns, so a client sees what the server
-actually settled on.
+without having to know the rest. All four take effect at once, `log_level` included: the running
+filter is swapped rather than reinstalled, and a level the filter cannot read is refused rather
+than written and then silently ignored. A process started with `RUST_LOG` in the environment loses
+that override to the first settings change that names the level, because the new level replaces the
+filter the environment produced. The answer is the same body `GET /api/state` returns, so a client
+sees what the server actually settled on.
 
 Note what the endpoint does **not** accept: `port`, because the socket is already bound, and
 `active_profile`, which has its own route (`POST /api/profiles/switch`) because switching a profile

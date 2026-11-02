@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tracing::warn;
+use tracing_subscriber::EnvFilter;
 
+use crate::LogFilterHandle;
 use crate::config::{Policy, Settings, Theme};
 use crate::learn::Detector;
 use crate::monitor::{EventLog, MonitorStatus};
@@ -58,6 +60,15 @@ pub struct AppState {
     /// difference. Writing the file replaces the record, so the notice disappears with the edit
     /// that caused it and needs no bookkeeping of its own.
     rules_written: Mutex<Option<Fingerprint>>,
+    /// The log level as the process understands it, which a settings change moves.
+    ///
+    /// It is kept apart from `settings` for the same reason `learn_mode` is: the value in
+    /// `settings` is the one read at startup and is only ever written back to `config.toml`, so a
+    /// report that used it would tell a page about the last run rather than this one.
+    log: Mutex<String>,
+    /// The handle that swaps the `tracing` filter, or `None` for a process that installed no
+    /// subscriber, which is what every test is.
+    log_filter: Mutex<Option<LogFilterHandle>>,
 }
 
 impl AppState {
@@ -74,7 +85,11 @@ impl AppState {
         startup: Startup,
         token: String,
         rules_written: Option<Fingerprint>,
+        log_filter: Option<LogFilterHandle>,
     ) -> Self {
+        // Read before `settings` moves into the struct below.
+        let log_level = settings.log_level.clone();
+
         Self {
             paths,
             settings,
@@ -88,6 +103,8 @@ impl AppState {
             startup,
             token,
             rules_written: Mutex::new(rules_written),
+            log: Mutex::new(log_level),
+            log_filter: Mutex::new(log_filter),
         }
     }
 
@@ -120,6 +137,37 @@ impl AppState {
             .lock()
             .expect("active name lock poisoned")
             .clone()
+    }
+
+    /// The log level as the process understands it now, which is not necessarily what
+    /// `config.toml` held at startup.
+    pub(super) fn log_level(&self) -> String {
+        self.log.lock().expect("log level lock poisoned").clone()
+    }
+
+    /// Adopt a log level the settings route just wrote, and hand it to `tracing`.
+    ///
+    /// The filter is swapped rather than reinstalled, so the next event is judged by the new level
+    /// and nothing that is already logged is lost. A state built without a subscriber — which is
+    /// every test — remembers the level and changes nothing else.
+    pub(super) fn set_log_level(&self, level: &str) {
+        {
+            let mut current = self.log.lock().expect("log level lock poisoned");
+            *current = level.to_owned();
+        }
+
+        let Ok(guard) = self.log_filter.lock() else {
+            return;
+        };
+
+        match &*guard {
+            Some(handle) => {
+                if let Err(error) = handle.reload(EnvFilter::new(level)) {
+                    warn!(reason = %error, "could not change the log level");
+                }
+            }
+            None => drop(guard),
+        }
     }
 
     /// The authoritative `learn_mode`: what the last `POST /api/settings` asked for, rather than
@@ -186,8 +234,8 @@ impl AppState {
 
 /// The three settings that may change while the process runs.
 ///
-/// Everything else in `Settings` is read once at startup and cannot be honoured afterwards: the
-/// port is already bound and the log level is the filter `tracing` installed. The other three are
+/// Everything else in `Settings` is read once at startup and cannot be honoured afterwards: only
+/// the port is, because the listener is already bound. The other three are
 /// consulted again on every read, so they live in atomics the monitor thread and the request
 /// threads both see. `settings` keeps the file-shaped copy, which is what gets written back to
 /// `config.toml`.
