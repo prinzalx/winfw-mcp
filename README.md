@@ -73,10 +73,14 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.62.0**: one application is one entry. Windows paths are compared without
-regard to case, so `C:\Test\Tool.exe` and `c:\test\tool.exe` collect into a single Detected entry,
-single dismiss and single decision, and a `learn.json` that still holds both spellings is folded
-together on load without losing a hit count. Before it, **0.61.0** made the tool start as a
+The current release is **0.63.0**: a click on the tray icon does what it says. The shell reports the
+icon event in the low word of the callback and the icon id in the high word, but the window
+procedure read only the high word, so a click matched the icon id against a mouse message and did
+nothing; both words are read now, the icon declares version 4 so the shell sends `NIN_SELECT` and
+`WM_CONTEXTMENU` at all, and a tooltip names the address beside the tool. Before it, **0.62.0** made
+one application one Detected entry, comparing paths without regard to case, so `C:\Test\Tool.exe`
+and `c:\test\tool.exe` collect into one entry, one dismiss and one decision. Before that,
+**0.61.0** made the tool start as a
 firewall: `default_policy` defaults to `deny`, so an application no ALLOW rule mentions cannot
 connect, outbound or inbound, and the policy is stated in the page header instead of hiding in the
 settings. Before that, **0.60.0** made a wildcard pattern that exceeds the cap of 32 say so in the

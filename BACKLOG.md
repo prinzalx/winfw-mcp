@@ -1720,3 +1720,30 @@ Ghost icon caveat. A forced `taskkill` never runs `Shell_NotifyIconW(NIM_DELETE)
 behind after a killed process and answers nothing when clicked. That is cosmetic and clears on one
 click, but it explains part of the "nothing happens" feeling during development and it is worth
 remembering when a live test ends with `taskkill`.
+
+## 60. The tests write into the data directory, and it is not always the tool's
+
+Found while writing the `--clear` shutdown check into the handbook, which meant looking at what the
+data directory actually contains after a development session: it had picked up a `*.tmp` file from a
+test run. Cause. `testutil::scratch_dir()` returns a fresh temporary directory for the tests that
+want isolation, and those do not touch the real data directory. But the live-store tests and the ones
+that build a `Server` go through the same code as production, and the code resolves the data
+directory from `APPDATA` only (`%APPDATA%\winfw-mcp`); there is no `WINFW_DATA` override today. A
+test that writes config, rules or the Detected store therefore writes into the real
+`%APPDATA%\winfw-mcp`, next to the running tool's own files. Two consequences, both small but
+neither zero:
+
+- a development run and a test run can read each other's files, which is why a rule added in the web
+  during a manual test can appear in the next `cargo test` until something cleans it;
+- the data directory of the tool is not a clean record of what the tool wrote, because a test added
+  to it too.
+
+Not a bug in the sense of wrong behaviour — the tests pass and the tool works — but it makes the
+data directory a poor source of truth for "what did the tool do", and it is the reason a manual test
+is followed by a look at `rules.toml` rather than the other way round.
+
+The fix is small and belongs with the next test-touching release, not with a docs change: make
+`resolve()` honour a `WINFW_DATA` override, then point the tests at a scratch directory of their own
+by setting it in the tests that build a `Server` or open the store, and leave the real data directory
+to the running tool. Until then the handbook notes the caveat where it describes the data directory,
+and the `--clear` check is run against the store rather than the directory listing.
