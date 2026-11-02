@@ -238,6 +238,7 @@ impl AppState {
             state: status.state,
             code: status.code,
             events: self.events.delivered(),
+            last_event_ms: self.events.last_event_ms(),
         }
     }
 }

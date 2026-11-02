@@ -73,13 +73,12 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.45.0**. When the tool starts it rebuilds the firewall store from the
-rules file, and it now *names* what changed while it was closed: rules added, rules removed, and
-rules whose action flipped, even when the filter counts come out equal. An export names the profile
-its rules came from in a one-line `profile.txt`, the firewall can be paused from the page or the
-tray, a rule can carry a `comment`, and starting the tool shows a balloon naming the address. The
-handbook reads like an operating manual rather than a development diary, and the release history has
-its own file, [CHANGELOG.md](CHANGELOG.md).
+The current release is **0.46.0**. The connection feed now says when it last spoke —
+`running, 128 events, last event 42s ago` — so a quiet machine and a stuck subscription are told
+apart. The startup diff names the rules added, removed or flipped while the tool was closed, an
+export names the profile its rules came from, the firewall can be paused from the page or the tray,
+and a rule can carry a `comment`. The handbook reads like an operating manual rather than a
+development diary, and the release history has its own file, [CHANGELOG.md](CHANGELOG.md).
 [SECURITY_REVIEW.md](SECURITY_REVIEW.md) is a brief for an outside reviewer of the request
 path; the security chapter it reviews is
 [the security model](docs/10-security-model.md#the-guard).

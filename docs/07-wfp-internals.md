@@ -133,10 +133,13 @@ The options are per session, so the monitor configures its own and leaves the ma
 The thread reports what subscribing did, because a refused subscription is a supported state and an
 empty connection list needs a reason. It publishes `starting`, `running`, `refused` with the code
 that refused it, or `stopped` on the way out, and both reports read that together with how many
-events the log took in. An unelevated run therefore says `no feed: 0x00000005` rather than looking
-like a machine about to happen. Note what that count means: it counts what the
-callback handed over, and the callback drops a connection that stayed on the machine before it hands
-anything over.
+events the log took in and when the last of them arrived. An unelevated run therefore says
+`no feed: 0x00000005` rather than looking like a machine about to happen. The count and the stamp
+together answer a question neither answers alone: the count says whether the feed ever worked, the
+stamp says when it last did, which is what tells a quiet machine from a subscription that stopped
+delivering while it stayed open. Note what the count means: it counts what the callback handed
+over, and the callback drops a connection that stayed on the machine before it hands anything
+over.
 
 ## What the callback keeps
 

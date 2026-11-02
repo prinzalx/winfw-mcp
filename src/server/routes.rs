@@ -453,6 +453,11 @@ pub(super) struct MonitorJson {
     pub(super) code: Option<String>,
     /// Events the callback handed over since the process started.
     pub(super) events: u64,
+    /// Wall-clock milliseconds since the epoch of the last event, zero when none arrived.
+    ///
+    /// A running feed with a stale stamp is the case the count cannot tell apart from a quiet
+    /// machine: the subscription stayed open but stopped delivering.
+    pub(super) last_event_ms: u64,
 }
 
 impl StateJson {

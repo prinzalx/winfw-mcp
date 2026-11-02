@@ -44,9 +44,12 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
   ours, `by other` for a filter another firewall owns. A destination on the local segment is marked
   `local network` and can be hidden with the checkbox under the heading. An endpoint the event named
   no address for is left out of the line; an address with no port still shows the port.
-- **The feed's state**, next to that heading: `running, 128 events`, `no feed: 0x00000005`,
-  `starting` or `stopped`. It is the answer to "is this list empty because nothing happened or
-  because nothing was delivered?", which an unelevated run can only answer the second way.
+- **The feed's state**, next to that heading: `running, 128 events, last event 42s ago`,
+  `no feed: 0x00000005`, `starting` or `stopped`. It is the answer to "is this list empty because
+  nothing happened or because nothing was delivered?", which an unelevated run can only answer the
+  second way. The age of the newest event answers the harder version of that question over time: a
+  running feed whose newest event is hours old while the machine is in use is a subscription that
+  stopped delivering though it stayed open.
 - **Actions**: Add rule, Apply to WFP, Clear our filters, Export, Import, Restore, Quit.
   Restore is the file half of an export: a file chooser takes a rules file back in, and the
   interface asks first, because replacing the list is the one action on the page that can lose

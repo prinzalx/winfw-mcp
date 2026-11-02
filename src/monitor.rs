@@ -168,6 +168,13 @@ pub type Attribution = HashMap<u64, String>;
 #[derive(Debug, Default)]
 pub struct EventLog {
     inner: Mutex<Log>,
+    /// Wall-clock milliseconds since the epoch of the event that arrived last, zero for a log
+    /// that never took one.
+    ///
+    /// The count of delivered events says whether the feed ever worked; this says when it last
+    /// did, which is what tells a quiet machine from a subscription that stopped delivering while
+    /// it stayed open.
+    last_event_ms: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Debug, Default)]
@@ -198,7 +205,22 @@ impl EventLog {
         }
         log.events.push_back(NetEvent { seq, ..event });
 
+        self.last_event_ms.store(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_millis() as u64)
+                .unwrap_or_default(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         seq
+    }
+
+    /// When the last event arrived, in milliseconds since the epoch; zero for a log that never
+    /// took one.
+    pub fn last_event_ms(&self) -> u64 {
+        self.last_event_ms
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Everything newer than `last`, oldest first.
@@ -1184,5 +1206,27 @@ mod tests {
 
         assert_eq!(log.snapshot().len(), LOG_CAPACITY);
         assert_eq!(log.delivered(), (LOG_CAPACITY + 5) as u64);
+    }
+
+    /// The health question over time is "when did the feed last speak", and the answer has to
+    /// distinguish "never" from "a moment ago" without a clock of its own to consult.
+    #[test]
+    fn the_log_stamps_when_the_last_event_arrived() {
+        let log = EventLog::new();
+
+        assert_eq!(
+            log.last_event_ms(),
+            0,
+            "a log that never took an event has no stamp"
+        );
+
+        log.push(event("a.exe"));
+        let first = log.last_event_ms();
+
+        assert!(first > 0, "a pushed event leaves a stamp");
+
+        log.push(event("b.exe"));
+
+        assert!(log.last_event_ms() >= first, "the stamp only moves forward");
     }
 }

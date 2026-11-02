@@ -827,11 +827,20 @@
         }
 
         const text =
-          monitor.state === "running"
-            ? "running, " + monitor.events + " events"
-            : monitor.state === "refused"
-              ? "no feed: " + (monitor.code ?? "refused")
-              : monitor.state;
+          var text = "";
+        if (monitor.state === "running") {
+          text = "running, " + monitor.events + " events";
+          if (monitor.last_event_ms) {
+            var quiet = Math.round((Date.now() - monitor.last_event_ms) / 1000);
+            text += ", last event " + quiet + "s ago";
+          } else {
+            text += ", no event yet";
+          }
+        } else if (monitor.state === "refused") {
+          text = "no feed: " + (monitor.code ?? "refused");
+        } else {
+          text = monitor.state;
+        }
 
         el("monitor").textContent = "(" + text + ")";
         el("monitor").title =

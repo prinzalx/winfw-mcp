@@ -69,9 +69,12 @@ Kept as asked, with the two audits now folded in below.
   paused tool should say so somewhere louder than a word in the header.
 - ~~**The UI never says whether the monitor is running.**~~ — closed in 0.27.0. The thread
   publishes what subscribing did (`starting`, `running`, `refused` with the code, `stopped`) and
-  both reports carry how many events the log took in, so an empty list names its reason. What is
-  left of the finding is the monitor's own health over time: the state says nothing about a thread
-  that stopped delivering while the subscription stayed open.
+  both reports carry how many events the log took in, so an empty list names its reason. The
+  monitor's own health over time followed in **0.46.0**: every event stamps the log with the
+  wall-clock time of its arrival, the state reports the stamp next to the count, and the page says
+  how long ago the newest event was. What is left is interpretation, not information: a running
+  feed with a stale stamp could still be a machine that genuinely did not connect, and only the
+  user can tell that from a stuck subscription.
 - ~~**Reconcile on startup is missing in `--serve`.**~~ — closed in 0.31.0. PLAN.md §6 wants the WFP
   store reconciled against `rules.toml` at startup with the diff surfaced in the UI. The rebuild was
   always made; what was missing was its answer, which now travels to `/api/state` and MCP `status` as
@@ -1177,3 +1180,25 @@ Open after the round:
   store than this diff reaches. (2026-11-02)
 - The lists are uncapped. A rule set of hundreds edited by hand could produce a banner of hundreds
   of names; a cap with a "…and N more" would only be worth it once somebody has one. (2026-11-02)
+
+## 40. Monitor health over time round notes
+
+Released in **0.46.0**. The event log stamps its newest event and both reports publish the stamp.
+
+The decisions the round made:
+
+- **The stamp is wall-clock, not monotonic.** The age is shown in a browser and read next to a
+  wrist; no comparison across a clock change is asked of it, so milliseconds since the epoch in a
+  plain atomic is enough and a `SystemTime` behind the log's mutex would have been the same answer
+  with more lock held.
+- **Zero means never, not midnight.** A log that took no event has no stamp, and the page says
+  `no event yet` rather than an age measured from the epoch.
+- **The stamp is kept on the log, not on the subscription status.** The status answers what
+  subscribing did; the log knows what arrived. Keeping them apart means a refused subscription and
+  a stale feed are two honest answers instead of one confused string.
+
+Open after the round:
+
+- The page shows the age as of the last state read; it does not tick on its own. A row that counts
+  seconds up while you watch it is a nicer interaction and needs a timer the page does not have.
+  (2026-11-02)
