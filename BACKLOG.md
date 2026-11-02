@@ -181,8 +181,9 @@ Kept as asked, with the two audits now folded in below.
 
 - **No `winfw-core` library crate.** Everything is one binary; the rule that only `wfp.rs` calls the
   `Fwpm*` API is honoured, the crate split is not.
-- **`rmcp` was rejected in favour of hand-written JSON-RPC** (`src/mcp.rs:4-8`). Deliberate, and the
-  comment in `Cargo.toml` that still announces it as a dependency to be added is stale.
+- ~~**`rmcp` was rejected in favour of hand-written JSON-RPC**~~ — closed in 0.44.1. The rejection
+  stands (`src/mcp.rs:4-8`); the comment in `Cargo.toml` that still announced the crate as a
+  dependency milestone 9 would add now says what was decided and why.
 - **`quick-xml` is absent**, so an existing simplewall profile cannot be read at all. PLAN.md §6 listed
   it for exactly that.
 - **The `mcp-template` structure was not carried over**: no contract document, no per-tool smoke
@@ -1129,3 +1130,19 @@ Open after the round:
   same file, or a full manifest with the version of the tool, would close that. (2026-11-02)
 - Import still takes one shared rule or a whole rules file. Nothing in `export\` is read back by the
   tool, which means the directory is a backup format rather than an interchange format. (2026-11-02)
+
+## 38. Cargo comment cleanup round notes
+
+Released in **0.44.1**. No behaviour change; one comment in `Cargo.toml` was doing the wrong job.
+
+The comment announced `rmcp` as "the one dependency milestone 9 will add", a promise written before
+the milestone existed. Milestone 9 shipped hand-written JSON-RPC instead, and `src/mcp.rs` records
+the reasoning — four method names are not worth a tokio runtime and an axum dependency. A new
+reader of the manifest, though, would have expected a crate that would never arrive. The comment
+now states the decision and points at the file that explains it, which is the only place a rejected
+dependency should be argued.
+
+Open after the round:
+
+- Nothing was opened. The rest of §3.7 (`winfw-core`, `quick-xml`, the `mcp-template` structure) is
+  untouched and unchanged in rank. (2026-11-02)
