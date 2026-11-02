@@ -34,14 +34,6 @@ use windows::core::PCWSTR;
 /// neither has a claim on the other's store.
 const MUTEX_NAME: &str = "Local\\winfw-mcp.serve";
 
-/// The name an elevated newcomer of a relaunch waits on, and later claims.
-///
-/// The stopping instance releases [`MUTEX_NAME`] on exit. A second process that came up while that
-/// was in flight would count the held name as "someone else is serving" and end; to tell the two
-/// apart it holds `MUTEX_NAME + ".takeover"` for as long as it waits, so a third process that sees
-/// the primary name held and the takeover name free knows the name is only on its way out.
-const TAKEOVER_NAME: &str = "Local\\winfw-mcp.serve.takeover";
-
 /// The file the running instance writes the port it serves on to.
 ///
 /// A busy port makes the server fall forward to the next free one (`server::Server::bind`), so the
@@ -111,28 +103,16 @@ pub fn claim(paths: &crate::paths::DataPaths) -> Result<Option<Guard>> {
 /// The same claim for the elevated newcomer of a relaunch: it waits up to [`TAKEOVER_PATIENCE`]
 /// for the name to be released before it reports itself as a second start.
 ///
-/// While it waits it holds [`TAKEOVER_NAME`]. Without that marker a second double-click during the
-/// wait sees only a held [`MUTEX_NAME`], cannot tell "still serving" from "about to be free", and
-/// ends as a second start, which is exactly the race the wait is meant to close.
-///
-/// The name is polled rather than waited on with a object wait, because the old process releases it
-/// by exiting, and a poll of a mutex that is almost free is cheaper than plumbing a second
+/// The name is polled rather than waited on with an object wait, because the old process releases
+/// it by exiting, and a poll of a mutex that is almost free is cheaper than plumbing a second
 /// synchronisation object through the startup.
 pub fn claim_takeover(paths: &crate::paths::DataPaths) -> Result<Option<Guard>> {
     let port_file = paths.root.join(PORT_FILE);
 
-    // The marker is released the moment the primary name is ours; holding it longer would tell the
-    // next process "a takeover is in flight" after there is none.
-    let marker = claim_name(TAKEOVER_NAME)?;
-
-    let claimed = claim_name_waiting(MUTEX_NAME, TAKEOVER_PATIENCE, TAKEOVER_POLL)?;
-
-    if let Some(handle) = marker {
-        // SAFETY: the handle came from `claim_name` and is not used again.
-        let _ = unsafe { CloseHandle(handle) };
-    }
-
-    Ok(claimed.map(|handle| Guard { handle, port_file }))
+    Ok(
+        claim_name_waiting(MUTEX_NAME, TAKEOVER_PATIENCE, TAKEOVER_POLL)?
+            .map(|handle| Guard { handle, port_file }),
+    )
 }
 
 /// The URL a second process should open, which is the running instance's rather than the configured
@@ -255,6 +235,8 @@ mod tests {
     /// give up on a name that is about to be free nor wait forever on a name that is not.
     #[test]
     fn a_waiting_claim_uses_the_patience_it_is_given() {
+        let name = format!("Local\\winfw-mcp-wait-{}", std::process::id());
+
         let held = claim_name(&name)
             .expect("claim")
             .expect("the name was free");

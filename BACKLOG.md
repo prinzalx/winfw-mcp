@@ -1556,6 +1556,8 @@ the same user. That is exactly the agent that builds a tool and then opens its o
 
 ## 54. The second start ends quietly round notes
 
+Followed by §55: the v0.59.0 tag shipped a test that did not compile; 0.59.1 is the fix.
+
 Release 0.59.0 closes the open half of §2 point 1. A second `--serve` used to open the browser on
 the running instance and exit with status `0`. Since there is no window to restore and nobody
 reloads the page, that browser was a new tab on every mistyped double-click, and a process that
@@ -1580,3 +1582,19 @@ exits before the tray exists has no business opening a page at all.
 - Still open, and unchanged by this round: the guard proves a writing request came from a tab the
   tray opened, but a process of the same user can inspect the browser process or its command line
   and read the fragment there. (§53 says the same about `curl`.) (2026-11-02)
+
+## 55. The v0.59.0 tag shipped a test that did not compile
+
+An editing slip in `src/instance.rs`: the line that built the test's mutex name was deleted while
+the marker code around it was being rearranged, so the test target did not compile on the v0.59.0
+tag and CI could not run. The shipped binary was not affected, because the broken part sat behind
+`cfg(test)`.
+
+- The dead marker is gone. The `Local\winfw-mcp.serve.takeover` name it created was never read by
+  anything, which is what made it dead weight rather than unfinished work.
+- 0.59.1 is the fix. It is a patch release of its own rather than an amended tag, because the
+  handbook says a fix to a released milestone is a patch release, and because the tag was already
+  pushed and released.
+- Lesson for the process: a batch of parallel git calls in the same turn can interleave with an
+  `edit_file` on the same repository. The `index.lock` complaint was the visible symptom; the
+  invisible one was that the commit ran before the fix to the test. (2026-11-02)
