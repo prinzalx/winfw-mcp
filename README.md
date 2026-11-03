@@ -39,6 +39,7 @@ The documentation is split into chapters, so that each question has one place to
 Working documents next to this index: [PLAN.md](PLAN.md) is the plan and its rationale,
 [BACKLOG.md](BACKLOG.md) the collected follow-ups and audit findings,
 [CHANGELOG.md](CHANGELOG.md) the release-by-release history,
+[JOURNAL.md](JOURNAL.md) the diary of the release rounds that produced the tool,
 [SECURITY_REVIEW.md](SECURITY_REVIEW.md) the brief for an outside review of the request path.
 
 ## Status
