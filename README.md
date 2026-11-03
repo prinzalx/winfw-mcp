@@ -73,7 +73,13 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.67.0**: a rules file that cannot be parsed says so in the log. The
+The current release is **0.68.0**: a backlog finding closed by reading the code, not by changing it.
+The note claimed that tests write into the running tool's data directory because `DataPaths::resolve()`
+knows only `%APPDATA%\winfw-mcp`. It does, and `main` is its only caller — every test that touches a
+file works in a scratch directory already, so nothing had to be fixed and the `WINFW_DATA` override
+this note asked for was not added.
+
+Before it, **0.67.0**: a rules file that cannot be parsed says so in the log. The
 fallback to the previous generation has been warned about since 0.24.0, but the rule file was read
 before the log subscriber existed, so the warning was dropped and the page showed the backup's rules
 while the file on disk held something else.
