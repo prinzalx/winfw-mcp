@@ -179,7 +179,8 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | `POST /api/detected/dismiss` | drop a detected application or destination without deciding |
 | `POST /api/clear` | remove our filters from the store |
 | `POST /api/protection` | pause or resume: an empty body flips, `{"enabled":true}` asks for one of the two |
-| `POST /api/shutdown` | stop the server, which ends the process; the filters stay installed |
+| `POST /api/shutdown` | stop the server, which ends the process; the installed filters stay |
+| `POST /api/quit` | take our filters out of the store, then stop the process; the answer reports both apart |
 | `POST /api/export` | copy the rules, the config, the Detected list and the profiles into `export\`, and name the active profile in `profile.txt` |
 | `POST /api/rules/share` | one rule as a Base64 string, for copy and paste |
 | `POST /api/rules/import` | append the rule a Base64 string carries |
@@ -266,9 +267,11 @@ endpoint offers the same string as `rules.share`.
 
 ## Stopping the page's server
 
-The `Quit` button posts `/api/shutdown`. That ends the process, not merely the request, so the page
-reports what happened instead of reloading a server that is no longer there. The filters stay in
-the firewall; `--clear` is what removes them. See [lifecycle](08-lifecycle.md#stopping).
+The `Quit` button posts `/api/quit`, which takes our filters out of the store before it ends the
+process, so the machine is left as it was found. That ends the process, not merely the request, so
+the page reports what happened instead of reloading a server that is no longer there, and it says
+whether the store cooperated. A script that wants the other stop — process out, rules in place —
+posts `/api/shutdown`. See [lifecycle](08-lifecycle.md#stopping).
 
 ---
 

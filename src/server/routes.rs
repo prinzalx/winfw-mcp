@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::export::{self, Area};
 use crate::learn::Detected;
@@ -42,6 +42,7 @@ impl Server {
             // Stopping is a flag rather than a signal: the main thread is parked in `accept`, and
             // only the accept loop itself can leave it.
             ("POST", "/api/shutdown") => post_shutdown(state),
+            ("POST", "/api/quit") => post_quit(state, worker),
             ("GET", "/api/health") => Ok(Response::text(200, "ok")),
             ("POST", "/api/clear") => post_clear(worker),
             ("POST", "/api/protection") => post_protection(state, worker, request),
@@ -209,6 +210,38 @@ fn post_shutdown(state: &AppState) -> Result<Response> {
     Response::json(200, &serde_json::json!({ "stopping": stopping }))
 }
 
+/// What `POST /api/quit` answers: whether the store took our filters out, and whether this request
+/// was the one that stopped the loop.
+///
+/// `Quit` means as if nothing had been done: the filters go out with the process, block and allow
+/// alike. `POST /api/shutdown` is the other way out and leaves them in place, which is what a user
+/// who wants the protection to outlive the process chooses. Stopping happens either way, because a
+/// process that refused to stop over a store it cannot reach would be stuck behind the dialog that
+/// asked for the stop.
+fn post_quit(state: &AppState, worker: &WfpWorker) -> Result<Response> {
+    let cleared = match worker.ask(StoreWork::Clear) {
+        Ok(outcome) => {
+            info!(store = %outcome.describe(), "quit: our filters went out of the store");
+
+            true
+        }
+        Err(error) => {
+            warn!(reason = %format!("{error:#}"), "quit could not clear the store");
+
+            false
+        }
+    };
+
+    let stopping = state.request_stop();
+
+    info!(first = stopping, "quit requested");
+
+    Response::json(
+        200,
+        &serde_json::json!({ "stopping": stopping, "cleared": cleared }),
+    )
+}
+
 /// What `POST /api/relaunch` answers: the stop of this process after the shell granted an
 /// elevated start of it.
 ///
@@ -220,7 +253,10 @@ fn post_relaunch(state: &AppState) -> Result<Response> {
         bail!("the tool is already elevated");
     }
 
-    crate::elevated::relaunch_elevated()?;
+    // No arguments: a serving process asks for another serving process, and
+    // `relaunch_arguments` turns that into the `--takeover` flag the newcomer needs in order to
+    // wait for the instance name this one still holds.
+    crate::elevated::relaunch_elevated(&[])?;
 
     let stopping = state.request_stop();
 
@@ -1401,6 +1437,37 @@ pattern = "C:\\Windows\\two.exe"
             serde_json::from_slice(&repeated.body).expect("the shutdown answer is json");
 
         assert_eq!(body["stopping"], false, "only the first request stops");
+    }
+
+    /// `POST /api/quit` is the way out that leaves nothing behind: it takes our filters out of the
+    /// store before it clears the flag the accept loop waits on. A store that refuses the clear
+    /// must not stop the process from stopping, which is why the answer reports the two apart.
+    #[test]
+    fn a_quit_request_clears_the_store_and_stops() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("POST", "/api/quit", vec![]),
+        )
+        .expect("route");
+
+        assert_eq!(response.status, 200);
+
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.body).expect("the quit answer is json");
+
+        assert_eq!(body["stopping"], true, "the first request stops");
+        assert!(
+            body["cleared"].is_boolean(),
+            "the answer says whether the store took the filters out: {body}",
+        );
+        assert!(
+            !server_state.running.load(Ordering::SeqCst),
+            "a quit stops the loop whether or not the store cooperated",
+        );
     }
 
     #[test]

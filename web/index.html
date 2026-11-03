@@ -1849,17 +1849,18 @@
       });
 
       // Stopping ends the process, so the page says what happened rather than reloading a server
-      // that is no longer there. The filters stay installed; `Clear our filters` is what removes
-      // them.
+      // that is no longer there. `Quit` takes our filters out with it, which is what the tools
+      // section asks before running it. The other way out — stop and leave the rules in the
+      // firewall — is `/api/shutdown`, and a script can still call it.
       el("quit").addEventListener("click", async () => {
-        if (!confirm("Stop winfw-mcp? The rules stay in the firewall.")) {
+        if (!confirm("Stop winfw-mcp and take its filters out of the firewall?")) {
           return;
         }
 
         try {
-          await request("POST", "/api/shutdown", {});
+          const answer = await request("POST", "/api/quit", {});
 
-          status("stopped");
+          status(answer.cleared ? "stopped, filters removed" : "stopped, store refused the clear");
         } catch (error) {
           status("could not stop: " + error.message);
         }

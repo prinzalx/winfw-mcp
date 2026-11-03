@@ -700,13 +700,16 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
         }
 
         if choice.0 == MENU_QUIT as i32 {
-            // Clearing the flag is what stops the accept loop and with it the process. On its own
-            // `PostQuitMessage` ends only this thread's message loop, which would leave a running
-            // server behind with no icon in the notification area.
-            if let Some(running) = SERVER_RUNNING
-                .lock()
-                .expect("running lock poisoned")
-                .as_ref()
+            // `Quit` means as if nothing had been done, so the filters go out through the route
+            // that takes them out and stops the accept loop. On its own `PostQuitMessage` ends
+            // only this thread's message loop, which would leave a running server behind with no
+            // icon in the notification area, so the flag is cleared as well when the request did
+            // not get through.
+            if !api_post("/api/quit", "{}")
+                && let Some(running) = SERVER_RUNNING
+                    .lock()
+                    .expect("running lock poisoned")
+                    .as_ref()
             {
                 running.store(false, Ordering::SeqCst);
             }

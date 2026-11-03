@@ -1752,6 +1752,9 @@ the next write of that file renames over the same name — and the directory hol
 
 ## 61. Started by hand: four things the first manual run asked for (2026-11-02)
 
+All four are closed. Finding 4 was the dead page script and the redesign fixed it; findings 1, 2
+and 3 are 0.69.0, and what it decided is written in §67.
+
 The tool was started by hand from PowerShell and from Explorer, elevated. Four findings, in the order
 the owner gave them. These are decisions, not open questions.
 
@@ -1957,3 +1960,37 @@ above it and was missing from the table entirely, which is how the §64 note abo
 the first place. It is restored from the tag, wording unchanged. One older row (0.24.0) still carries a
 `|` inside its text and so renders a third column; left as it is, because fixing it means reading the
 whole row for a rendering nit.
+
+## 67. The three start findings, and who is allowed to ask (2026-11-02)
+
+§61 listed four findings from the first manual run. The fourth was the dead page script, and the
+redesign fixed it. These are the other three, and 0.69.0 is what closes them.
+
+1. **No parameters printed nothing and applied the rules.** A release build has no console, so a
+   double-click looked like a tool that does nothing at all while the store had been rewritten
+   behind the scenes. Without parameters the tool now prints its parameters and a minimal start
+   example and touches neither the files nor the store. The one-shot that installs the rules got
+   its own flag, `--apply`.
+   *Closed in 0.69.0.*
+2. **An unelevated start limped.** It ran, could not read or write the store, and logged
+   `0x00000005`. It now asks in a dialog whether to restart as administrator with the same
+   parameters, and the dialog names what staying means: no rule is installed, and the page shows a
+   store it cannot confirm. A refused dialog is an ordinary answer and the run continues unelevated.
+   An import is not asked about, because it only writes files.
+   *Closed in 0.69.0.*
+3. **`Quit` left the filters behind.** §2 item 6 and the note behind B1 in §1 explain why it was
+   that way; the live note in §61 tells what it felt like. `Quit` now takes our filters out of the
+   store before the process stops, which is what the owner asked for: as if nothing had been done.
+   The old behaviour did not go away, it got its own route, because keeping the protection while the
+   process ends is the option somebody wants the other time.
+   *Closed in 0.69.0.*
+
+One decision follows from finding 3 and is worth writing down, because it is a decision about who is
+allowed to ask. The page's `Quit` button is behind the session token, so only the tab the tray opened
+can press it. The tray reaches the same route over the loopback socket with that token. `POST
+/api/shutdown` is the route a script can reach without a token, so the stop that removes the rules is
+the one a person at the icon chooses and the stop that keeps them is the one a program asks for.
+
+*Open, and deliberately so:* the owner has not decided whether an MCP client should be able to ask
+for a stop at all. `shutdown` left the MCP tool list when MCP became read-only, which is honest but
+also means an agent cannot ask for the one action it is surely allowed to take.

@@ -51,8 +51,10 @@ application no rule speaks about yet in a Detected list, where each entry can be
 dismissed from the browser. In a release build it runs without a console window and lives as a tray
 icon. Any area can be copied into `export\` on demand, one rule travels as a Base64 string, and an
 MCP agent talks JSON-RPC to `POST /mcp`. Rules are organised into named profiles, protection can be
-paused from the page or from the tray menu, and stopping the tool — from either — leaves the filters
-in place. A rule file written by the C original can be read in with `--import <file>`.
+paused from the page or from the tray menu. `Quit` takes the tool's filters out of the store with it,
+so the machine is as it was before it ran; `POST /api/shutdown` is the stop that leaves them in
+place. A rule file written by the C original can be read in with `--import <file>`, and a run without
+parameters only prints what it understands.
 
 The MCP endpoint reads only, on purpose: an agent that could write a rule could open its own gate,
 and that is the one thing a firewall in front of an agent should not allow.
@@ -73,7 +75,13 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.68.0**: a backlog finding closed by reading the code, not by changing it.
+The current release is **0.69.0**: the three things a manual start asked for. Without parameters the
+tool now prints its parameters and the shortest start instead of rewriting the live store, an
+unelevated start asks for administrator rights rather than limping along with an unreadable store,
+and `Quit` takes our filters out of the store so the machine ends as it was found. The stop that
+keeps the installed rules is still there as `POST /api/shutdown`.
+
+Before it, **0.68.0**: a backlog finding closed by reading the code, not by changing it.
 The note claimed that tests write into the running tool's data directory because `DataPaths::resolve()`
 knows only `%APPDATA%\winfw-mcp`. It does, and `main` is its only caller — every test that touches a
 file works in a scratch directory already, so nothing had to be fixed and the `WINFW_DATA` override

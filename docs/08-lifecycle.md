@@ -180,17 +180,24 @@ worth knowing:
 
 Both routes end the process rather than only the tray thread:
 
-- the page's `Quit` button posts `POST /api/shutdown`;
-- the tray's `Quit` clears the same flag.
+- the page's `Quit` button posts `POST /api/quit`;
+- the tray's `Quit` posts the same route over the loopback socket, with the session token in a
+  header, and falls back to clearing the flag itself when the request does not get through.
 
 The flag is `AppState::running`. The accept loop waits on it, and after it is cleared the loop waits
 a short grace period so the client that asked for the stop receives its reply before the process
 ends. The MCP endpoint no longer offers that action: `shutdown` was a writing tool and is gone,
 so an agent cannot stop the process and the page or the tray has to do it.
 
-**Stopping keeps the rules.** The filters we install are persistent and outlive the process, so the
-firewall still enforces what `rules.toml` says after the tool is gone. `--clear` is what takes our
-filters out of the live store again.
+**`Quit` takes the rules with it.** The route asks the store for a clear before it clears the flag,
+so the machine is as it was before the tool ran: no allow, no deny, nothing installed. This is the
+answer to a tool that was started to look around.
+
+**`POST /api/shutdown` keeps them.** The filters we install are persistent and outlive the process,
+so a shutdown leaves the firewall enforcing what `rules.toml` says after the tool is gone. That is
+the option for someone who wants the protection to outlive the tool, and since 0.69.0 it is the
+option a script has to ask for by name: the page and the tray both take the route that clears. A
+one-shot `--clear` does the same to the store without stopping anything.
 
 The exception is `volatile_filters = true`: the server then sends itself one last clear on the way
 out, and the rules go with the process. A *killed* process never reaches that last step; the

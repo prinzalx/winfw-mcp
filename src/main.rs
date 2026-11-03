@@ -47,12 +47,17 @@ fn tray_url(url: &str, token: &str) -> String {
 
 /// What the process should do with the live store.
 ///
-/// The two one-shot operations are the two the web UI exposes as well; `Serve` is the mode the
-/// tool is meant to run in, and it keeps the process alive instead of applying and exiting.
+/// A run that names no flag changes nothing and only prints its parameters: a portable tool is
+/// started by double-click, and installing filters that nobody asked for is not a harmless guess.
+/// The one-shot operations are the ones the web UI exposes as well; `Serve` is the mode the tool is
+/// meant to run in, and it keeps the process alive instead of applying and exiting.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 enum Command {
-    /// Push the loaded rules into the live store.
+    /// Print the parameters and a minimal start example, and touch neither the files nor the
+    /// store. This is what no arguments mean.
     #[default]
+    Usage,
+    /// Push the loaded rules into the live store.
     Apply,
     /// Take our filters out of the live store again.
     Clear,
@@ -73,23 +78,71 @@ impl Command {
     fn parse(args: &[String]) -> Result<Self> {
         match args {
             [] => Ok(Self::default()),
+            [flag] if flag == "--apply" => Ok(Self::Apply),
             [flag] if flag == "--clear" => Ok(Self::Clear),
             [flag] if flag == "--serve" => Ok(Self::Serve),
             [flag] if flag == "--takeover" => Ok(Self::Takeover),
             [flag, path] if flag == "--import" => Ok(Self::Import(PathBuf::from(path))),
-            [flag] => bail!("unknown argument '{flag}'; expected --clear or --serve (see --help)"),
+            [flag] => bail!(
+                "unknown argument '{flag}'; expected --serve, --apply, --clear or --import (see \
+                 --help)"
+            ),
             _ => bail!("too many arguments; expected at most one flag"),
         }
     }
+}
+
+/// Every parameter the process understands, and the shortest start that does something.
+///
+/// Both `--help` and a run without parameters print this. A release build has no console, so a
+/// double-click still shows nothing; whoever starts the tool from a shell is the reader, and for
+/// them the difference between "nothing happened" and "this tool is broken" is this text.
+fn usage() -> String {
+    // One entry per line, joined afterwards, because the line continuation of a string literal
+    // swallows the leading spaces that make a usage block readable.
+    [
+        "winfw-mcp [ --serve | --apply | --clear | --import <profile.xml> ]",
+        "",
+        "    (no flag)      print this text and change nothing",
+        "    --serve        run the web server until the process is stopped",
+        "    --takeover     same, but wait briefly for an instance that is stopping (relaunch)",
+        "    --apply        load the rules and install them in the live store",
+        "    --clear        remove our filters from the live store",
+        "    --import       read a simplewall profile into the active rule file, replacing it",
+        "    --help, -h     show this text",
+        "    --version, -V  print the version",
+        "",
+        "Reading and writing the store needs elevation. Without it no rule is installed and the",
+        "page shows a store it cannot confirm.",
+        "",
+        "Start it with:",
+        "",
+        "    winfw-mcp.exe --serve",
+    ]
+    .join("\n")
+        + "\n"
+}
+
+/// The text of the dialog that asks for an elevated start.
+///
+/// It names the downside of answering no, because the alternative is a tool that looks like it runs
+/// while the firewall it is supposed to own stays untouched.
+fn elevation_question() -> String {
+    String::from(
+        "winfw-mcp reads and writes the Windows Filtering Platform store, and that needs\n\
+         administrator rights.\n\
+         \n\
+         Without them no rule is installed and the page shows a store it cannot confirm.\n\
+         \n\
+         Restart winfw-mcp as administrator now?",
+    )
 }
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!(
-            "winfw-mcp [ --serve | --takeover | --clear | --import <profile.xml> ]\n\n    (no flag)      load the rules and install them in the live store\n    --serve        run the web server until the process is stopped\n    --takeover     same, but wait briefly for an instance that is stopping (used by a relaunch)\n    --clear        remove our filters from the live store\n    --import       read a simplewall profile into the active rule file, replacing it\n    --help, -h     show this text\n    --version, -V  print the version\n\nReading and writing the store needs elevation."
-        );
+        print!("{}", usage());
 
         return Ok(());
     }
@@ -101,6 +154,15 @@ fn main() -> Result<()> {
     }
 
     let command = Command::parse(&args)?;
+
+    // No flag means a double-click, and a double-click that rewrites the live store surprised
+    // everyone who tried it. Print the parameters and the shortest start instead, and leave both
+    // the files and the store exactly as they were: this returns before a file is read or written.
+    if command == Command::Usage {
+        print!("{}", usage());
+
+        return Ok(());
+    }
 
     // Everything the tool owns lives under one directory, resolved before anything else reads
     // or writes a file.
@@ -143,6 +205,29 @@ fn main() -> Result<()> {
         log_level = %settings.log_level,
         "settings loaded",
     );
+
+    // Reading and writing the live store needs elevation, and a portable tool is started by
+    // double-click, which is unelevated. An unelevated run used to limp along and log access-denied
+    // warnings; now it asks for an elevated start with the same parameters and stops here, because
+    // a firewall that cannot write its rules is not a firewall. An import only touches files and
+    // is therefore not asked about.
+    if !matches!(command, Command::Import(_)) && !elevated::is_elevated() {
+        if elevated::ask_elevated(&elevation_question()) {
+            match elevated::relaunch_elevated(&args) {
+                Ok(()) => {
+                    info!("asked the shell to restart as administrator; this run stops here");
+
+                    return Ok(());
+                }
+                Err(error) => warn!(
+                    reason = %format!("{error:#}"),
+                    "the elevated restart was refused; continuing unelevated",
+                ),
+            }
+        } else {
+            warn!("running unelevated: no rule is installed and the page cannot confirm the store");
+        }
+    }
 
     // A rule file that does not exist yet is created with the two example rules, so the first
     // screen shows what a rule looks like instead of an empty table. A file a person has emptied
@@ -397,10 +482,10 @@ fn sync_store(rules: &RuleFile, command: Command, known: &[String], policy: Poli
         Command::Clear => engine.clear().map(|removed| {
             info!(removed, "our filters removed from WFP");
         }),
-        // None of these three reaches `sync_store`: `serve` and `takeover` return into their own
-        // loop, and an import stops after writing the rule file. The arms only keep the match
-        // honest.
-        Command::Serve | Command::Takeover | Command::Import(_) => Ok(()),
+        // None of these four reaches `sync_store`: `serve` and `takeover` return into their own
+        // loop, an import stops after writing the rule file, and a run without parameters prints
+        // its usage and leaves. The arms only keep the match honest.
+        Command::Usage | Command::Serve | Command::Takeover | Command::Import(_) => Ok(()),
     };
 
     if let Err(error) = outcome {
@@ -491,7 +576,11 @@ mod tests {
     /// mistake, and it is the reason `parse` refuses instead of shrugging.
     #[test]
     fn the_one_flag_names_the_command() {
-        assert_eq!(Command::parse(&[]).expect("no flag"), Command::Apply);
+        assert_eq!(Command::parse(&[]).expect("no flag"), Command::Usage);
+        assert_eq!(
+            Command::parse(&["--apply".to_owned()]).expect("--apply"),
+            Command::Apply,
+        );
         assert_eq!(
             Command::parse(&["--serve".to_owned()]).expect("--serve"),
             Command::Serve,
@@ -507,6 +596,43 @@ mod tests {
         assert_eq!(
             Command::parse(&["--import".to_owned(), "profile.xml".to_owned()]).expect("--import"),
             Command::Import("profile.xml".into()),
+        );
+    }
+
+    /// A run without parameters changed nothing for a long time and surprised everyone who
+    /// double-clicked the tool, which is why it now prints its parameters. Printing them is only
+    /// useful if the shortest start that does something is among them.
+    #[test]
+    fn the_usage_names_the_flags_and_the_shortest_start() {
+        let text = super::usage();
+
+        for flag in ["--serve", "--apply", "--clear", "--import", "--takeover"] {
+            assert!(text.contains(flag), "the usage is missing {flag}");
+        }
+
+        assert!(
+            text.contains("winfw-mcp.exe --serve"),
+            "the usage ends with a minimal start example",
+        );
+        assert!(
+            text.contains("print this text and change nothing"),
+            "no parameters must say that they change nothing",
+        );
+    }
+
+    /// The dialog is the whole argument for the elevated start, so the downside of answering no has
+    /// to be in it: a person reading a dialog should not have to look anything up.
+    #[test]
+    fn the_elevation_question_names_the_downside() {
+        let question = super::elevation_question();
+
+        assert!(
+            question.contains("no rule is installed"),
+            "the question says what is lost: {question}",
+        );
+        assert!(
+            question.contains("administrator"),
+            "the question names what it asks for: {question}",
         );
     }
 

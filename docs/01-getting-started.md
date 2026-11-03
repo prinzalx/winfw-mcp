@@ -48,7 +48,8 @@ to the same live store, and the result then depends on which of them finished la
 ## Commands
 
 ```
-winfw-mcp                   load rules.toml and install it in the live store, then exit
+winfw-mcp                   print the parameters and a minimal start example, change nothing
+winfw-mcp --apply           load rules.toml and install it in the live store, then exit
 winfw-mcp --serve           run the web server until stopped
 winfw-mcp --takeover        the same, but wait briefly for an instance that is stopping; a
                             relaunch starts its elevated copy this way
@@ -64,6 +65,11 @@ live store, because the point of the import is to look at the result on the page
 whether it is worth installing. What the shape of a profile does not fit is written into the comment
 of the rule it came from, or reported as a note in the log when no rule came from it at all.
 
+No flag means a double-click, and since 0.69.0 it means *nothing*: the parameters are printed and
+neither the files nor the store are touched. Installing the rules that way was what surprised people
+before, because a release build has no console and a double click appeared to do nothing at all while
+the store had been rewritten behind the scenes. `--apply` is the one-shot that does it on purpose.
+
 An unknown flag is an error rather than a shrug, so a mistyped option cannot silently install
 filters nobody asked for. Only one `--serve` may run at a time: a second start finds the name
 taken, logs one line, and ends with a non-zero status without opening anything. See
@@ -71,9 +77,18 @@ taken, logs one line, and ends with a non-zero status without opening anything. 
 
 ## Elevation
 
-An apply needs elevation: without it the store reports access denied and the rules are not
-installed. [The WFP internals](07-wfp-internals.md#reading-the-store-needs-elevation) describe what
-that degraded state looks like and why the UI shows a banner instead of an empty list.
+Reading and writing the store needs elevation. An unelevated start therefore asks, in a dialog, for
+an elevated start of the same command; the dialog says what staying means, which is that no rule is
+installed and the page shows a store it cannot confirm. Answering no is a supported answer and the
+run continues, and a refused UAC dialog is treated the same way. An import is not asked about,
+because it only reads and writes files.
+
+The elevated copy of a serving run is started with `--takeover`, waits a few seconds for the
+instance name the asking process still holds, and brings its own token and its own tray. A token is
+never handed from one process to the other.
+
+[The WFP internals](07-wfp-internals.md#reading-the-store-needs-elevation) describe what a refused
+store looks like and why the UI shows a banner instead of an empty list.
 
 ---
 
