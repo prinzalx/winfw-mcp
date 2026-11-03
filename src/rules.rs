@@ -764,21 +764,75 @@ impl RuleFile {
 /// is refused outright: the version turns that refusal into a message that names the versions.
 pub const RULE_FILE_VERSION: u32 = 1;
 
-/// What `rules.toml` holds: the version and the rules.
+/// What `rules.toml` holds: the version, the checksum of the body, and the rules.
 ///
-/// The version is deliberately not a field of [`RuleFile`], which is built by hand in a dozen
-/// places and would have to carry a version none of them cares about.
+/// The version and the checksum are deliberately not fields of [`RuleFile`], which is built by hand
+/// in a dozen places and would have to carry two things none of them cares about.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RuleFileDisk {
     #[serde(default)]
     version: u32,
     #[serde(default)]
+    checksum: Option<String>,
+    #[serde(default)]
     rule: Vec<Rule>,
 }
 
+/// The checksum a rule file carries over its own body.
+///
+/// The reference ends its files with a hash of the body, which catches a file that still parses but
+/// lost content on the way to disk. This is the same idea with the FNV-1a hash [`Fingerprint`]
+/// already uses, because the goal is to notice an accident rather than to withstand an attacker,
+/// and the security chapter says that out loud.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checksum {
+    /// What the file named, or `None` when it named nothing.
+    stated: Option<String>,
+    /// What the rules the file holds hash to.
+    actual: String,
+}
+
+impl Checksum {
+    /// Whether the file and its contents disagree.
+    ///
+    /// A file that names no checksum disagrees as well, which is the honest answer: an older build
+    /// wrote no such line, and a person who deletes it has the same effect.
+    fn mismatched(&self) -> bool {
+        self.stated.as_deref() != Some(self.actual.as_str())
+    }
+}
+
+/// The body of a rule file: the rules alone, without the version and without the checksum.
+///
+/// Serialising the rules rather than cutting the text at the first table keeps the bytes that go
+/// into the hash the same on both sides of a round trip, which is the whole point of the field.
+fn body_text(rule: &[Rule]) -> Result<String> {
+    toml::to_string_pretty(&RuleFile {
+        rule: rule.to_vec(),
+    })
+    .context("serialize the rule body")
+}
+
+/// The text a rule file is written as.
+///
+/// The two scalars come first because TOML would otherwise read them as keys of the last `[[rule]]`
+/// table, and `Rule` refuses a field it does not know.
+fn file_text(rule: &[Rule]) -> Result<String> {
+    let body = body_text(rule)?;
+    let sum = Fingerprint::of(body.as_bytes()).hash;
+
+    Ok(format!(
+        "version = {RULE_FILE_VERSION}\nchecksum = \"{sum:016x}\"\n{body}"
+    ))
+}
+
 /// Read one file's bytes, refusing a version this build cannot know.
-fn parse_rule_file(bytes: &[u8]) -> std::result::Result<RuleFile, toml::de::Error> {
+///
+/// A checksum that does not match is not refused here. A hand edit changes it, and a rules file a
+/// person edited is an ordinary thing, so the caller is handed both values and decides how loudly to
+/// say so.
+fn parse_rule_file(bytes: &[u8]) -> std::result::Result<(RuleFile, Checksum), toml::de::Error> {
     use serde::de::Error as _;
 
     let disk = toml::from_slice::<RuleFileDisk>(bytes)?;
@@ -790,7 +844,16 @@ fn parse_rule_file(bytes: &[u8]) -> std::result::Result<RuleFile, toml::de::Erro
         )));
     }
 
-    Ok(RuleFile { rule: disk.rule })
+    let body = body_text(&disk.rule)
+        .map_err(|error| toml::de::Error::custom(format!("checksum of the rule body: {error}")))?;
+
+    Ok((
+        RuleFile { rule: disk.rule },
+        Checksum {
+            stated: disk.checksum,
+            actual: format!("{:016x}", Fingerprint::of(body.as_bytes()).hash),
+        },
+    ))
 }
 
 impl RuleFile {
@@ -800,6 +863,9 @@ impl RuleFile {
     /// [`RuleFile::save`] is tried before the error is reported, which is what makes a torn or
     /// mistyped write survivable. Falling back is logged rather than silent, because the file on
     /// disk still holds what could not be read.
+    ///
+    /// A file that reads but whose checksum disagrees with its contents is read anyway and warned
+    /// about, because the disagreement has the same cause as a hand edit and the same cure.
     pub fn load_or_create(path: &Path) -> Result<Self> {
         let Some(bytes) = store::read_if_exists(path)? else {
             let rules = Self::default();
@@ -809,20 +875,26 @@ impl RuleFile {
         };
 
         match parse_rule_file(&bytes) {
-            Ok(rules) => Ok(rules),
+            Ok((rules, checksum)) => {
+                warn_checksum(path, &checksum);
+
+                Ok(rules)
+            }
             Err(error) => {
                 let backup = store::backup_path(path);
                 let Some(back_bytes) = store::read_if_exists(&backup)? else {
                     return Err(error).with_context(|| format!("parse {}", path.display()));
                 };
 
-                let rules = parse_rule_file(&back_bytes).with_context(|| {
-                    format!(
-                        "parse {} after {} failed: {error}",
-                        backup.display(),
-                        path.display()
-                    )
-                })?;
+                let rules = parse_rule_file(&back_bytes)
+                    .map(|(rules, _checksum)| rules)
+                    .with_context(|| {
+                        format!(
+                            "parse {} after {} failed: {error}",
+                            backup.display(),
+                            path.display()
+                        )
+                    })?;
 
                 warn!(
                     backup = %backup.display(),
@@ -841,17 +913,34 @@ impl RuleFile {
     /// that would fail to start the tool fails an import too: the version, the field names and the
     /// values a rule cannot hold are refused before anything is written.
     pub fn from_text(text: &str) -> Result<Self> {
-        parse_rule_file(text.as_bytes()).context("parse the imported rules")
+        let (rules, checksum) =
+            parse_rule_file(text.as_bytes()).context("parse the imported rules")?;
+
+        if checksum.mismatched() {
+            warn!(
+                stated = checksum.stated.as_deref().unwrap_or("none"),
+                found = %checksum.actual,
+                "imported rules file checksum does not match its contents",
+            );
+        }
+
+        Ok(rules)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        let disk = RuleFileDisk {
-            version: RULE_FILE_VERSION,
-            rule: self.rule.clone(),
-        };
-        let text = toml::to_string_pretty(&disk).context("serialize rules")?;
+        store::write_backup(path, file_text(&self.rule)?.as_bytes())
+    }
+}
 
-        store::write_backup(path, text.as_bytes())
+/// Say so when a file on disk does not hash to what it claims.
+fn warn_checksum(path: &Path, checksum: &Checksum) {
+    if checksum.mismatched() {
+        warn!(
+            file = %path.display(),
+            stated = checksum.stated.as_deref().unwrap_or("none"),
+            found = %checksum.actual,
+            "rules file checksum does not match its contents",
+        );
     }
 }
 
@@ -1593,6 +1682,64 @@ mod tests {
         assert!(
             text.contains(&RULE_FILE_VERSION.to_string()),
             "our version should be named too: {text}"
+        );
+    }
+
+    /// A file the tool wrote agrees with itself, which is the baseline the field is judged
+    /// against: write and read must hash the body the same way.
+    #[test]
+    fn a_written_rule_file_carries_a_checksum_of_its_body() {
+        let path = crate::testutil::scratch_dir("rules-checksum").join("rules.toml");
+
+        sample().save(&path).expect("save");
+
+        let text = std::fs::read_to_string(&path).expect("read back");
+
+        assert!(
+            text.contains("[[rule]]") && text.contains("checksum = \""),
+            "the version and the checksum are written before the body: {text}"
+        );
+
+        let (_rules, checksum) = parse_rule_file(text.as_bytes()).expect("parse");
+
+        assert!(
+            !checksum.mismatched(),
+            "a file the tool wrote agrees with itself: {checksum:?}"
+        );
+    }
+
+    /// The case the field exists for: a body that still parses but lost content on the way.
+    #[test]
+    fn a_body_edited_by_hand_disagrees_with_its_checksum() {
+        let path = crate::testutil::scratch_dir("rules-checksum-edit").join("rules.toml");
+
+        sample().save(&path).expect("save");
+
+        let text = std::fs::read_to_string(&path).expect("read back");
+        let edited = text.replace("telemetry", "telemetry2");
+
+        let (rules, checksum) = parse_rule_file(edited.as_bytes()).expect("the edited body parses");
+
+        assert_eq!(rules.rule.len(), 2, "the edit leaves both rules standing");
+        assert!(
+            checksum.mismatched(),
+            "a changed body must not agree with the checksum it carries: {checksum:?}"
+        );
+    }
+
+    /// A file from before the field carries nothing to compare against, which is a disagreement of
+    /// its own rather than a pass.
+    #[test]
+    fn a_file_without_a_checksum_is_read_and_reported() {
+        let (_rules, checksum) = parse_rule_file(
+            b"version = 1\n\n[[rule]]\nname = \"one\"\naction = \"allow\"\npattern = 'C:\\one.exe'\n",
+        )
+        .expect("a file without a checksum still reads");
+
+        assert_eq!(checksum.stated, None, "the file names no checksum");
+        assert!(
+            checksum.mismatched(),
+            "a missing checksum is reported, not passed over: {checksum:?}"
         );
     }
 }

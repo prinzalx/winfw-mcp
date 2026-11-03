@@ -375,9 +375,10 @@ Item 4 of the original list, and the news is mostly good:
 - Its file format has a **magic, a body-type flag and a SHA256 checksum** of the body, plus a schema
   version with migration. Since 0.24.0 `rules.toml` carries a version (`version = 1`): a file
   without the line is read as this version, and a newer one is refused with both versions named,
-  which is the graceful half of what the reference's migration does for us. A **checksum** is still
-  absent, so a file that parses but lost content is not noticed; the `.bak` in §3.3 is what covers
-  that case now instead.
+  which is the graceful half of what the reference's migration does for us. A **checksum** over the
+  body joined it in 0.70.0, so a file that parses but lost content is reported rather than believed.
+  It is reported rather than refused, because a hand edit breaks it just as surely as a torn write
+  does, and the `.bak` in §3.3 stays what covers the case where the content really is gone.
 - Wildcards are **our invention**: the reference has none for application paths and matches the
   application-ID blob exactly. Because WFP cannot match `*` or `?`, we expand a pattern against
   observed paths under a fixed cap of 32 (`src/wfp.rs`), which the log and the page report since 0.60.0
@@ -407,6 +408,27 @@ Item 4 of the original list, and the news is mostly good:
   be set for a subscription to fire at all — worth re-checking which session ours ends up on.
 - **Log discipline.** The reference caps its log file size and quotes every CSV field; ours is one
   unbounded append-only file.
+
+### 4.6 Services and the applications that host them
+
+The reference knows a kind of application we do not have. Where we resolve a connection to a process
+path, it asks the operating system for the process tag, and when that tag names a service the entry
+becomes a service of its own (`DATA_APP_SERVICE`, `network.c:715`) carrying the service name. The
+filter for such an entry does not match a path at all: it matches `FWPM_CONDITION_ALE_USER_ID`
+against a security descriptor (`wfp.c:972`), which is the service's SID. Two rules in the UI then
+apply a rule to the shared hosts as a convenience, `is_forservice` and `is_fordriver`, which add the
+`svchost` and `ntoskrnl` entries to it (`wfp.c:1331`).
+
+That is what a person means by a rule about a service, and it is the answer to the price the security
+chapter names for default deny: one permit for `svchost.exe` and every service in that host may reach
+the network, because DNS, DHCP and time sync are all the same path to us. We match on the path alone
+(`src/wfp.rs`), so a rule cannot single one service out.
+
+Two things make this more than a field to add. A service is a name, not a path, so a rule would carry
+a different kind of subject and the Detected list would collect names rather than paths. And the
+reference resolves a service to whichever process hosts it right now, which leaves the question what a
+rule about a service that is not running should do — a question the reference answers by simply not
+answering it. It is recorded here rather than started for that reason. (2026-11-03)
 
 ## 5. What is solid
 
@@ -451,10 +473,9 @@ Roughly by how much they cost to change later:
    is left is small: `port` needs a restart because the listener is already bound. `log_level` takes
    effect at once now, so all four settings the route names are live in the same request.
 5. **The four bugs in §1**, all small.
-6. ~~**Storage hardening**~~ — done in 0.24.0: rule-string validation (an absolute path, no
-   characters a path cannot hold), a previous-generation backup with a fallback on load, and a
-   version field in `rules.toml` (§4.4). A checksum of the body is the one part of the reference's
-   file format still not copied.
+6. ~~**Storage hardening**~~ — done in 0.24.0 for the validation, the backup and the version field, and
+   in **0.70.0** for the last piece: a checksum of the body in `rules.toml` (§4.4). Nothing of the
+   reference's file format is missing now, and no part of it is planned either.
 7. **Runtime finishing touches**: the single instance landed in 0.16.0, the icons in 0.17.0 and
    the tray menu (`Open`, `Pause learning`, `Quit`) in 0.21.0 and volatile filter mode
    (`volatile_filters`, taken out on a clean stop) in 0.22.0. Log rotation, which was the last
@@ -487,7 +508,7 @@ network or a span. What it still cannot:
   does not resolve names in a filter either; it names applications, not destinations.
 - **A service.** A rule names a path, and every service hosted by `svchost.exe` shares one path, so
   a rule cannot single one service out. The security chapter names the price of that under default
-  deny; nothing here resolves it.
+  deny, and §4.6 records what the reference does differently.
 
 Two of these are WFP work with the text format already settled, the name is a layer of its own, as
 §9 said, and the service is a match dimension nobody has designed yet. None of them was started,

@@ -80,6 +80,11 @@ that predates them, someone has to type the line to turn the switch on.
   earlier version has no line and is read as this version; a file from a newer one is refused, and the
   message names both versions. Since an unknown field is an error, the version is what turns "this
   binary is too old" into a sentence that says so.
+- **A rule file carries a checksum of its rules.** The line after the version names a hash over the
+  rules alone, so a file that still parses but lost content is noticed rather than believed. It is
+  reported in the log and read anyway, because a person who edits a rules file by hand breaks the
+  checksum as surely as a bad write does, and their edit is the one they meant. A file written before
+  the field existed names nothing, which is reported the same way.
 - **Load once, write immediately.** All settings are read at startup; every change made in the web
   UI is written straight back to disk. No save button, no dirty state.
 
