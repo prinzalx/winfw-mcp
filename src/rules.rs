@@ -616,7 +616,7 @@ impl<'de> Deserialize<'de> for PortRange {
 
 /// A single user rule.
 ///
-/// `pattern` may contain the wildcards `*` and `?` (PLAN.md section 4). Matching is our job,
+/// `pattern` may contain the wildcards `*` and `?` (plan section 4). Matching is our job,
 /// not the kernel's, so the string is stored exactly as the user typed it.
 ///
 /// `protocol`, `direction`, `port`, `remote` and `local` narrow the rule and are absent when it is
@@ -752,7 +752,7 @@ pub fn is_wildcard(pattern: &str) -> bool {
 ///
 /// Comparison is case-insensitive, because Windows paths are. Unlike a shell glob, `*` is not
 /// stopped by a path separator: a rule about `C:\Windows\*` is meant to cover everything below
-/// that directory, separators included, which is the reading PLAN.md section 4 promises.
+/// that directory, separators included, which is the reading plan section 4 promises.
 pub fn wildcard_match(pattern: &str, text: &str) -> bool {
     let pattern: Vec<char> = pattern.to_lowercase().chars().collect();
     let text: Vec<char> = text.to_lowercase().chars().collect();
@@ -827,7 +827,7 @@ pub fn reaches(rules: &RuleFile, path: &str, addr: std::net::IpAddr) -> bool {
 }
 
 /// The contents of `rules.toml`. Order is significant: the first matching rule wins, which is
-/// why an import has to preserve it (PLAN.md section 2).
+/// why an import has to preserve it (plan section 2).
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleFile {

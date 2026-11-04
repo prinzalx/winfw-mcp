@@ -214,7 +214,7 @@ macro_rules! enumerate {
 /// A handle to the WFP engine.
 ///
 /// The handle is process-wide and has to outlive every query and every write, so it belongs to
-/// the long-running core rather than to one request (PLAN.md section 5).
+/// the long-running core rather than to one request (plan section 5).
 #[derive(Debug)]
 pub struct Engine {
     handle: HANDLE,
@@ -223,7 +223,7 @@ pub struct Engine {
 /// The waits between attempts to open the engine, for as long as the Base Filtering Engine is
 /// allowed to still be coming up. During boot the service can answer "not available" for a few
 /// seconds, and a run that gave up on the first answer would serve its whole session without a
-/// store (PLAN.md section 5). One attempt runs before the first wait and one after each of them,
+/// store (plan section 5). One attempt runs before the first wait and one after each of them,
 /// so the policy is five attempts over 3.7 seconds.
 const OPEN_WAITS: [Duration; 4] = [
     Duration::from_millis(200),

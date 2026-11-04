@@ -1,6 +1,6 @@
 //! The tray icon: the only visible part of a portable tool.
 //!
-//! PLAN.md section 1 asked for a start popup that says the tool is running and shows its address.
+//! Plan section 1 asked for a start popup that says the tool is running and shows its address.
 //! That popup is the balloon the icon arrives with: it needs no window of its own, it closes
 //! itself, and it holds nobody up. Clicking the icon opens the browser on the UI, the right button
 //! offers `Open`, `Pause learning`, `Pause protection`, `Quit and remove rules` and `Quit and keep
@@ -745,7 +745,7 @@ fn wide(value: &str) -> Vec<u16> {
 /// The text of the start balloon: the address, without the token the tray opens the browser with.
 ///
 /// The token is thirty-odd characters the user did not ask for and cannot type, and a balloon is
-/// readable for a few seconds. The address alone is what PLAN.md section 1 wants shown, and the
+/// readable for a few seconds. The address alone is what plan section 1 wants shown, and the
 /// page gets its token from the fragment of the URL, so the shorter text loses nothing.
 #[cfg(windows)]
 fn balloon_text(url: &str) -> String {

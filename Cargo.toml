@@ -1,13 +1,13 @@
 [package]
 name = "winfw-mcp"
-version = "0.75.1"
+version = "0.75.2"
 edition = "2024"
 description = "Portable, web-driven Windows Firewall (WFP) controller with an MCP interface"
 license = "MIT"
 publish = false
 rust-version = "1.88"
 
-# Kept deliberately small: the HTTP server is `std` only (PLAN.md section 6). The `/mcp` endpoint
+# Kept deliberately small: the HTTP server is `std` only (plan section 6). The `/mcp` endpoint
 # was weighed against the `rmcp` crate and hand-written instead: four method names are not worth a
 # tokio runtime and an axum dependency (src/mcp.rs).
 [dependencies]

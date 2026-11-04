@@ -83,7 +83,7 @@ fn is_tool(name: &str) -> bool {
 
 /// The tools the endpoint offers, in the shape `tools/list` wants.
 ///
-/// Every one of them reads (PLAN.md section 10). A tool that would change a file or the store is
+/// Every one of them reads (plan section 10). A tool that would change a file or the store is
 /// not offered at all rather than refused at call time, so an agent cannot be tempted to write
 /// something it has no business writing, and the page keeps the editing to itself.
 /// The six tools the endpoint offers, and nothing else. Every one of them reads. Writing was
@@ -147,7 +147,7 @@ fn tool_list() -> Vec<serde_json::Value> {
 ///
 /// Every tool here reads. What a client cannot find is no longer a tool that refused a write but a
 /// tool that never existed: an endpoint that offers only questions cannot grant itself a firewall
-/// change it then has to explain (PLAN.md section 10).
+/// change it then has to explain (plan section 10).
 fn mcp_tool(
     state: &AppState,
     worker: &WfpWorker,

@@ -16,7 +16,7 @@ pub fn read_if_exists(path: &Path) -> Result<Option<Vec<u8>>> {
 /// Write `bytes` to `path` through a temporary sibling file, then rename.
 ///
 /// A crash or a power loss therefore never leaves a half-written `config.toml` behind, which
-/// matters because the WFP filters we generate are persistent (PLAN.md section 5).
+/// matters because the WFP filters we generate are persistent (plan section 5).
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let file_name = path
         .file_name()

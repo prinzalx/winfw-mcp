@@ -1,6 +1,6 @@
 //! Whether this process is elevated, and the one action an unelevated process can ask for.
 //!
-//! Reading and writing the live store need elevation (PLAN.md section 2), and a portable tool is
+//! Reading and writing the live store need elevation (plan section 2), and a portable tool is
 //! started by double-click, which is unelevated. The two questions that follow from this are
 //! answered here rather than guessed from a store refusal: is the process elevated, and can it ask
 //! the shell to start an elevated copy of itself?

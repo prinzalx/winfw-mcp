@@ -23,7 +23,7 @@ use super::worker::StoreOutcome;
 ///
 /// The rules are the in-memory copy that the request handlers keep authoritative: a change is
 /// applied to this value, written to disk, and only then pushed to the store, which is the order
-/// PLAN.md section 2 asks for.
+/// plan section 2 asks for.
 pub struct AppState {
     pub(super) paths: DataPaths,
     pub(super) settings: Settings,
@@ -48,7 +48,7 @@ pub struct AppState {
     /// What the rebuild at startup made of the store. Never changes afterwards: it is the record of
     /// the difference the process found between the store and the rules file.
     pub(super) startup: Startup,
-    /// The session token a writing request has to carry (PLAN.md section 11).
+    /// The session token a writing request has to carry (plan section 11).
     ///
     /// It lives here and nowhere else: no file, no log, and — since 0.58.0 — no answer body. The
     /// browser learns it from the fragment of the URL the tray opened, and a request that wants to
@@ -326,7 +326,7 @@ impl Live {
 
     /// Whether our filters are in the store right now.
     ///
-    /// Pausing protection is not a setting and reaches no file: it is the run-time switch PLAN.md
+    /// Pausing protection is not a setting and reaches no file: it is the run-time switch plan
     /// section 1 promises, and a restart is enforcing again, which is what a firewall is for.
     pub fn protection(&self) -> bool {
         self.protection.load(Ordering::SeqCst)
@@ -376,7 +376,7 @@ impl Default for Live {
 ///
 /// The store holds the filters the previous run left behind; the rules file describes the filters
 /// the user wants. When the two counts differ, something changed while the tool was not running,
-/// which PLAN.md section 6 asks to surface rather than only log. A refused store keeps its own
+/// which plan section 6 asks to surface rather than only log. A refused store keeps its own
 /// counts at zero, because nothing was read and nothing was written either.
 #[derive(Debug, Clone, Serialize)]
 pub struct Startup {

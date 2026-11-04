@@ -1,7 +1,7 @@
 //! Manual backups of the files the tool owns, plus the Base64 form of a single rule.
 //!
 //! Export is on demand rather than automatic: the real state already lives in AppData, and this is
-//! the "I want a copy in one folder" feature PLAN.md section 2 asks for. Import is deliberately
+//! the "I want a copy in one folder" feature plan section 2 asks for. Import is deliberately
 //! narrower than export: only a shared rule can come back in, and it is appended, so nothing that
 //! exists can be overwritten by accident.
 

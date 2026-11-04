@@ -274,7 +274,7 @@ fn post_clear(worker: &WfpWorker) -> Result<Response> {
 
 /// What `POST /api/protection` answers: the state as the firewall settled on it.
 ///
-/// The switch is the run-time pause PLAN.md section 1 promises, and it is the store that feels it:
+/// The switch is the run-time pause plan section 1 promises, and it is the store that feels it:
 /// paused means our filters are out of it, which leaves the machine on whatever the operating
 /// system and any other firewall decide. Resuming rebuilds from the rules that are loaded, so a
 /// rule edited while paused is installed by the resume rather than lost.
@@ -818,7 +818,7 @@ mod tests {
         serde_json::from_str(body).expect("a state body is JSON")
     }
 
-    /// The pause PLAN.md section 1 promises is a route rather than a tray detail, so the flip has
+    /// The pause plan section 1 promises is a route rather than a tray detail, so the flip has
     /// to be visible in the answer and in the state the process holds.
     #[test]
     fn the_protection_endpoint_flips_and_reports_what_it_became() {
@@ -1897,7 +1897,7 @@ pattern = "C:\\Windows\\two.exe"
     }
 
     /// The page cannot show the diff the process found before the listener existed unless the state
-    /// carries it, which is what PLAN.md section 6 asks for.
+    /// carries it, which is what plan section 6 asks for.
     #[test]
     fn the_state_endpoint_carries_the_startup_diff() {
         let mut server_state = state();

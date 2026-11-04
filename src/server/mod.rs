@@ -1,12 +1,12 @@
 //! The web server: a tiny HTTP/1.1 implementation on top of `std`.
 //!
-//! PLAN.md section 6 suggested axum and tokio, to be confirmed at implementation time. The
+//! Plan section 6 suggested axum and tokio, to be confirmed at implementation time. The
 //! confirmation is that they are not needed: every interesting call below ends in a blocking WFP
 //! call, so an async runtime would only move the blocking into `spawn_blocking`. A thread per
 //! connection with the standard library keeps the binary small, starts instantly, and gives
 //! milestone 5 (SSE) exactly the long-lived connection it needs.
 //!
-//! `winfw-core` rule from PLAN.md section 6: the `server` modules are a transport. They read and
+//! `winfw-core` rule from plan section 6: the `server` modules are a transport. They read and
 //! write the files and forward store work to the WFP worker, but decide nothing about the
 //! firewall.
 //!
@@ -128,7 +128,7 @@ impl Server {
     /// Bind `127.0.0.1:{port}`. Port 0 is allowed and resolves to an ephemeral port, which is what
     /// the tests use.
     pub fn bind(port: u16, state: AppState, worker: Arc<WfpWorker>) -> Result<Self> {
-        // A conflict on the configured port must not kill the tray app (PLAN.md section 9), so a
+        // A conflict on the configured port must not kill the tray app (plan section 9), so a
         // busy port is answered by the next one. Port 0 asks the OS for an ephemeral port and
         // cannot meaningfully fall forward.
         let attempts = if port == 0 { 1 } else { PORT_ATTEMPTS };

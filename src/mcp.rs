@@ -1,7 +1,7 @@
 //! The JSON-RPC 2.0 messages of the `/mcp` endpoint.
 //!
 //! Only the part of the protocol an MCP client actually sends on a stateless HTTP transport is
-//! modelled here: `initialize`, `tools/list`, `tools/call` and `ping`. PLAN.md section 6 kept the
+//! modelled here: `initialize`, `tools/list`, `tools/call` and `ping`. plan section 6 kept the
 //! option of `rmcp` open, and this is the point where that was weighed: the crate would bring a
 //! tokio runtime and an axum dependency for four method names, while the endpoint has to answer
 //! the same four questions either way. Hand-writing them keeps the binary small and the grammar

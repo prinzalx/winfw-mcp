@@ -20,7 +20,7 @@ pub struct Settings {
     /// a process that was started with `RUST_LOG` set loses that override to the first such
     /// change, because the new level replaces the filter the environment produced.
     pub log_level: String,
-    /// Collect connections that match no rule into the Detected list (PLAN.md section 3).
+    /// Collect connections that match no rule into the Detected list (plan section 3).
     pub learn_mode: bool,
     /// Presentation only, but stored so the browser and the file agree.
     ///
@@ -38,7 +38,7 @@ pub struct Settings {
     /// The named profile whose rules are live, or empty for `rules.toml` itself.
     ///
     /// A profile is a rule file under `profiles\<name>.toml`; naming it here is what makes the
-    /// choice survive a restart (PLAN.md section 10).
+    /// choice survive a restart (plan section 10).
     pub active_profile: String,
     /// Install the filters so they go out with the process instead of surviving it.
     ///

@@ -163,7 +163,7 @@ fn main() -> Result<()> {
     let logfile = paths.logs.join("winfw-mcp.log");
 
     // All state is read here, once. Later milestones keep the in-memory copy authoritative and write
-    // every change straight back (PLAN.md section 2). The settings come first because the log level
+    // every change straight back (plan section 2). The settings come first because the log level
     // is one of them, which makes them the only state read before a line can be written anywhere.
     let settings = Settings::load_or_create(&paths.config)?;
 
@@ -294,7 +294,7 @@ fn serve(
     let active_name = settings.active_profile.clone();
 
     // The secret a writing request has to carry. Generated here rather than read from a file, so a
-    // page that is not ours cannot guess it (PLAN.md section 11).
+    // page that is not ours cannot guess it (plan section 11).
     let token = server::session_token();
 
     // A second double-click must not mean a second server: two listeners, two tray icons and two

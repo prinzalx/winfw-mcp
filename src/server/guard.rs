@@ -26,7 +26,7 @@ pub fn session_token() -> String {
     }
 }
 
-/// Reject a request the wire says should not reach a route (PLAN.md section 11).
+/// Reject a request the wire says should not reach a route (plan section 11).
 ///
 /// The four checks answer four different mistakes, so they answer with four different codes:
 ///

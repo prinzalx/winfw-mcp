@@ -37,7 +37,7 @@ impl DataPaths {
     /// `%APPDATA%\winfw-mcp`.
     ///
     /// Portable here does not mean "next to the executable": always using AppData keeps the
-    /// behaviour identical wherever the exe is copied to (PLAN.md section 2).
+    /// behaviour identical wherever the exe is copied to (plan section 2).
     pub fn resolve() -> Result<Self> {
         let Some(appdata) = std::env::var_os("APPDATA") else {
             bail!("APPDATA is not set, cannot locate %APPDATA%\\winfw-mcp");

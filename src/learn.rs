@@ -2,7 +2,7 @@
 //!
 //! The C reference answers a new connection with a popup. A web UI has no modal to show while
 //! nobody is looking at the page, so unknown applications are collected here instead and the user
-//! decides later, from the browser (PLAN.md section 3).
+//! decides later, from the browser (plan section 3).
 //!
 //! The unit is the application, not the connection: one executable that makes a hundred
 //! connections is one decision, and the connection feed next to it is where the hundred are shown.
