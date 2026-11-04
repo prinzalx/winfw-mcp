@@ -264,8 +264,8 @@ rule mentions cannot connect until the human allows it from the Detected list. `
 selectable in `config.toml` and on the page, where traffic no rule mentions is left to the rest of
 the machine.
 
-That gap, and the other differences found while comparing, are collected in the
-[backlog](../BACKLOG.md).
+That gap, and the other differences found while comparing, are collected in the backlog, a working
+file that is not published in this repository.
 
 ---
 

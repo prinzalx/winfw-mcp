@@ -2,11 +2,12 @@
 
 The record of the rounds that produced the tool: one section per release round, in the order they
 were written. This file is a diary and is allowed to read like one, because it says what was found,
-what was decided, and why a decision was made the way it was. The open points are in
-[BACKLOG.md](BACKLOG.md), and the way the tool works today is in [the handbook](docs/01-getting-started.md).
+what was decided, and why a decision was made the way it was. The open points are in the backlog, a
+working file that is not published in this repository, and the way the tool works today is in
+[the handbook](docs/01-getting-started.md).
 
 The section numbers are the ones the notes had before they moved here, and the references in
-[BACKLOG.md](BACKLOG.md), [CHANGELOG.md](CHANGELOG.md) and the handbook still use them. A number
+[CHANGELOG.md](CHANGELOG.md) and the handbook still use them. A number
 therefore does not mean that the sections around it are nearby. Sections 7 to 50 and 52 on are here;
 section 51 stayed behind because it is a list of open findings rather than a round note.
 
@@ -1524,8 +1525,10 @@ also means an agent cannot ask for the one action it is surely allowed to take.
 ## Round: 0.75.0 — what the backlog is allowed to hold
 
 The backlog had grown into two documents in one file: the open points, and the record of what earlier
-rounds closed. Only the first is something you act on, so the closed material moved here and
-`BACKLOG.md` now holds open points, the audit findings still open, and the priorities.
+rounds closed. Only the first is something you act on, so the closed material moved here and the
+backlog now holds open points, the audit findings still open, and the priorities. The backlog is not
+published in the repository: an open point in a firewall is a finding a reader could work with, and
+the list names the gaps rather than the guarantees.
 
 Four things the user had asked for earlier were answered imperfectly and are settled by this round:
 
@@ -1544,7 +1547,7 @@ Four things the user had asked for earlier were answered imperfectly and are set
 
 ### Closed findings carried over from the backlog
 
-The text of what left `BACKLOG.md` in this round, so that a reference to a finding still finds it.
+The text of what left the backlog in this round, so that a reference to a finding still finds it.
 
 **The likely bugs (old §1), all fixed.** B1 `Quit` in the tray ended only the tray thread's message
 loop — fixed in 0.11.0, `AppState::running` is the flag the accept loop waits on. B2 `learn_mode` was

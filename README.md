@@ -52,9 +52,9 @@ The documentation is split into chapters, so that each question has one place to
 | [10. Security model](docs/10-security-model.md) | the session token, Host and Origin checks, what is protected, what an agent can see and what is not |
 
 Working documents next to this index: [PLAN.md](PLAN.md) is the plan and its rationale,
-[BACKLOG.md](BACKLOG.md) the open follow-ups, [CHANGELOG.md](CHANGELOG.md) the release-by-release
-history, [JOURNAL.md](JOURNAL.md) the diary of the release rounds that produced the tool,
-[SECURITY_REVIEW.md](SECURITY_REVIEW.md) the brief for an outside review of the request path.
+[CHANGELOG.md](CHANGELOG.md) the release-by-release history, [JOURNAL.md](JOURNAL.md) the diary of
+the release rounds that produced the tool, [SECURITY_REVIEW.md](SECURITY_REVIEW.md) the brief for an
+outside review of the request path.
 
 ## Status
 
@@ -75,5 +75,5 @@ The MCP endpoint reads only, on purpose: an agent that could write a rule could 
 and that is the one thing a firewall in front of an agent should not allow.
 
 Every release since **0.1.0** is listed with what changed in the
-[changelog](CHANGELOG.md). What is known to be missing or fragile is collected in the
-[backlog](BACKLOG.md), ranked in its last section.
+[changelog](CHANGELOG.md). What is known to be missing or fragile is kept in a working backlog that
+is not published here, because an open point in a firewall is a finding a reader could work with.

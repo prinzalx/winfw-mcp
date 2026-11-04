@@ -59,7 +59,7 @@ pub struct Settings {
     ///
     /// `deny` is the strict reading and the reason this tool exists: every connection is
     /// blocked at the lowest weight and the rules, the loopback permits and the IPv6 plumbing
-    /// permits are what lets traffic through again (BACKLOG section 4.1). It is the default, which
+    /// permits are what lets traffic through again. It is the default, which
     /// means a first run blocks applications it has no rule for; `allow` keeps the machine exactly
     /// as it was and is what a user who only wants a rule list next to the Windows Firewall picks.
     pub default_policy: Policy,

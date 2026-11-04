@@ -211,7 +211,8 @@ provider key before installing the new ones.
 
 ## Not implemented on purpose
 
-There is no service and no autostart. Adding either is tracked in the [backlog](../BACKLOG.md), and
+There is no service and no autostart. Adding either is tracked in the backlog, a working file that is
+not published in this repository, and
 each has to live with the fact that a portable tool is run by the user, not by a manager that could
 start it again.
 
