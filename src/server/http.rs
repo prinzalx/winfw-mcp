@@ -47,6 +47,8 @@ impl Headers {
 pub struct Request {
     pub(super) method: String,
     pub(super) path: String,
+    /// Everything after the `?`, as the browser sent it. Read by `GET /api/reverse` alone.
+    pub(super) query: String,
     pub(super) body: Vec<u8>,
     pub(super) headers: Headers,
 }
@@ -57,16 +59,24 @@ impl Request {
         Self {
             method: method.to_owned(),
             path: path.to_owned(),
+            query: String::new(),
             body,
             headers: Headers::default(),
         }
     }
 
     /// A request as the transport read it, headers included.
-    pub fn with_headers(method: &str, path: &str, body: Vec<u8>, headers: Headers) -> Self {
+    pub fn with_headers(
+        method: &str,
+        path: &str,
+        query: &str,
+        body: Vec<u8>,
+        headers: Headers,
+    ) -> Self {
         Self {
             method: method.to_owned(),
             path: path.to_owned(),
+            query: query.to_owned(),
             body,
             headers,
         }

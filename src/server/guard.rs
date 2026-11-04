@@ -180,6 +180,7 @@ mod tests {
         let request = Request::with_headers(
             method,
             "/api/rules",
+            "",
             br#"{"rule":[]}"#.to_vec(),
             Headers::from_pairs(&pairs),
         );
@@ -271,6 +272,7 @@ mod tests {
         let request = Request::with_headers(
             "POST",
             "/mcp",
+            "",
             br#"{"jsonrpc":"2.0","id":1,"method":"tools/call"}"#.to_vec(),
             Headers::from_pairs(&[]),
         );

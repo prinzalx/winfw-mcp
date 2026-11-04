@@ -44,6 +44,7 @@ impl Server {
             ("POST", "/api/shutdown") => post_shutdown(state),
             ("POST", "/api/quit") => post_quit(state, worker),
             ("GET", "/api/health") => Ok(Response::text(200, "ok")),
+            ("GET", "/api/reverse") => get_reverse(request),
             ("POST", "/api/clear") => post_clear(worker),
             ("POST", "/api/protection") => post_protection(state, worker, request),
             ("POST", "/api/export") => post_export(state, request),
@@ -61,6 +62,53 @@ impl Server {
             _ => Ok(Response::text(404, "not found")),
         }
     }
+}
+
+/// What `GET /api/reverse?ip=<address>` answers: `{"name": ...}` with the name the system
+/// resolver gives back for the address, or `{"name": null}` when it has none.
+fn get_reverse(request: &Request) -> Result<Response> {
+    let mut asked = None;
+
+    for pair in request.query.split('&') {
+        if let Some(rest) = pair.strip_prefix("ip=") {
+            asked = Some(percent_decode(rest));
+        }
+    }
+
+    let addr = match asked
+        .as_deref()
+        .map(|text| text.parse::<std::net::IpAddr>())
+    {
+        Some(Ok(addr)) => addr,
+        _ => return Ok(Response::text(400, "reverse wants ?ip=<address>")),
+    };
+
+    Response::json(
+        200,
+        &serde_json::json!({ "name": crate::dns::reverse(addr) }),
+    )
+}
+
+/// The addresses a browser sends need no alphabet beyond `%3A` for the colon of IPv6, which is
+/// also exactly what this decodes back.
+fn percent_decode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut bytes = text.bytes();
+
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let hex: String = bytes.by_ref().take(2).map(char::from).collect();
+
+            if let Ok(value) = u8::from_str_radix(&hex, 16) {
+                out.push(value as char);
+                continue;
+            }
+        }
+
+        out.push(byte as char);
+    }
+
+    out
 }
 
 /// What `/api/state` answers: the state together with a read of the store.
@@ -859,6 +907,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use crate::monitor::EventLog;
+    use crate::server::Headers;
     use crate::server::Live;
     use crate::server::testsupport::{TEST_TOKEN, connection, state, state_with};
 
@@ -1522,6 +1571,33 @@ pattern = "C:\\Windows\\two.exe"
         .expect("index 9 does not exist");
 
         assert!(format!("{response:#}").contains("index 9"), "{response:#}");
+    }
+
+    #[test]
+    fn reverse_reads_the_address_out_of_the_query() {
+        let request = Request::with_headers(
+            "GET",
+            "/api/reverse",
+            "ip=127.0.0.1",
+            Vec::new(),
+            Headers::default(),
+        );
+
+        let response = get_reverse(&request).expect("an answer");
+
+        assert_eq!(response.status, 200);
+
+        let body: serde_json::Value = serde_json::from_slice(&response.body).expect("json");
+
+        assert!(body.get("name").is_some());
+    }
+
+    #[test]
+    fn reverse_refuses_a_query_without_an_address() {
+        let request =
+            Request::with_headers("GET", "/api/reverse", "", Vec::new(), Headers::default());
+
+        assert_eq!(get_reverse(&request).expect("an answer").status, 400);
     }
 
     #[test]

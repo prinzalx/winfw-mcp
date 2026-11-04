@@ -315,8 +315,8 @@ fn handle_connection(
         reader.read_exact(&mut body).context("read request body")?;
     }
 
-    let path = target.split('?').next().unwrap_or(target).to_owned();
-    let request = Request::with_headers(method, &path, body, Headers::from_pairs(&fields));
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let request = Request::with_headers(method, path, query, body, Headers::from_pairs(&fields));
 
     debug!(method = %request.method, path = %request.path, "request");
 
@@ -611,11 +611,12 @@ mod tests {
     /// `appendChild` answers with the child it inserted, not with the node it was called on, so
     /// building the target table of a connection through its return value left the table without a
     /// `tbody`, and the row that was looking for one took the whole state render with it (§62.4).
-    /// The page stayed empty on every tab while the state behind it was full.
+    /// The page stayed empty on every tab while the state behind it was full. The reconciler holds
+    /// the body as `row.tbody` now, which is the same lesson in a new shape.
     #[test]
     fn the_connection_targets_keep_a_body_of_their_own() {
         assert!(
-            INDEX_HTML.contains("tbody.appendChild(tr)"),
+            INDEX_HTML.contains("row.tbody.insertBefore(tr"),
             "the target rows have to go into a body the script holds itself",
         );
         assert!(

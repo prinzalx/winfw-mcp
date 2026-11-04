@@ -20,6 +20,116 @@ use tracing::warn;
 
 use crate::rules::{Remote, Remotes, Rule};
 
+/// The name an address resolves back to, or `None` when it has none. The answer is kept for
+/// the life of the process, refusals included: the page asks once per address on every repaint
+/// of the connection list, and an address without a name should cost no second query.
+pub fn reverse(ip: std::net::IpAddr) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    static CACHE: Mutex<Option<HashMap<std::net::IpAddr, Option<String>>>> = Mutex::new(None);
+
+    let mut guard = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cache = guard.get_or_insert_with(HashMap::new);
+
+    if let Some(name) = cache.get(&ip) {
+        return name.clone();
+    }
+
+    let name = reverse_lookup(ip);
+
+    cache.insert(ip, name.clone());
+    name
+}
+
+/// The system call behind [`reverse`]. `NI_NAMEREQD` keeps the answer honest: without it a
+/// missing name record comes back as the address itself, printed rather than resolved.
+#[cfg(windows)]
+fn reverse_lookup(ip: std::net::IpAddr) -> Option<String> {
+    use windows::Win32::Networking::WinSock::{
+        getnameinfo, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6, WSADATA, WSAStartup, AF_INET, AF_INET6,
+        IN6_ADDR, IN6_ADDR_0, IN_ADDR, IN_ADDR_0, NI_NAMEREQD, socklen_t,
+    };
+
+    // Winsock wants to be introduced once per process; the WFP code does not need it, this does.
+    static WINSOCK: std::sync::Once = std::sync::Once::new();
+
+    WINSOCK.call_once(|| unsafe {
+        let mut data = WSADATA::default();
+
+        if WSAStartup(0x0202, &mut data) != 0 {
+            warn!("winsock did not start, addresses will not be named");
+        }
+    });
+
+    // The name a host answers with is ASCII in practice; 256 bytes hold any of them.
+    let mut buffer = [0u8; 256];
+
+    let found = match ip {
+        std::net::IpAddr::V4(v4) => {
+            let socket = SOCKADDR_IN {
+                sin_family: AF_INET,
+                sin_addr: IN_ADDR {
+                    S_un: IN_ADDR_0 {
+                        S_addr: u32::from(v4).to_be(),
+                    },
+                },
+                ..Default::default()
+            };
+
+            unsafe {
+                getnameinfo(
+                    &socket as *const SOCKADDR_IN as *const SOCKADDR,
+                    socklen_t(size_of::<SOCKADDR_IN>() as i32),
+                    Some(&mut buffer),
+                    None,
+                    NI_NAMEREQD.try_into().unwrap_or(0),
+                )
+            }
+        }
+        std::net::IpAddr::V6(v6) => {
+            let socket = SOCKADDR_IN6 {
+                sin6_family: AF_INET6,
+                sin6_addr: IN6_ADDR {
+                    u: IN6_ADDR_0 { Byte: v6.octets() },
+                },
+                ..Default::default()
+            };
+
+            unsafe {
+                getnameinfo(
+                    &socket as *const SOCKADDR_IN6 as *const SOCKADDR,
+                    socklen_t(size_of::<SOCKADDR_IN6>() as i32),
+                    Some(&mut buffer),
+                    None,
+                    NI_NAMEREQD.try_into().unwrap_or(0),
+                )
+            }
+        }
+    };
+
+    if found != 0 {
+        return None;
+    }
+
+    let end = buffer.iter().position(|byte| *byte == 0).unwrap_or(buffer.len());
+    let name = String::from_utf8_lossy(&buffer[..end]).into_owned();
+
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Off Windows there is no winsock to ask, and the tool does not run anywhere else.
+#[cfg(not(windows))]
+fn reverse_lookup(ip: std::net::IpAddr) -> Option<String> {
+    let _ = ip;
+
+    None
+}
+
 /// How many addresses one name is allowed to contribute. Twelve is the bound a real service
 /// fits in — a browser resolving to twelve addresses is enough — because every address costs a
 /// filter per application per layer.
