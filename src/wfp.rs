@@ -37,7 +37,8 @@ use crate::monitor::Attribution as Owners;
 
 use crate::config::Policy;
 use crate::rules::{
-    Action, Direction, Family, Remote, Rule, RuleFile, is_wildcard, wildcard_match,
+    Action, Direction, Family, PortRange, Ports, Remote, Rule, RuleFile, is_wildcard,
+    wildcard_match,
 };
 
 /// The name the store shows for us, in provider, sublayer and filter display data alike.
@@ -574,9 +575,12 @@ impl Engine {
         Ok(ours)
     }
 
-    /// Install one rule as one filter per application per layer. Which layers that is depends on
-    /// the direction of the rule; with no direction both an outbound and an inbound connection are
-    /// covered, for both address families. Returns the number of filters installed.
+    /// Install one rule as one filter per application per layer, and once more per element when
+    /// the port field names a list: a range is not a value that could ride in one condition
+    /// beside single ports, so every element of the list becomes a filter of its own. Which
+    /// layers that is depends on the direction of the rule; with no direction both an outbound
+    /// and an inbound connection are covered, for both address families. Returns the number of
+    /// filters installed.
     fn add_rule(&self, rule: &Rule, known: &[String], owners: &mut Owners) -> Result<usize> {
         let expansion = app_ids(&rule.pattern, known);
         let truncated = expansion.truncated();
@@ -650,19 +654,33 @@ impl Engine {
                 },
             });
 
-            // WFP keeps a pointer to the range rather than a copy of it, so the value lives here,
-            // for as long as the filters of this application are being added. It is not an `Option`:
-            // the pointer has to be a pointer to the range itself.
-            let port_range = rule.port.map_or(FWP_RANGE0::default(), |port| FWP_RANGE0 {
-                valueLow: FWP_VALUE0 {
-                    r#type: FWP_UINT16,
-                    Anonymous: FWP_VALUE0_0 { uint16: port.lo },
-                },
-                valueHigh: FWP_VALUE0 {
-                    r#type: FWP_UINT16,
-                    Anonymous: FWP_VALUE0_0 { uint16: port.hi },
-                },
-            });
+            // Each element of the port field is installed as a filter of its own. A rule that
+            // names no port gets the single empty variant it always had, so a rule from before
+            // the list exists installs exactly what it installed then.
+            let ports = rule.port.as_ref().map_or(&[][..], Ports::elements);
+            let port_variants: Vec<Option<&PortRange>> = if ports.is_empty() {
+                vec![None]
+            } else {
+                ports.iter().map(Some).collect()
+            };
+
+            // WFP keeps a pointer to each range rather than a copy of it, so the values live
+            // here, for as long as the filters of this application are being added. The vector
+            // is parallel to the port elements; an element that is a single port owns a range
+            // no condition points into.
+            let port_ranges: Vec<FWP_RANGE0> = ports
+                .iter()
+                .map(|port| FWP_RANGE0 {
+                    valueLow: FWP_VALUE0 {
+                        r#type: FWP_UINT16,
+                        Anonymous: FWP_VALUE0_0 { uint16: port.lo },
+                    },
+                    valueHigh: FWP_VALUE0 {
+                        r#type: FWP_UINT16,
+                        Anonymous: FWP_VALUE0_0 { uint16: port.hi },
+                    },
+                })
+                .collect();
 
             // Both address conditions are a pointer into a struct WFP reads while the filter is
             // added, so the value lives here for as long as this application's filters are being
@@ -673,93 +691,104 @@ impl Engine {
             let local_range = span_range(local.as_ref());
 
             for layer in rule_layers(rule) {
-                let mut conditions = vec![app_condition];
+                for (port_index, port) in port_variants.iter().enumerate() {
+                    let mut conditions = vec![app_condition];
 
-                if let Some(condition) = protocol {
-                    conditions.push(condition);
-                }
+                    if let Some(condition) = protocol {
+                        conditions.push(condition);
+                    }
 
-                if let Some(port) = rule.port {
-                    // One port is matched exactly; a range needs the range type and the range the
-                    // store keeps a pointer to.
-                    conditions.push(if port.is_single() {
-                        FWPM_FILTER_CONDITION0 {
-                            fieldKey: port_condition(layer),
-                            matchType: FWP_MATCH_EQUAL,
-                            conditionValue: FWP_CONDITION_VALUE0 {
-                                r#type: FWP_UINT16,
-                                Anonymous: FWP_CONDITION_VALUE0_0 { uint16: port.lo },
-                            },
-                        }
-                    } else {
-                        FWPM_FILTER_CONDITION0 {
-                            fieldKey: port_condition(layer),
-                            matchType: FWP_MATCH_RANGE,
-                            conditionValue: FWP_CONDITION_VALUE0 {
-                                r#type: FWP_RANGE_TYPE,
-                                Anonymous: FWP_CONDITION_VALUE0_0 {
-                                    rangeValue: &raw const port_range as *mut _,
+                    if let Some(port) = port {
+                        // One port is matched exactly; a range needs the range type and the range
+                        // the store keeps a pointer to.
+                        conditions.push(if port.is_single() {
+                            FWPM_FILTER_CONDITION0 {
+                                fieldKey: port_condition(layer),
+                                matchType: FWP_MATCH_EQUAL,
+                                conditionValue: FWP_CONDITION_VALUE0 {
+                                    r#type: FWP_UINT16,
+                                    Anonymous: FWP_CONDITION_VALUE0_0 { uint16: port.lo },
                                 },
-                            },
-                        }
-                    });
-                }
+                            }
+                        } else {
+                            FWPM_FILTER_CONDITION0 {
+                                fieldKey: port_condition(layer),
+                                matchType: FWP_MATCH_RANGE,
+                                conditionValue: FWP_CONDITION_VALUE0 {
+                                    r#type: FWP_RANGE_TYPE,
+                                    Anonymous: FWP_CONDITION_VALUE0_0 {
+                                        rangeValue: &raw const port_ranges[port_index] as *mut _,
+                                    },
+                                },
+                            }
+                        });
+                    }
 
-                if let Some(addr) = &addr {
-                    conditions.push(addr_condition(
-                        FWPM_CONDITION_IP_REMOTE_ADDRESS,
-                        addr,
-                        addr_range.as_ref(),
-                    ));
-                }
+                    if let Some(addr) = &addr {
+                        conditions.push(addr_condition(
+                            FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                            addr,
+                            addr_range.as_ref(),
+                        ));
+                    }
 
-                if let Some(local) = &local {
-                    conditions.push(addr_condition(
-                        FWPM_CONDITION_IP_LOCAL_ADDRESS,
-                        local,
-                        local_range.as_ref(),
-                    ));
-                }
+                    if let Some(local) = &local {
+                        conditions.push(addr_condition(
+                            FWPM_CONDITION_IP_LOCAL_ADDRESS,
+                            local,
+                            local_range.as_ref(),
+                        ));
+                    }
 
-                let mut filter = FWPM_FILTER0::default();
-                filter.filterKey = filter_key(&format!("{}#{index}", rule.name), &layer);
-                filter.displayData = FWPM_DISPLAY_DATA0 {
-                    name: PWSTR(owner.as_ptr() as *mut _),
-                    description: PWSTR(label.as_ptr() as *mut _),
-                };
-                filter.flags = flags;
-                filter.providerKey = &mut provider_key;
-                filter.layerKey = layer;
-                filter.subLayerKey = SUBLAYER_KEY;
-                filter.weight = FWP_VALUE0 {
-                    r#type: FWP_UINT8,
-                    Anonymous: FWP_VALUE0_0 { uint8: weight },
-                };
-                filter.numFilterConditions = conditions.len() as u32;
-                filter.filterCondition = conditions.as_ptr() as *mut _;
-                filter.action = FWPM_ACTION0 {
-                    r#type: action,
-                    ..Default::default()
-                };
-
-                let mut filter_id = 0u64;
-
-                // SAFETY: every pointer in the filter points into memory owned by this function, and
-                // all of it outlives the call. WFP copies what it needs.
-                let status =
-                    unsafe { FwpmFilterAdd0(self.handle, &filter, None, Some(&mut filter_id)) };
-
-                if status != 0 {
-                    bail!(
-                        "FwpmFilterAdd0 failed with 0x{status:08X} for rule '{}' on layer {}",
-                        rule.name,
-                        layer_index(layer),
+                    let mut filter = FWPM_FILTER0::default();
+                    // The key stays what a single-port rule always used; a list tells its
+                    // filters apart by the element number, so no two of them collide.
+                    filter.filterKey = filter_key(
+                        &if port_variants.len() > 1 {
+                            format!("{}#{}.{}", rule.name, index, port_index)
+                        } else {
+                            format!("{}#{index}", rule.name)
+                        },
+                        &layer,
                     );
+                    filter.displayData = FWPM_DISPLAY_DATA0 {
+                        name: PWSTR(owner.as_ptr() as *mut _),
+                        description: PWSTR(label.as_ptr() as *mut _),
+                    };
+                    filter.flags = flags;
+                    filter.providerKey = &mut provider_key;
+                    filter.layerKey = layer;
+                    filter.subLayerKey = SUBLAYER_KEY;
+                    filter.weight = FWP_VALUE0 {
+                        r#type: FWP_UINT8,
+                        Anonymous: FWP_VALUE0_0 { uint8: weight },
+                    };
+                    filter.numFilterConditions = conditions.len() as u32;
+                    filter.filterCondition = conditions.as_ptr() as *mut _;
+                    filter.action = FWPM_ACTION0 {
+                        r#type: action,
+                        ..Default::default()
+                    };
+
+                    let mut filter_id = 0u64;
+
+                    // SAFETY: every pointer in the filter points into memory owned by this
+                    // function, and all of it outlives the call. WFP copies what it needs.
+                    let status =
+                        unsafe { FwpmFilterAdd0(self.handle, &filter, None, Some(&mut filter_id)) };
+
+                    if status != 0 {
+                        bail!(
+                            "FwpmFilterAdd0 failed with 0x{status:08X} for rule '{}' on layer {}",
+                            rule.name,
+                            layer_index(layer),
+                        );
+                    }
+
+                    owners.insert(filter_id, rule.name.clone());
+
+                    installed += 1;
                 }
-
-                owners.insert(filter_id, rule.name.clone());
-
-                installed += 1;
             }
         }
 
@@ -1650,6 +1679,48 @@ mod tests {
                 cleared, 2,
                 "port '{port}': a narrowed rule leaves nothing on the other layers",
             );
+        }
+    }
+
+    /// A port list is installed as one filter per element, on each layer the rule reaches: a
+    /// range cannot ride in one condition beside the single ports, so the list multiplies the
+    /// filters rather than the conditions. The store accepting every variant is the assertion
+    /// that the pointers into the per-element ranges were well formed.
+    #[test]
+    fn a_port_list_is_installed_as_one_filter_per_element() {
+        let engine = Engine::open().expect("open engine");
+
+        match engine.clear() {
+            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
+            Err(error) => {
+                let reason = format!("{error:#}");
+                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
+                println!("write path skipped, access denied");
+                return;
+            }
+        }
+
+        for (ports, expected) in [("443", 2usize), ("80, 443", 4), ("80, 1024-2048", 4)] {
+            let rules = RuleFile {
+                rule: vec![Rule {
+                    direction: Some(Direction::Out),
+                    port: Some(ports.parse().expect("parse a port field")),
+                    ..Rule::plain("winfw-mcp port list test", Action::Allow, TEST_APP)
+                }],
+            };
+
+            let applied = engine
+                .apply(&rules, &[], Policy::Allow)
+                .expect("apply the listed rule");
+
+            assert_eq!(
+                applied.installed, expected,
+                "port '{ports}': one filter per element on the two layers of the direction",
+            );
+
+            let cleared = engine.clear().expect("clear the store");
+
+            assert_eq!(cleared, expected, "port '{ports}': nothing is left behind");
         }
     }
 

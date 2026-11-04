@@ -62,7 +62,9 @@ top, one row per program:
   account that ran the program under that, as `DOMAIN\name`;
 - how many connections of this run the tool has seen for that program;
 - a badge for the verdict: **blocked** in red, **allowed** in green, or *by rule &lt;name&gt;* when
-  one of our rules decided it;
+  one of our rules decided it. A rule that blamed more than one of our rules says *by 2 rules*
+  and names each of them in its tooltip, because the newest entry is not necessarily the one
+  that decided the rest;
 - **Allow** and **Deny** on the right, which turn the program into a rule at once.
 
 A row expands to the destinations behind it: address and port, the local end, the protocol
@@ -89,15 +91,20 @@ unique local address. See [Connections worth showing](#connections-worth-showing
 A table with fixed column widths: Name, Action, Program, Protocol, Direction, Port, Remote, Comment,
 Order, and the remove button. Action is a badge, Order is a pair of arrows, and a pattern the cap cut
 carries a small warning badge — *pattern has 42 matches, only 32 installed* — so the cut is visible
-where the rule is read rather than only in the log.
+where the rule is read rather than only in the log. The Port column shows one chip per port, so a rule
+that allows `80, 443` reads as two chips rather than one long string; a rule that names no port shows a
+single *any* chip.
 
 A rule is edited in a dialog, not in ten fields that stay on screen: **Add rule** above the table
 appends a rule and opens it, and a click on a row opens that one. The dialog holds name, action,
 program, protocol, direction, port, remote address, local address, comment and the enabled flag.
 Protocol is a text box rather than a list because a rule may name a protocol number such as `47`;
-the port box takes `443` or `1024-2048` and either address box `10.0.0.5`, `192.168.1.0/24` or a
-span such as `10.0.0.1-10.0.0.9`, all left empty for anything goes. A value the server cannot read bounces back
-as an error and the row is redrawn from what the server has.
+the port box takes a comma-separated list of single ports and ranges such as
+`443, 8443, 1024-2048` and either address box `10.0.0.5`, `192.168.1.0/24` or a span such as
+`10.0.0.1-10.0.0.9`, all left empty for anything goes. The comma separator is spelled out in the hint
+the port box shows when the cursor rests on it, and an element the page cannot read is reported with
+the dialog left open. A value the server cannot read bounces back as an error and the row is redrawn
+from what the server has.
 
 An empty table is not an error and says so in a sentence: under `deny` it means every program is
 blocked until it appears in the Detected list.

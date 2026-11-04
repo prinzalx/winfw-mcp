@@ -44,7 +44,7 @@ them is about all of them, which is every rule written before these fields exist
 |---|---|---|
 | `protocol` | `"tcp"`, `"udp"`, `47` | the transport the connection uses |
 | `direction` | `"in"`, `"out"` | which way the connection goes |
-| `port` | `"443"`, `"1024-2048"` | one port, or an inclusive range of them |
+| `port` | `"443"`, `"1024-2048"`, `"80, 443, 8080-8090"` | one port, an inclusive range of them, or a comma-separated list of either |
 | `remote` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"` | the address the connection goes to |
 | `local` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"` | the address the connection has on this machine |
 
@@ -63,6 +63,16 @@ remote = "192.168.1.0/24"
 All five are written in the file, read back from it, shown in the page and accepted over both the
 HTTP API and MCP. A value the server cannot read is refused rather than ignored, so `port = "http"`
 bounces instead of silently turning into "every port".
+
+`port` is the one field that takes a list: a comma-separated string such as `port = "80, 443,
+8080-8090"`, where each element is a single port or an inclusive range. Every element is checked the
+way a single value is, so an empty element, a `0`, a port above `65535`, a reversed range such as
+`"90-80"` or a word such as `"http"` is refused with a message that names the port field and quotes
+what it read. A list may name at most 32 elements, which is the same bound the cap on wildcard
+application matches uses. A single value stays a single value when the file is written back; a list
+comes back as a list.
+Unlike `protocol`, a port list is not sugar for omitting the field: it narrows to exactly the ports
+named.
 
 `protocol` is the one field with two shapes. The two transports worth naming are written as their
 names; everything else is written as its number, which is how a rule about GRE (47) or ESP (50)
@@ -107,7 +117,11 @@ narrows the layers the rule is installed on, exactly as `direction` does.
 
 A port is matched on the side of the connection it is about: the remote port on the way out, the
 local port on the way in. "Port 443" therefore means the same thing in both directions, which is
-what the reference implementation does as well.
+what the reference implementation does as well. A port list is installed as one filter per element,
+so it multiplies the filters the rule expands into on top of the applications a wildcard pattern
+matches and the layers the direction allows. The list is bounded to 32 elements for that reason; the
+cap of 32 on application matches is a separate bound and is described in
+[WFP internals](07-wfp-internals.md).
 
 Writing a path by hand in TOML needs doubled backslashes, as in the example above: a single
 backslash starts an escape sequence, and a file that fails to parse stops the tool at startup rather

@@ -37,7 +37,9 @@ the engine with `FWPM_E_INVALID_ENUM_TYPE`, so the filter list is read whole and
 compared in code. A filter with no provider key was not added by us.
 
 A filter key is derived from the rule name **plus its index**, so the UI's repeated default name
-`new rule` cannot collide.
+`new rule` cannot collide. A rule whose port field names several elements adds the element number as
+well, which keeps the filters of one list apart without changing the key a single-port rule has always
+used.
 
 ## Applying
 
@@ -51,9 +53,9 @@ the write path accepts.
 
 ## The layers a rule is installed on
 
-One rule becomes one filter per application it matches, per layer it applies to. Which layers that
-are depends on the direction of the rule, and an address narrows them further, because an IPv4
-address can never match on an IPv6 layer:
+One rule becomes one filter per application it matches, per layer it applies to, and per port its
+port field names. Which layers that are depends on the direction of the rule, and an address narrows
+them further, because an IPv4 address can never match on an IPv6 layer:
 
 | `direction` | Layers |
 |---|---|
@@ -84,8 +86,12 @@ pair for a v4 span and a `FWP_BYTE_ARRAY16_TYPE` pair for a v6 one, which is wha
 fills for the same case.
 
 A single port is matched with `FWP_UINT16` and `FWP_MATCH_EQUAL`; a range with `FWP_RANGE_TYPE` and
-`FWP_MATCH_RANGE`. The range is one of the conditions WFP keeps a **pointer** to rather than a copy, so
-the `FWP_RANGE0` has to outlive the call. The four address conditions are pointer conditions too, for
+`FWP_MATCH_RANGE`. A port field that names several elements is built from those same two shapes: the
+list becomes one filter per element, each carrying the condition its own element needs, rather than
+one filter with a `FWP_UINT16_ARRAY`, because a range has no place in such an array. A list of more
+than 32 elements is refused while the rule is read, which keeps the third axis a rule multiplies along
+a bound of its own. The range is one of the conditions WFP keeps a **pointer** to rather than a copy,
+so the `FWP_RANGE0` has to outlive the call. The four address conditions are pointer conditions too, for
 the same reason, and a v6 span adds a pointer of its own inside each bound.
 
 > Getting that pointer wrong is easy and the failure is not obvious. Handing WFP the address of an
@@ -99,7 +105,10 @@ the same reason, and a v6 span adds a pointer of its own inside each bound.
 
 A rule about one application is installed as a `FWP_BYTE_BLOB` condition obtained from
 `FwpmGetAppIdFromFileName0`, which resolves a file that exists into the device path WFP matches on.
-A pattern that names no existing file is handed over as it stands, and the match becomes exact.
+A pattern that names no existing file is handed over as it stands, and the match becomes exact. A
+pattern that matches several applications is expanded against the applications the monitor has seen,
+under a cap of 32 (`MAX_WILDCARD_MATCHES`): a pattern that matches more installs the first 32 and
+names the cut in the log, in the state and on the page.
 
 Measured on a live store: a rule written `C:\WINDOWS\system32\CURL.EXE` allowed a program whose
 path the firewall reports as `C:\Windows\System32\curl.exe`. The resolution does not care about
@@ -234,9 +243,9 @@ The v4 number is read the same way the store writes an address condition (`u32::
 octets), which keeps the address in the log and the address a rule matches the same value read the
 same way. A connectionless event carries no version and reports no address.
 
-The event log carries the local endpoint and a marker for connections that never left the machine;
-the user name is still only in the
-event and not in the log.
+The event log carries the local endpoint and a marker for connections that never left the machine,
+and the account the event named as a security identifier resolved to a name
+([the account behind a connection](05-web-ui.md)).
 
 ## Threading
 

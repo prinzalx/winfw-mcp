@@ -131,6 +131,18 @@
         color: var(--muted);
       }
 
+      /* A rule can name several ports; the table shows them as compact chips. */
+      .portlist {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.2rem 0.3rem;
+      }
+
+      .portlist .chip {
+        font-size: 0.72rem;
+        padding: 0.05rem 0.45rem;
+      }
+
       /* The read-only hint is a band across the page rather than a clause at the end of a line: a
          tab that cannot write has to say so before the first click, not after it. */
       .band {
@@ -715,7 +727,8 @@
             A deny always beats an allow, whatever the order of the list. Patterns accept the
             wildcards <code>*</code> and <code>?</code>. A rule can be narrowed to one protocol
             (<code>tcp</code>, <code>udp</code>, or a number such as <code>47</code>), one
-            direction, one port or port range such as <code>1024-2048</code>, one remote address or
+            direction, a port, a port range such as <code>1024-2048</code> or a comma-separated
+            list of them such as <code>80, 443, 8080-8090</code>, one remote address or
             network such as <code>192.168.1.0/24</code>, or a span of addresses such as
             <code>10.0.0.1-10.0.0.9</code>; a rule that names none of them is about all of them.
             Every change is written to <code>rules.toml</code> and pushed to the store immediately.
@@ -737,7 +750,12 @@
       </div>
       <div class="field"><span>Direction</span><select id="rule-direction"></select></div>
       <div class="field">
-        <span>Port</span><input type="text" id="rule-port" placeholder="any" title="a port such as 443 or a range such as 1024-2048" />
+        <span>Port</span><input
+          type="text"
+          id="rule-port"
+          placeholder="any — or a comma-separated list such as 80, 443, 8080-8090"
+          title="a port such as 443, a range such as 1024-2048, or a comma-separated list of them"
+        />
       </div>
       <div class="field">
         <span>Remote</span>
@@ -1033,6 +1051,10 @@
         const local = el("rule-local").value.trim();
         const comment = el("rule-comment").value.trim();
 
+        if (splitPorts(port) === null) {
+          status("the port field takes ports and ranges such as “80, 443, 8080-8090”");
+          return;
+        }
         rule.protocol = protocol === "" ? null : protocol;
         rule.direction = el("rule-direction").value || null;
         rule.port = port === "" ? null : port;
@@ -1043,6 +1065,47 @@
         el("rule-dialog").close();
         save();
       });
+
+      // The port field takes a comma-separated list of single ports and ranges. Returns null
+      // when an element is malformed; the server refuses such a rule too, but a message here
+      // keeps the dialog open with what the person typed.
+      function splitPorts(text) {
+        const t = (text || "").trim();
+
+        if (t === "") {
+          return [];
+        }
+        const parts = t.split(",");
+        const out = [];
+
+        for (const part of parts) {
+          const s = part.trim();
+
+          if (!/^\d+(-\d+)?$/.test(s)) {
+            return null;
+          }
+          out.push(s);
+        }
+        return out;
+      }
+
+      function portCells(port) {
+        const box = element("div", "portlist", null);
+        const list = port == null ? [] : port.split(",");
+
+        if (list.length === 0) {
+          box.appendChild(element("span", "chip off", "any"));
+          return box;
+        }
+        list.forEach((p) => {
+          const s = p.trim();
+
+          if (s !== "") {
+            box.appendChild(element("span", "chip ok", s));
+          }
+        });
+        return box;
+      }
 
       function renderRules() {
         const body = el("rules");
@@ -1087,7 +1150,7 @@
 
           row.appendChild(element("td", null, rule.protocol ?? "any"));
           row.appendChild(element("td", null, rule.direction ?? "any"));
-          row.appendChild(element("td", null, rule.port ?? "any"));
+          row.appendChild(element("td", null)).appendChild(portCells(rule.port));
           row.appendChild(element("td", null, rule.remote ?? "any"));
           row.appendChild(element("td", null, rule.local ?? "any"));
           row.appendChild(element("td", null, rule.comment ?? ""));

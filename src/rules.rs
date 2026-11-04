@@ -2,9 +2,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+
 use tracing::warn;
 
 use crate::store;
+use crate::wfp::MAX_WILDCARD_MATCHES;
 
 /// What WFP eventually does with a matching connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -444,6 +446,107 @@ impl<'de> Deserialize<'de> for Remote {
     }
 }
 
+/// The port field of a rule: one port, one inclusive range, or a comma-separated list of
+/// them such as `80, 443, 8080-8090`.
+///
+/// It holds at least one element; a field that names no port at all is absent rather than an
+/// empty list. The elements are written back joined by commas, so a single value stays a single
+/// value and a list comes back as a list. The list is capped at [`MAX_WILDCARD_MATCHES`]
+/// elements: each element is installed as a filter of its own per application per layer, and
+/// the store is shared with everything else on the machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ports(Vec<PortRange>);
+
+impl Ports {
+    /// The elements of the field, in the order they were written.
+    pub fn elements(&self) -> &[PortRange] {
+        &self.0
+    }
+}
+
+/// The contents of the port field of a rule, split into validated elements.
+impl std::str::FromStr for Ports {
+    type Err = ParseError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text.trim().is_empty() {
+            return Err(format!("port '{text}' is not a port"));
+        }
+
+        let mut elements = Vec::new();
+
+        for part in text.split(',') {
+            let part = part.trim();
+
+            if part.is_empty() {
+                return Err(format!("port list '{text}' has an empty element"));
+            }
+
+            let (lo, hi) = match part.split_once('-') {
+                Some((lo, hi)) => (
+                    lo.trim()
+                        .parse::<u16>()
+                        .map_err(|_| format!("port '{part}' is not a port"))?,
+                    hi.trim()
+                        .parse::<u16>()
+                        .map_err(|_| format!("port '{part}' is not a port"))?,
+                ),
+                None => (
+                    part.parse::<u16>()
+                        .map_err(|_| format!("port '{part}' is not a port"))?,
+                    part.parse::<u16>()
+                        .map_err(|_| format!("port '{part}' is not a port"))?,
+                ),
+            };
+
+            if lo > hi {
+                return Err(format!("port range '{part}' runs backwards"));
+            }
+
+            if lo == 0 || hi == 0 {
+                return Err(format!("port '{part}' is not a port"));
+            }
+
+            elements.push(PortRange { lo, hi });
+        }
+
+        if elements.len() > MAX_WILDCARD_MATCHES {
+            return Err(format!(
+                "port list '{text}' names more than {MAX_WILDCARD_MATCHES} ports"
+            ));
+        }
+
+        Ok(Self(elements))
+    }
+}
+
+impl std::fmt::Display for Ports {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let joined = self
+            .0
+            .iter()
+            .map(|element| element.to_string())
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        f.write_str(&joined)
+    }
+}
+
+impl Serialize for Ports {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Ports {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 /// A port, or an inclusive range of them, written `443` or `1024-2048`.
 ///
 /// It is a string in the file and in JSON rather than a number, because a range has no number form
@@ -533,7 +636,7 @@ pub struct Rule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<Direction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<PortRange>,
+    pub port: Option<Ports>,
     /// The remote address the rule is about, written `192.168.1.0/24`, `10.0.0.5` or
     /// `10.0.0.1-10.0.0.9`. Absent means any address, which is also what narrows the rule to the
     /// application alone.
@@ -1419,6 +1522,139 @@ mod tests {
             "1024-2048".parse::<PortRange>().expect("parse").to_string(),
             "1024-2048",
         );
+    }
+
+    /// A port field reads a single value as one element and a comma-separated text as a
+    /// list, where every element is a port or a range in its own right.
+    #[test]
+    fn a_port_field_reads_a_list_and_a_single_value() {
+        let single: Ports = "443".parse().expect("parse a single port");
+        assert_eq!(single.elements(), &[PortRange { lo: 443, hi: 443 }]);
+
+        let list: Ports = "80, 443, 8080-8090".parse().expect("parse a port list");
+        assert_eq!(
+            list.elements(),
+            &[
+                PortRange { lo: 80, hi: 80 },
+                PortRange { lo: 443, hi: 443 },
+                PortRange { lo: 8080, hi: 8090 },
+            ],
+        );
+    }
+
+    /// What a list element refuses is answered with the field named and the offending
+    /// element quoted: an empty element, a port zero, a number past a u16, a range the wrong
+    /// way round, and text that is not a port at all.
+    #[test]
+    fn a_port_field_refuses_malformed_elements() {
+        for (text, offender) in [
+            ("80, , 443", "80, , 443"),
+            ("80, 0", "0"),
+            ("80, 70000", "70000"),
+            ("80, 90-80", "90-80"),
+            ("80, http", "http"),
+        ] {
+            let refused = text
+                .parse::<Ports>()
+                .expect_err("a malformed element is refused");
+
+            assert!(refused.contains("port"), "{text}: {refused}");
+            assert!(refused.contains(offender), "{text}: {refused}");
+        }
+    }
+
+    /// The cap that holds a wildcard pattern down holds a port list too, because each
+    /// element is installed as a filter of its own.
+    #[test]
+    fn a_port_field_is_capped_like_a_wildcard_pattern() {
+        let at_cap = (1..=MAX_WILDCARD_MATCHES)
+            .map(|port| port.to_string())
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        assert_eq!(
+            at_cap
+                .parse::<Ports>()
+                .expect("a list at the cap")
+                .elements()
+                .len(),
+            MAX_WILDCARD_MATCHES,
+        );
+
+        let over_cap = format!("{at_cap}, 60001");
+        assert!(
+            over_cap.parse::<Ports>().is_err(),
+            "one element past the cap is refused: {over_cap}",
+        );
+    }
+
+    /// A single value is written back as a single value and a list as a list: the text
+    /// the field was read from is the text it writes.
+    #[test]
+    fn a_port_field_is_written_as_it_is_read() {
+        for text in ["443", "80-90", "80, 443", "80, 443, 8080-8090"] {
+            let ports: Ports = text.parse().expect("parse");
+
+            assert_eq!(ports.to_string(), text, "written back as read");
+        }
+    }
+
+    /// The file holds the text the field was read from: one port is written exactly as it
+    /// was before lists existed, and a list round-trips as the comma-separated string.
+    #[test]
+    fn a_port_field_survives_a_round_trip_through_the_file() {
+        let path = crate::testutil::scratch_dir("rules-port-list").join("rules.toml");
+        let rules = RuleFile {
+            rule: vec![
+                Rule {
+                    port: Some("80".parse().expect("parse a port")),
+                    ..Rule::plain("one port", Action::Allow, "C:\\Tools\\one.exe")
+                },
+                Rule {
+                    port: Some("80, 443, 8080-8090".parse().expect("parse a port list")),
+                    ..Rule::plain("a list", Action::Allow, "C:\\Tools\\many.exe")
+                },
+            ],
+        };
+
+        rules.save(&path).expect("save");
+
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("port = \"80\""), "{text}");
+        assert!(text.contains("port = \"80, 443, 8080-8090\""), "{text}");
+
+        assert_eq!(RuleFile::load_or_create(&path).expect("load"), rules);
+    }
+
+    /// The JSON form is the same comma-separated text the file writes, which is what lets
+    /// `/api/state` and a share string carry the list as well.
+    #[test]
+    fn a_port_field_is_written_to_json_as_the_text_that_reads_back() {
+        let rule = Rule {
+            port: Some("80, 443".parse().expect("parse a port list")),
+            ..Rule::plain("json", Action::Allow, "C:\\Tools\\json.exe")
+        };
+
+        let json = serde_json::to_string(&rule).expect("serialize");
+        assert!(json.contains(r#""port":"80, 443""#), "{json}");
+
+        let back: Rule = serde_json::from_str(&json).expect("read back");
+        assert_eq!(back, rule);
+    }
+
+    /// The share string is Base64 around JSON, and a rule whose port field is a list comes
+    /// back from it as the same rule.
+    #[test]
+    fn the_share_string_carries_a_rule_with_a_port_list() {
+        let rule = Rule {
+            port: Some("80, 443, 8080-8090".parse().expect("parse a port list")),
+            ..Rule::plain("shared", Action::Allow, "C:\\Tools\\shared.exe")
+        };
+
+        let shared = crate::export::decode(&crate::export::encode(&rule).expect("encode"))
+            .expect("decode a rule with a port list");
+
+        assert_eq!(shared, rule);
     }
 
     #[test]

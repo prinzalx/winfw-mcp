@@ -196,8 +196,9 @@ fn one(item: &Item, import: &mut Import) {
         }
     };
 
-    // One port or one address, which is all a rule of this tool can hold. Anything wider stays in
-    // the comment, because "port 53" and "224.0.0.0/4" are different claims about the traffic.
+    // One port or one address, which is what a single entry of an item can be; the import never
+    // collects several entries into the list a rule's port field can hold. Anything wider stays
+    // in the comment, because "port 53" and "224.0.0.0/4" are different claims about the traffic.
     let entries = split(&item.rule);
     let mut port = None;
     let mut remote = None;
@@ -271,7 +272,9 @@ fn one(item: &Item, import: &mut Import) {
             enabled: is_true(&item.is_enabled),
             protocol,
             direction,
-            port,
+            // The port field holds a list, which is not `Copy` as a single value once was, and
+            // one item's port belongs to every rule the item spreads over.
+            port: port.clone(),
             remote,
             local: None,
             comment: comment.clone(),
@@ -391,7 +394,11 @@ mod tests {
         assert_eq!(ssh.action, Action::Allow);
         assert_eq!(ssh.protocol, Some(Protocol::Tcp));
         assert_eq!(ssh.direction, Some(Direction::Out));
-        assert_eq!(ssh.port.map(|port| port.lo), Some(22));
+        assert_eq!(
+            ssh.port.as_ref().map(|port| port.elements()[0].lo),
+            Some(22),
+            "the one port the item names is the field's only element",
+        );
 
         let blocked = import
             .rules

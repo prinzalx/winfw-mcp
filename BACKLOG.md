@@ -511,8 +511,8 @@ Roughly by how much they cost to change later:
 
 The address dimension was closed by 0.56.0, which is worth recording here because the list in §4.2
 is easy to read as "still wide open" and is not. What a rule can name today: one protocol (by name
-or number), one direction, one port or port range, and one remote destination as an address, a
-network or a span. What it still cannot:
+or number), one direction, one port, a port range or a list of them (0.74.0), one remote destination
+as an address, a network or a span, and one local address (0.73.0). What it still cannot:
 
 - ~~**A local address.**~~ — done in **0.73.0**. The reference carries one, WFP has the field
   (`FWPM_CONDITION_IP_LOCAL_ADDRESS`), and the three text shapes were already written, so it landed
@@ -522,8 +522,11 @@ network or a span. What it still cannot:
   than being refused as a contradiction. The name of the type behind the field is still `Remote`,
   which reads oddly on the local end; renaming it would ripple through the share strings, so it
   waited.
-- **A list of any of them.** A rule holds exactly one value per dimension, so TCP *and* UDP leaves
-  the field out and two distant ports need two rules.
+- ~~**A list of any of them.**~~ — **partly done in 0.74.0**, for ports alone. The port field takes
+  a comma-separated list of single ports and ranges and installs one filter per element, bounded to
+  32 elements because each element costs a filter. Protocol lists were rejected on purpose:
+  `FWP_UINT8_ARRAY` is ambiguous with a byte array in WFP, and *TCP and UDP* is already expressible
+  by leaving the field out. `remote`, `local` and a program pattern still hold one value each.
 - **A name.** `remote` refuses `example.com` and nothing resolves one, so a rule learned from an
   event carries an address while the rule a person would write carries a name. The reference
   does not resolve names in a filter either; it names applications, not destinations.
@@ -531,6 +534,7 @@ network or a span. What it still cannot:
   a rule cannot single one service out. The security chapter names the price of that under default
   deny, and §4.6 records what the reference does differently.
 
-Two of these are WFP work with the text format already settled, the name is a layer of its own, as
-§9 said, and the service is a match dimension nobody has designed yet. None of them was started,
-and no decision here is hard to reverse. (2026-11-02)
+The port half of the list dimension is closed; the remote list, the local list and the application
+pattern are WFP work with the text format already settled, the name is a layer of its own, as §9
+said, and the service is a match dimension nobody has designed yet. No decision here is hard to
+reverse. (2026-11-02, ports closed 2026-11-04)
