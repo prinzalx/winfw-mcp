@@ -1237,7 +1237,7 @@
           // The list names programs, not paths: the file name reads, the full path is one hover
           // or one edit away.
           const firstPart = rule.pattern.split(",")[0].trim();
-          const shown = fileName(firstPart);
+          let shown = fileName(firstPart);
 
           if (shown === "" || /^[*?]+$/.test(shown)) {
             shown = firstPart;

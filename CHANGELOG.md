@@ -10,6 +10,7 @@ ten planned headings.
 
 | Version | What changed |
 |---|---|
+| 1.1.1 | Repair the page from 1.1.0: the file-name column assigned to a `const`, so reading the state aborted and every tab went silent (`invalid assignment to const 'shown'`). |
 | 1.1.0 | Least privilege from the panel: **Allow** and **Deny** on a program row no longer write an any/any rule but open the rule dialog prefilled from that program's newest connection — target address and port included. The Rules table names the file (`waterfox.exe`) instead of the whole path, the full pattern lives in the tooltip and in the dialog, and the page is 1400 pixels wide so both tables breathe. |
 | 1.0.0 | The rules page works the way the list reads: "Add rule" opens the same dialog as editing one (name, action, pattern and the narrowing fields, `Enabled` included) instead of appending a prefilled row, the per-row share button is gone, and the columns finally have widths that fit their contents. The dark scheme is a lighter grey now, readable next to a dark desktop, and the Quit question says what it does: the filters leave the firewall with the process. |
 | 0.78.0 | A connection in the panel is a form now: each target row carries its address and port in editable fields, prefilled from what the firewall saw, and the Allow or Deny written from that row names exactly that target on exactly that port. Events carry the drive form of the application next to the device form, so paths read as `D:\...` everywhere and a rule written from a connection stores the drive form too. |
