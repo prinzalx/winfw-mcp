@@ -50,7 +50,12 @@ cargo test -- --test-threads=1
 ```
 
 Exactly one test process at a time, because the store tests share one live WFP store: see
-[getting started](01-getting-started.md#build-test-run). Elevation is not needed for a green run — a
+[getting started](01-getting-started.md#build-test-run). A run of the whole suite is not expected at
+every step: a change to one area is checked with the tests of that area (`cargo test <filter>`), and
+the full suite runs at intervals — before a tag, and whenever a change reaches code several areas
+share. The reason is the size of the suite; it has grown with the tool, and most of it cannot be
+affected by a change to a help text or to one route. CI runs the whole suite on every push, so the
+interval check is never left to a person alone. Elevation is not needed for a green run — a
 store that answers `0x80070005` is a result the tests understand, and the Detected-list tests assert
 what follows from it rather than failing over it. It is needed to see the store itself: on an
 elevated runner `cargo build --all-targets` and `cargo test` read and write real entries, and an
