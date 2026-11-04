@@ -508,10 +508,14 @@ is easy to read as "still wide open" and is not. What a rule can name today: one
 or number), one direction, one port or port range, and one remote destination as an address, a
 network or a span. What it still cannot:
 
-- **A local address.** The reference carries one, and WFP has the field
-  (`FWPM_CONDITION_IP_LOCAL_ADDRESS`), which is the shape a rule about a network interface would
-  want. The three text shapes are already written, so this is one field, one condition and one
-  page column.
+- ~~**A local address.**~~ — done in **0.73.0**. The reference carries one, WFP has the field
+  (`FWPM_CONDITION_IP_LOCAL_ADDRESS`), and the three text shapes were already written, so it landed
+  as one field reusing `Remote`, one condition and one page column. What it deliberately did not
+  bring: `reaches()` still reads only `remote` (the local end is not a destination), and a rule that
+  names two families — a v4 remote with a v6 local — yields no layers and installs nothing rather
+  than being refused as a contradiction. The name of the type behind the field is still `Remote`,
+  which reads oddly on the local end; renaming it would ripple through the share strings, so it
+  waited.
 - **A list of any of them.** A rule holds exactly one value per dimension, so TCP *and* UDP leaves
   the field out and two distant ports need two rules.
 - **A name.** `remote` refuses `example.com` and nothing resolves one, so a rule learned from an

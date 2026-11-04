@@ -273,6 +273,7 @@ fn one(item: &Item, import: &mut Import) {
             direction,
             port,
             remote,
+            local: None,
             comment: comment.clone(),
         });
     }

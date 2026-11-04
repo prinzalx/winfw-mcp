@@ -90,12 +90,12 @@ Order, and the remove button. Action is a badge, Order is a pair of arrows, and 
 carries a small warning badge — *pattern has 42 matches, only 32 installed* — so the cut is visible
 where the rule is read rather than only in the log.
 
-A rule is edited in a dialog, not in nine fields that stay on screen: **Add rule** above the table
+A rule is edited in a dialog, not in ten fields that stay on screen: **Add rule** above the table
 appends a rule and opens it, and a click on a row opens that one. The dialog holds name, action,
-program, protocol, direction, port, remote address, comment and the enabled flag. Protocol is a text
-box rather than a list because a rule may name a protocol number such as `47`; the port box takes
-`443` or `1024-2048` and the remote box `10.0.0.5`, `192.168.1.0/24` or a span such as
-`10.0.0.1-10.0.0.9`, both left empty for anything goes. A value the server cannot read bounces back
+program, protocol, direction, port, remote address, local address, comment and the enabled flag.
+Protocol is a text box rather than a list because a rule may name a protocol number such as `47`;
+the port box takes `443` or `1024-2048` and either address box `10.0.0.5`, `192.168.1.0/24` or a
+span such as `10.0.0.1-10.0.0.9`, all left empty for anything goes. A value the server cannot read bounces back
 as an error and the row is redrawn from what the server has.
 
 An empty table is not an error and says so in a sentence: under `deny` it means every program is

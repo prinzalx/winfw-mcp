@@ -624,6 +624,7 @@
             <col style="width: 5rem" />
             <col style="width: 4.5rem" />
             <col style="width: 7rem" />
+            <col style="width: 7rem" />
             <col style="width: 8rem" />
             <col style="width: 4rem" />
             <col style="width: 8rem" />
@@ -637,6 +638,7 @@
               <th>Direction</th>
               <th>Port</th>
               <th>Remote</th>
+              <th>Local</th>
               <th>Comment</th>
               <th>Order</th>
               <th></th>
@@ -744,6 +746,15 @@
           id="rule-remote"
           placeholder="any"
           title="a remote address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9"
+        />
+      </div>
+      <div class="field">
+        <span>Local</span>
+        <input
+          type="text"
+          id="rule-local"
+          placeholder="any"
+          title="a local address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9"
         />
       </div>
       <div class="field"><span>Comment</span><input type="text" id="rule-comment" placeholder="why" spellcheck="false" /></div>
@@ -994,6 +1005,7 @@
         select_choices("rule-direction", ["", "out", "in"], rule.direction);
         el("rule-port").value = rule.port ?? "";
         el("rule-remote").value = rule.remote ?? "";
+        el("rule-local").value = rule.local ?? "";
         el("rule-comment").value = rule.comment ?? "";
         el("rule-enabled").checked = rule.enabled;
         el("rule-dialog").showModal();
@@ -1013,17 +1025,19 @@
         rule.action = el("rule-action").value;
         rule.pattern = el("rule-pattern").value;
 
-        // The four narrowing fields are optional on a rule, which the server reads as null, so an
+        // The five narrowing fields are optional on a rule, which the server reads as null, so an
         // empty choice is sent as absent rather than as the word "any".
         const protocol = el("rule-protocol").value.trim();
         const port = el("rule-port").value.trim();
         const remote = el("rule-remote").value.trim();
+        const local = el("rule-local").value.trim();
         const comment = el("rule-comment").value.trim();
 
         rule.protocol = protocol === "" ? null : protocol;
         rule.direction = el("rule-direction").value || null;
         rule.port = port === "" ? null : port;
         rule.remote = remote === "" ? null : remote;
+        rule.local = local === "" ? null : local;
         rule.comment = comment === "" ? null : comment;
         rule.enabled = el("rule-enabled").checked;
         el("rule-dialog").close();
@@ -1039,7 +1053,7 @@
           const row = element("tr");
           const cell = element("td", "empty", null);
 
-          cell.colSpan = 10;
+          cell.colSpan = 11;
           cell.textContent =
             defaultPolicy === "deny"
               ? "No rules yet. Unknown programs are blocked; allow them from the Detected list."
@@ -1075,6 +1089,7 @@
           row.appendChild(element("td", null, rule.direction ?? "any"));
           row.appendChild(element("td", null, rule.port ?? "any"));
           row.appendChild(element("td", null, rule.remote ?? "any"));
+          row.appendChild(element("td", null, rule.local ?? "any"));
           row.appendChild(element("td", null, rule.comment ?? ""));
 
           // Order is not cosmetic: the file's order decides which rule wins, so the table offers
@@ -1773,6 +1788,7 @@
           direction: null,
           port: null,
           remote: null,
+          local: null,
         });
         save();
       });

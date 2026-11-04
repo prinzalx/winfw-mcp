@@ -138,8 +138,8 @@ pub enum Direction {
 
 /// The address family an address belongs to.
 ///
-/// WFP keeps the two families in separate layers, so this decides which of them a rule with a
-/// remote address is installed on.
+/// WFP keeps the two families in separate layers, so this decides which of them a rule with an
+/// address is installed on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
     V4,
@@ -321,9 +321,10 @@ pub struct AddressRange {
     pub family: Family,
 }
 
-/// What a rule names as its remote destination: one address, a network, or a span between two
-/// addresses. All three are written as text in the file, in JSON and in a share string; a range
-/// is told from the other two by the `-` between its ends, which no address text contains.
+/// What a rule names as its remote destination or its local address: one address, a network, or a
+/// span between two addresses. All three are written as text in the file, in JSON and in a share
+/// string; a range is told from the other two by the `-` between its ends, which no address text
+/// contains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Remote {
     /// One address or a network, written `10.0.0.5` or `10.0.0.0/24`.
@@ -515,9 +516,9 @@ impl<'de> Deserialize<'de> for PortRange {
 /// `pattern` may contain the wildcards `*` and `?` (PLAN.md section 4). Matching is our job,
 /// not the kernel's, so the string is stored exactly as the user typed it.
 ///
-/// `protocol`, `direction`, `port` and `remote` narrow the rule and are absent when it is about
-/// all of them. They are skipped when written out, so a rule that does not use them is stored
-/// exactly as
+/// `protocol`, `direction`, `port`, `remote` and `local` narrow the rule and are absent when it is
+/// about all of them. They are skipped when written out, so a rule that does not use them is
+/// stored exactly as
 /// it was before they existed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -538,6 +539,11 @@ pub struct Rule {
     /// application alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<Remote>,
+    /// The local address the rule is about, written `192.168.1.0/24`, `10.0.0.5` or
+    /// `10.0.0.1-10.0.0.9`. Absent means any address, which is also what leaves the rule about the
+    /// destination alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<Remote>,
     /// Why the rule exists, in the words of the person who wrote it.
     ///
     /// It decides nothing: the field is for the reader of a list they did not write. It is skipped
@@ -555,8 +561,8 @@ const fn always_enabled() -> bool {
 
 impl Rule {
     /// A rule that narrows nothing: an enabled rule about an application, with no protocol,
-    /// direction, port or remote address. This is what a detected application and an MCP agent
-    /// turn into.
+    /// direction, port, remote address or local address. This is what a detected application and an
+    /// MCP agent turn into.
     pub fn plain(name: impl Into<String>, action: Action, pattern: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -567,6 +573,7 @@ impl Rule {
             direction: None,
             port: None,
             remote: None,
+            local: None,
             comment: None,
         }
     }
@@ -1418,12 +1425,34 @@ mod tests {
     fn a_rule_without_narrowing_is_written_as_it_used_to_be() {
         let text = toml::to_string_pretty(&sample()).expect("serialize");
 
-        for key in ["protocol", "direction", "port"] {
+        for key in ["protocol", "direction", "port", "local"] {
             assert!(
                 !text.contains(key),
                 "{key} appeared for a rule that has none: {text}"
             );
         }
+    }
+
+    /// A local address is written to the file and read back exactly like the remote one is, which
+    /// is what lets a rule about an interface and a rule about a destination live in one list.
+    #[test]
+    fn a_local_address_survives_a_round_trip() {
+        let path = crate::testutil::scratch_dir("rules-local").join("rules.toml");
+        let rules = RuleFile {
+            rule: vec![Rule {
+                remote: Some("192.168.1.0/24".parse().expect("parse a network")),
+                local: Some("10.0.0.1-10.0.0.9".parse().expect("parse a span")),
+                ..Rule::plain("ssh", Action::Allow, "C:\\Tools\\ssh.exe")
+            }],
+        };
+
+        rules.save(&path).expect("save");
+
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains(r#"remote = "192.168.1.0/24""#), "{text}");
+        assert!(text.contains(r#"local = "10.0.0.1-10.0.0.9""#), "{text}");
+
+        assert_eq!(RuleFile::load_or_create(&path).expect("load"), rules);
     }
 
     #[test]
@@ -1446,6 +1475,13 @@ mod tests {
         assert!(text.contains("port = \"1024-2048\""), "{text}");
 
         assert_eq!(RuleFile::load_or_create(&path).expect("load"), rules);
+    }
+
+    #[test]
+    fn a_rule_file_refuses_a_local_address_it_cannot_read() {
+        let parsed = rule_file_with("local = \"10.0.0.256\"");
+
+        assert!(parsed.is_err(), "an octet has a maximum");
     }
 
     #[test]

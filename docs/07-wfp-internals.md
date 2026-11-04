@@ -52,8 +52,8 @@ the write path accepts.
 ## The layers a rule is installed on
 
 One rule becomes one filter per application it matches, per layer it applies to. Which layers that
-are depends on the direction of the rule, and a remote address narrows them further, because an
-IPv4 address can never match on an IPv6 layer:
+are depends on the direction of the rule, and an address narrows them further, because an IPv4
+address can never match on an IPv6 layer:
 
 | `direction` | Layers |
 |---|---|
@@ -61,18 +61,23 @@ IPv4 address can never match on an IPv6 layer:
 | `"out"` | `ALE_AUTH_CONNECT_V4` and `ALE_AUTH_CONNECT_V6` |
 | `"in"` | `ALE_AUTH_RECV_ACCEPT_V4` and `ALE_AUTH_RECV_ACCEPT_V6` |
 
-| `remote` | Of those, only |
+| `remote`, `local` | Of those, only |
 |---|---|
 | absent | all of them |
 | an IPv4 address, network or span | the two `..._V4` layers |
 | an IPv6 address, network or span | the two `..._V6` layers |
 
+Each address narrows the layers on its own, and the two of them have to agree on a family: a rule
+that names a v4 destination behind a v6 local address is left on no layer at all, because no
+connection has ends of both families.
+
 Each filter carries the application condition (`FWPM_CONDITION_ALE_APP_ID`) and, when the rule
-narrows, a protocol condition (`FWPM_CONDITION_IP_PROTOCOL`, `FWP_UINT8`), a port condition and a
-remote address condition. The port condition is `FWPM_CONDITION_IP_REMOTE_PORT` on a connect layer
-and `FWPM_CONDITION_IP_LOCAL_PORT` on a recv-accept layer, because that is the port the connection
-is about in each direction. The address condition is always
-`FWPM_CONDITION_IP_REMOTE_ADDRESS`, with `FWP_V4_ADDR_MASK` (an address and a mask) or
+narrows, a protocol condition (`FWPM_CONDITION_IP_PROTOCOL`, `FWP_UINT8`), a port condition and an
+address condition per end the rule names. The port condition is `FWPM_CONDITION_IP_REMOTE_PORT` on
+a connect layer and `FWPM_CONDITION_IP_LOCAL_PORT` on a recv-accept layer, because that is the port
+the connection is about in each direction. The address condition is
+`FWPM_CONDITION_IP_REMOTE_ADDRESS` for the destination and `FWPM_CONDITION_IP_LOCAL_ADDRESS` for
+the local end, each with `FWP_V4_ADDR_MASK` (an address and a mask) or
 `FWP_V6_ADDR_MASK` (an address and a prefix length) depending on the family. A span of addresses is
 the same field matched with `FWP_MATCH_RANGE` and `FWP_RANGE_TYPE`: the bounds are a `FWP_UINT32`
 pair for a v4 span and a `FWP_BYTE_ARRAY16_TYPE` pair for a v6 one, which is what the reference

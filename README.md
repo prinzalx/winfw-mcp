@@ -76,7 +76,12 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.72.1**. The release before it, **0.72.0**, is the one that matters: WFP hands the user of a
+The current release is **0.73.0**: a rule can name the address this machine talks from. `local` takes
+the same three text shapes `remote` has always taken (`10.0.0.5`, `10.0.0.0/24`,
+`10.0.0.1-10.0.0.9`) and is a rule's fifth narrowing dimension, so a rule about one network
+interface no longer has to be a rule about everything.
+
+Before it, **0.72.0** named the account behind a connection. WFP hands the user of a
 connection to the event callback as a security identifier, and the tool now resolves it, so a row
 says `waterfox.exe` *run as* `CORP\alice` rather than the program alone. The lookup is cached, runs
 after the loopback drop, and falls back to the SID text when it fails. It reaches the page, the

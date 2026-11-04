@@ -37,7 +37,7 @@ is left empty, because it exists by then and is not written again.
 
 ## Narrowing a rule
 
-Beyond the application, a rule can be narrowed by four optional fields. A rule that names none of
+Beyond the application, a rule can be narrowed by five optional fields. A rule that names none of
 them is about all of them, which is every rule written before these fields existed.
 
 | Field | Values | Meaning |
@@ -46,6 +46,7 @@ them is about all of them, which is every rule written before these fields exist
 | `direction` | `"in"`, `"out"` | which way the connection goes |
 | `port` | `"443"`, `"1024-2048"` | one port, or an inclusive range of them |
 | `remote` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"` | the address the connection goes to |
+| `local` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"` | the address the connection has on this machine |
 
 ```toml
 [[rule]]
@@ -59,7 +60,7 @@ port = "1024-2048"
 remote = "192.168.1.0/24"
 ```
 
-All four are written in the file, read back from it, shown in the page and accepted over both the
+All five are written in the file, read back from it, shown in the page and accepted over both the
 HTTP API and MCP. A value the server cannot read is refused rather than ignored, so `port = "http"`
 bounces instead of silently turning into "every port".
 
@@ -70,14 +71,14 @@ exists at all. A number may be quoted or bare, and both are written back as a ba
 that wants every transport leaves the field out rather than naming protocol 0.
 
 The narrowing is real, not cosmetic. `direction` decides which layers the rule is installed on, and
-`protocol`, `port` and `remote` become conditions on the filter, so a narrowed rule leaves other
-connections alone rather than deciding them. Details in
+`protocol`, `port`, `remote` and `local` become conditions on the filter, so a narrowed rule
+leaves other connections alone rather than deciding them. Details in
 [WFP internals](07-wfp-internals.md#the-layers-a-rule-is-installed-on).
 
 ## Writing a remote address
 
-`remote` is one address, one network or one span of addresses in either family, written the way
-networks are written everywhere else:
+`remote` and `local` are each one address, one network or one span of addresses in either family,
+written the way networks are written everywhere else:
 
 | Written | Read as |
 |---|---|

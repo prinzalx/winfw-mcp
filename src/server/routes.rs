@@ -1687,6 +1687,54 @@ pattern = "C:\\Windows\\two.exe"
         assert!(refused.is_err(), "one span cannot cross the families");
     }
 
+    /// A local address is written over the API exactly like a remote one is, stored in the file,
+    /// and comes back in the state, which is what the Local column of the page reads.
+    #[test]
+    fn a_local_address_travels_through_the_api() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let accepted = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"C:\\Tools\\ssh.exe","enabled":true,"local":"10.0.0.1-10.0.0.9"}]}"#.to_vec(),
+            ),
+        )
+        .expect("route the local address");
+
+        let body = String::from_utf8_lossy(&accepted.body).into_owned();
+
+        assert!(
+            body.contains(r#""local":"10.0.0.1-10.0.0.9""#),
+            "the local address has to come back as it was written: {body}",
+        );
+
+        let written = std::fs::read_to_string(server_state.rules_path()).expect("read the rules");
+
+        assert!(
+            written.contains(r#"local = "10.0.0.1-10.0.0.9""#),
+            "the local address has to survive a restart: {written}",
+        );
+
+        let refused = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"ssh","action":"allow","pattern":"C:\\Tools\\ssh.exe","enabled":true,"local":"10.0.0.1-::2"}]}"#.to_vec(),
+            ),
+        );
+
+        assert!(
+            refused.is_err(),
+            "a local address cannot cross the families"
+        );
+    }
+
     /// A port the server cannot read is refused rather than read as no port, so a typo in the page
     /// cannot silently widen a rule to every port.
     #[test]
