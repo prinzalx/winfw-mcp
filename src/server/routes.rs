@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use crate::export::{self, Area};
 use crate::learn::Detected;
 use crate::monitor::NetEvent;
-use crate::rules::{Action, Remotes, Rule, RuleFile, validate_comment, validate_pattern};
+use crate::rules::{Action, Ports, Remotes, Rule, RuleFile, validate_comment, validate_pattern};
 
 use super::http::{Request, Response, parse_body, parse_or_default};
 use super::mcp_tools::mcp_endpoint;
@@ -163,6 +163,17 @@ fn post_detected(state: &AppState, worker: &WfpWorker, request: &Request) -> Res
                 text.parse::<Remotes>()
                     .map_err(anyhow::Error::msg)
                     .with_context(|| format!("'{text}' is not an address"))?,
+            );
+        }
+
+        // A port from the connection panel narrows the rule to that port the same way the
+        // destination field narrows it to that address. `"*"` means any port, which is no rule
+        // field at all.
+        if let Some(text) = decision.port.as_deref().filter(|port| *port != "*") {
+            rule.port = Some(
+                text.parse::<Ports>()
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("'{text}' is not a port"))?,
             );
         }
 
@@ -750,6 +761,10 @@ struct Decision {
     /// Optional rule name, so an edit can name the rule instead of taking the file name.
     #[serde(default)]
     name: Option<String>,
+    /// Service port as a literal, `"*"` standing for any port. The Connections panel prefills it
+    /// from the event, so an allow can name one port instead of every port.
+    #[serde(default)]
+    port: Option<String>,
 }
 
 /// The body of `POST /api/detected/dismiss`.
@@ -1061,6 +1076,71 @@ mod tests {
             usize::from(!store_accepted(&body)),
             "a decided entry leaves the Detected list only when the store accepted the rule",
         );
+    }
+
+    /// The connections panel offers the port of the observed connection together with its
+    /// target: a rule written from there names exactly that port, because a single service
+    /// wants one port while a browser still wants every port of its destination.
+    #[test]
+    fn a_detected_decision_can_narrow_the_rule_to_one_port() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/detected",
+                br#"{"app":"\\device\\harddiskvolume3\\program files\\putty\\putty.exe","pattern":"C:\\Program Files\\putty\\putty.exe","remote":"192.168.0.20","port":"22","action":"allow"}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert_eq!(response.status, 200, "{body}");
+
+        let written = std::fs::read_to_string(&server_state.paths.rules).expect("rules.toml");
+
+        assert!(
+            written.contains("port = \"22\""),
+            "the rule names the port it was offered for: {written}",
+        );
+
+        // A port that is no port is refused rather than silently widened to any port. The
+        // refusal is an error out of the route, which the connection turns into a failure
+        // answer; no rule may have been written either.
+        let rejected = match Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/detected",
+                br#"{"app":"\\device\\harddiskvolume3\\program files\\putty\\putty.exe","pattern":"C:\\Program Files\\putty\\putty.exe","remote":"192.168.0.20","port":"ssh","action":"deny"}"#.to_vec(),
+            ),
+        ) {
+            Ok(response) => panic!("a port of `ssh` is refused, got status {}", response.status),
+            Err(error) => error,
+        };
+
+        assert!(
+            rejected.to_string().contains("not a port"),
+            "the refusal names the port: {rejected}",
+        );
+        let before = std::fs::read_to_string(&server_state.paths.rules)
+            .expect("rules.toml")
+            .matches("[[rule]]")
+            .count();
+
+        assert_ne!(before, 0, "the accepted decision wrote its rule");
+
+        let after = std::fs::read_to_string(&server_state.paths.rules)
+            .expect("rules.toml")
+            .matches("[[rule]]")
+            .count();
+
+        assert_eq!(after, before, "the refused decision wrote no rule");
     }
 
     /// The state is a read, and a read is answered to anyone on loopback. Were the token in its

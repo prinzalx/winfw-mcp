@@ -391,6 +391,7 @@ mod tests {
         NetEvent {
             seq: 0,
             time_ms: seq_time,
+            display: app.to_owned(),
             app: app.to_owned(),
             user: None,
             local_addr: String::new(),

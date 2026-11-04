@@ -399,6 +399,32 @@
         white-space: nowrap;
       }
 
+      /* The target and port of a connection are the two parts of a narrower rule, so they are
+         editable right here; the rest of the row is evidence, not input. */
+      table.targets input {
+        background: transparent;
+        border: 1px solid transparent;
+        border-bottom: 1px solid var(--line);
+        border-radius: 3px 3px 0 0;
+        color: inherit;
+        font: inherit;
+        padding: 0 0.2rem;
+        width: 14ch;
+      }
+
+      table.targets input:focus {
+        border-color: var(--accent);
+        outline: none;
+      }
+
+      table.targets td.verdict.deny {
+        color: var(--bad);
+      }
+
+      table.targets td.verdict.allow {
+        color: var(--ok);
+      }
+
       .caret {
         border-color: transparent;
         color: var(--muted);
@@ -1261,6 +1287,7 @@
               .join("\n");
             program.appendChild(tag);
           }
+          body.appendChild(row);
         });
       }
 
@@ -1355,6 +1382,7 @@
             ops.appendChild(button);
           }
           row.appendChild(ops);
+          body.appendChild(row);
         });
       }
 
@@ -1380,6 +1408,7 @@
             app: entry.app,
             pattern: entry.display,
             remote: entry.remote ?? null,
+            port: entry.port ?? null,
             action,
           }));
           status(action + " written to the rules");
@@ -1460,6 +1489,7 @@
           if (!group) {
             group = {
               app: event.app || "",
+              display: event.display || "",
               hits: 0,
               blocked: 0,
               rule: null,
@@ -1510,7 +1540,7 @@
           who.appendChild(
             element("span", "name", group.app === "" ? "(no application)" : fileName(group.app)),
           );
-          who.appendChild(element("span", "path", group.app));
+          who.appendChild(element("span", "path", group.display || group.app));
 
           if (group.user) {
             who.appendChild(element("span", "user", group.user));
@@ -1542,10 +1572,10 @@
           ]) {
             const button = element("button", className, label);
 
-            // The connection is the evidence, the program is what a rule names: no remote, so the
-            // rule covers every destination this program asked for.
+            // The connection is the evidence, the program is what a rule names: no remote and
+            // no port, so the rule covers every destination this program asked for.
             button.addEventListener("click", () =>
-              decide({ app: group.app, display: group.app, remote: null }, action),
+              decide({ app: group.app, display: group.display || null, remote: null }, action),
             );
             ops.appendChild(button);
           }
@@ -1555,44 +1585,77 @@
           const targets = element("table", "targets");
 
           targets.hidden = true;
-          targets.appendChild(
-            element("tbody").appendChild(
-              (() => {
-                const head = element("tr");
 
-                for (const label of ["target", "local", "protocol", "verdict", "time"]) {
-                  head.appendChild(element("th", null, label));
-                }
+          // The body is built as a node of its own rather than through the return value of
+          // `appendChild`, which answers with the child: the table had no `tbody` to find, and
+          // every connection with a target aborted the whole state render.
+          const tbody = element("tbody");
 
-                group.targets.forEach((event) => {
-                  const tr = element("tr");
+          targets.appendChild(tbody);
 
-                  // Name the rule the firewall blamed for this verdict. "other" means a filter we
-                  // did not install (another firewall) that a later rebuild will not account for.
-                  const blame = event.rule
-                    ? " by " + event.rule
-                    : event.filter_id
-                      ? " by other"
-                      : "";
+          const head = element("tr");
 
-                  tr.appendChild(
-                    element("td", null, endpoint(event.remote_addr, event.remote_port)),
-                  );
-                  tr.appendChild(
-                    element("td", null, endpoint(event.local_addr, event.local_port)),
-                  );
-                  tr.appendChild(element("td", null, protocolName(event.protocol)));
-                  tr.appendChild(element("td", null, event.kind + blame));
-                  tr.appendChild(
-                    element("td", null, new Date(event.time_ms).toLocaleTimeString()),
-                  );
-                  targets.querySelector("tbody").appendChild(tr);
-                });
+          for (const label of ["target", "port", "proto", "verdict", "time", ""]) {
+            head.appendChild(element("th", null, label));
+          }
+          tbody.appendChild(head);
 
-                return head;
-              })(),
-            ),
-          );
+          group.targets.forEach((event) => {
+            const tr = element("tr");
+
+            // Name the rule the firewall blamed for this verdict. "other" means a filter we
+            // did not install (another firewall) that a later rebuild will not account for.
+            const blame = event.rule
+              ? " by " + event.rule
+              : event.filter_id
+                ? " by other"
+                : "";
+
+            // The two fields a narrower rule is made of, prefilled from this connection: an
+            // allow written from this row reaches this target on this port unless the user
+            // edits the field first ("*" in the target means any, as the rule field does).
+            const target = element("input", null);
+            target.value = event.remote_addr || "*";
+            target.title = "destination of the rule: address, *.domain or * for any";
+            tr.appendChild(element("td", null)).appendChild(target);
+
+            const port = element("input", null);
+            port.value = event.remote_port ? String(event.remote_port) : "*";
+            port.title = "port or range of the rule, * for any";
+            tr.appendChild(element("td", null)).appendChild(port);
+
+            tr.appendChild(element("td", null, protocolName(event.protocol)));
+            tr.appendChild(
+              element("td", "verdict " + (event.allowed ? "allow" : "deny"), event.kind + blame),
+            );
+            tr.appendChild(
+              element("td", null, new Date(event.time_ms).toLocaleTimeString()),
+            );
+
+            const ops = element("td", "ops");
+
+            for (const [label, className, action] of [
+              ["Allow", "primary ok", "allow"],
+              ["Deny", "primary bad", "deny"],
+            ]) {
+              const button = element("button", className, label);
+
+              button.addEventListener("click", () =>
+                decide(
+                  {
+                    app: group.app,
+                    display: group.display || null,
+                    remote: target.value.trim() === "" ? "*" : target.value.trim(),
+                    port: port.value.trim() === "" ? "*" : port.value.trim(),
+                  },
+                  action,
+                ),
+              );
+              ops.appendChild(button);
+            }
+            tr.appendChild(ops);
+            tbody.appendChild(tr);
+          });
           row.appendChild(targets);
 
           const caret = element("button", "caret", group.targets.length + " targets");

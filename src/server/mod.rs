@@ -444,6 +444,7 @@ pub(crate) mod testsupport {
         crate::monitor::NetEvent {
             seq: 0,
             time_ms: 0,
+            display: app.to_owned(),
             app: app.to_owned(),
             user: None,
             local_addr: String::new(),
@@ -605,6 +606,43 @@ mod tests {
             INDEX_HTML.contains("Unknown programs are blocked"),
             "an empty rules list under deny has to warn about it",
         );
+    }
+
+    /// `appendChild` answers with the child it inserted, not with the node it was called on, so
+    /// building the target table of a connection through its return value left the table without a
+    /// `tbody`, and the row that was looking for one took the whole state render with it (§62.4).
+    /// The page stayed empty on every tab while the state behind it was full.
+    #[test]
+    fn the_connection_targets_keep_a_body_of_their_own() {
+        assert!(
+            INDEX_HTML.contains("tbody.appendChild(tr)"),
+            "the target rows have to go into a body the script holds itself",
+        );
+        assert!(
+            !INDEX_HTML.contains("querySelector(\"tbody\")"),
+            "looking the body up again is what failed: the table never had one",
+        );
+    }
+
+    /// A row that is assembled but never handed to its container is the quiet failure of a page
+    /// built without a framework: the counters stay right, the panels stay empty, and the browser
+    /// reports nothing at all. Every list that opens a container has to fill it (§62.4).
+    #[test]
+    fn every_list_appends_the_rows_it_builds() {
+        let page = script_body(INDEX_HTML);
+
+        for name in ["renderRules", "renderDetected"] {
+            let from = page
+                .find(&format!("function {name}()"))
+                .unwrap_or_else(|| panic!("the page lost {name}()"));
+            let rest = &page[from..];
+            let end = rest.find("\n      }").unwrap_or(rest.len());
+
+            assert!(
+                rest[..end].contains("body.appendChild(row);"),
+                "{name}() assembles rows but never hands one to its container"
+            );
+        }
     }
 
     /// The element ids the page's script asks for by name.

@@ -33,6 +33,11 @@ pub struct NetEvent {
     pub time_ms: u64,
     /// The application path, exactly as the store reported it.
     pub app: String,
+    /// The application path in the drive form a human reads (`c:\...`), resolved from `app`.
+    ///
+    /// The store reports device form, which a rule can store but nobody wants to read in a
+    /// table. The page displays this and sends it back as an edited pattern.
+    pub display: String,
     /// The account that owned the process behind the connection, as `DOMAIN\name`.
     ///
     /// `None` when the event named no user at all. An identifier that is present but cannot be
@@ -663,10 +668,13 @@ fn listen(
 
         let remote_addr = event_address(&event.header, End::Remote);
 
+        let app = blob_to_string(&event.header.appId);
+
         let mut entry = NetEvent {
             seq: 0,
             time_ms: filetime_to_millis(&event.header.timeStamp),
-            app: blob_to_string(&event.header.appId),
+            display: crate::device::to_dos_path(&app),
+            app,
             // Filled in below, once we know the event is kept: resolving an account can reach
             // Active Directory, and a feed that is mostly loopback should not pay for it.
             user: None,
@@ -915,6 +923,7 @@ mod tests {
         NetEvent {
             seq: 0,
             time_ms: 0,
+            display: app.to_owned(),
             app: app.to_owned(),
             user: None,
             local_addr: String::new(),
