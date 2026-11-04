@@ -15,7 +15,7 @@ file the tray and the shell use, so a browser tab shows the logo without a singl
 
 Everything the page needs is in that one file: the style and the script are inline, there is no CDN,
 no webfont and no image fetched from outside, which is what makes the page work on a machine whose
-network the firewall has just closed. It asks for about 64 KB. Light and dark are the same file; the
+network the firewall has just closed. It asks for about 68 KB. Light and dark are the same file; the
 choice is made through CSS variables, so nothing is fetched and nothing is rebuilt.
 
 | Light, 1100 px | Dark, 1100 px |
@@ -65,8 +65,9 @@ top, one row per program:
   one of our rules decided it;
 - **Allow** and **Deny** on the right, which turn the program into a rule at once.
 
-A row expands to the destinations behind it: address and port, the local end, the verdict with the
-rule it blamed, and the time, in a monospace table with aligned columns.
+A row expands to the destinations behind it: address and port, the local end, the protocol
+(`tcp`, `udp`, or the number WFP reported for anything else), the verdict with the rule it blamed,
+and the time, in a monospace table with aligned columns.
 
 The account is what the firewall reported for the connection, resolved from the security identifier
 of the event. It is read from the event rather than from the running process, so a program that has

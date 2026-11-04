@@ -232,12 +232,13 @@ Kept as asked, with the two audits now folded in below.
   agent calls over MCP although both were removed in 0.36.0, and chapter 3 still offered an agent
   `rules.decode` and a profile switch over MCP. The two chapters now say that an agent reads
   `detected.list` and that a human decides on the page.
-- **The expanded connection table promises a protocol it does not show.** Found while the account
-  column was added in 0.72.0: `web/index.html` builds the expanded row with the headings
-  `target, local, protocol, time`, but the third cell holds `event.kind + blame` — the verdict and
-  the rule it blamed. The `protocol` field of the event reaches the browser and is never rendered.
-  Either the heading should read "verdict" or the cell should show the protocol; both are a one-line
-  change and neither belongs in a release about the account name.
+- ~~**The expanded connection table promises a protocol it does not show.**~~ — **closed in 0.73.1**.
+  Found while the account column was added in 0.72.0: `web/index.html` built the expanded row with the
+  headings `target, local, protocol, time`, but the third cell held `event.kind + blame` — the verdict
+  and the rule it blamed — so the `protocol` field of the event reached the browser unrendered. Neither
+  of the two one-line answers was taken alone: the row has five columns now, protocol and verdict
+  apart, and `protocolName` names `tcp` and `udp` and falls back to the number, because WFP reports a
+  number and the other two protocols a machine sees are rare enough not to be worth a table.
 - **`edition = "2024"` is the newest stable edition, not an oversight.** Rust releases an edition every
   three years and each arrives with the toolchain that adopts it, so edition 2027 does not exist for
   `rustc` 1.99.1 yet (it accepts `2015|2018|2021|2024|future`). Migrate deliberately when it lands;
@@ -497,9 +498,14 @@ Roughly by how much they cost to change later:
    one day truncate again.
 9. ~~**No test loads the page** (§62.2)~~ — half done in 0.66.0. A test collects every element id the
    script asks for and asserts the markup declares it, which is the disagreement a change to either
-   half produces; it was verified to fail when an id is renamed. What it cannot do is notice a script
-   that no longer parses, because that needs a JavaScript parser, and a page that does not parse still
-   renders its static HTML. Whether to add a parser to the test target alone is an open question.
+   half produces; it was verified to fail when an id is renamed. What it could not do was notice a
+   script that no longer parses, because that needs a JavaScript parser, and a page that does not parse
+   still renders its static HTML. **Closed in 0.73.1 without a parser**: a test in `src/server/mod.rs`
+   scans the one script block for brackets that do not match, skipping string
+   literals, template literals and comments. It is not a parser and does not claim to be — a syntax
+   error inside a balanced block still passes — but it catches the failure an edit actually produces,
+   an unclosed block, and it asserts that against a broken snippet rather than trusting itself. A
+   parser stays available if the page ever grows a build step.
 
 ## 51. The state of the remaining dimension list
 

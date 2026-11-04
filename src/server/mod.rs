@@ -664,4 +664,116 @@ mod tests {
             );
         }
     }
+
+    /// The text of the page's one script block, without the tags around it.
+    fn script_body(page: &str) -> &str {
+        let start = page
+            .find("<script>")
+            .expect("the page holds one script block")
+            + "<script>".len();
+        let rest = &page[start..];
+        let end = rest.find("</script>").expect("the script block is closed");
+
+        &rest[..end]
+    }
+
+    /// The first bracket of the script that does not match, if there is one.
+    ///
+    /// String literals, template literals and comments are skipped, which is all the scanner has to
+    /// know: the page holds no regular expression literal, so a slash is always the start of a
+    /// comment or nothing at all.
+    fn bracket_error(script: &str) -> Option<char> {
+        let chars: Vec<char> = script.chars().collect();
+        let mut stack: Vec<char> = Vec::new();
+        let mut i = 0;
+
+        while i < chars.len() {
+            match chars[i] {
+                quote @ ('\'' | '"' | '`') => {
+                    i += 1;
+
+                    while i < chars.len() && chars[i] != quote {
+                        i += 1 + usize::from(chars[i] == '\\');
+                    }
+                }
+                '/' if i + 1 < chars.len() && chars[i + 1] == '/' => {
+                    while i < chars.len() && chars[i] != '\n' {
+                        i += 1;
+                    }
+                }
+                '/' if i + 1 < chars.len() && chars[i + 1] == '*' => {
+                    i += 2;
+
+                    while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                        i += 1;
+                    }
+
+                    i += 1;
+                }
+                open @ ('{' | '(' | '[') => {
+                    stack.push(open);
+                }
+                close @ ('}' | ')' | ']') => {
+                    let open = match close {
+                        '}' => '{',
+                        ')' => '(',
+                        _ => '[',
+                    };
+
+                    if stack.pop() != Some(open) {
+                        return Some(close);
+                    }
+                }
+                _ => {}
+            }
+
+            i += 1;
+        }
+
+        stack.pop().map(|open| match open {
+            '{' => '}',
+            '(' => ')',
+            _ => ']',
+        })
+    }
+
+    /// The page has no build step and no parser in front of it, so a script that stopped parsing
+    /// renders its static HTML and does nothing else (§62.2). A JavaScript parser in the test target
+    /// would be the strict answer and is not taken: it would be a dependency for one assertion.
+    /// This is the cheap answer, and it catches the failure an edit actually produces, a block that
+    /// is no longer closed. It does not catch a syntax error inside a balanced block.
+    #[test]
+    fn the_page_script_is_closed_and_its_brackets_balance() {
+        let script = script_body(INDEX_HTML);
+
+        assert!(
+            script.len() > 20_000,
+            "the scan found {script:.40}, which is too little to be the page's script"
+        );
+
+        assert!(
+            script.contains("function renderConnections"),
+            "the script block found is not the page's script"
+        );
+
+        assert_eq!(
+            bracket_error(script),
+            None,
+            "a bracket in the page's script does not match"
+        );
+
+        // The two assertions below are what makes the scan worth having: an unclosed block is
+        // noticed, and a bracket inside a string is not.
+        assert_eq!(
+            bracket_error("function f() { if (a) { b(); }"),
+            Some('}'),
+            "an unclosed block has to be reported"
+        );
+
+        assert_eq!(
+            bracket_error("const s = \"({\"; // ) \nconst t = `a${b}c`;"),
+            None,
+            "a bracket in a string, a comment or a template has to be ignored"
+        );
+    }
 }

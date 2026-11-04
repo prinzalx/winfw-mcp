@@ -63,13 +63,19 @@ Test code lives in the same files as the code it checks and ships nowhere: `serv
 `testutil` scratch directory, `server::testsupport` and every `mod tests` are `#[cfg(test)]`,
 so the release executable carries none of it and a separate test crate would buy nothing.
 
-The page has one test of its own, and no browser takes part in it.
+The page has two tests of its own, and no browser takes part in either.
 `every_element_the_page_script_asks_for_exists` (`src/server/mod.rs`) collects the element ids the
 embedded script asks for — every `el("…")` at the call site and the `WRITE_CONTROLS` list it walks to
 disable the write controls — and asserts the markup declares each of them. That is the disagreement a
-change to either half of the file produces. It cannot notice a script that fails to parse, which is the
-failure that once shipped for twelve releases, because noticing that needs a JavaScript parser and a
-build step this tool does not have.
+change to either half of the file produces.
+
+The second test, `the_page_script_is_closed_and_its_brackets_balance`, is what stands between a bad
+edit and a page that renders its static HTML and does nothing, which is the failure that once shipped
+for twelve releases. It is deliberately not a JavaScript parser: it takes the text between `<script>`
+and `</script>`, skips string literals, template literals and comments, and insists every brace,
+parenthesis and bracket matches. A syntax error inside a balanced block still passes it, and adding a
+parser to the test target for that last case is an open question — the page holds no regular
+expression literal, which is the only reason a scanner this simple is sound.
 
 ## The icon and the version information
 

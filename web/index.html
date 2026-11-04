@@ -1309,6 +1309,16 @@
         return port ? "port " + port : "";
       }
 
+      // The events carry the IP protocol number. Name the two that matter and fall back to the
+      // number for everything else, which is what WFP handed us.
+      function protocolName(protocol) {
+        if (protocol === 6) {
+          return "tcp";
+        }
+
+        return protocol === 17 ? "udp" : String(protocol);
+      }
+
       /* The feed grouped by program. The events arrive newest first, so the first event of a
          program decides where its card sits: newest activity on top.
 
@@ -1431,7 +1441,7 @@
               (() => {
                 const head = element("tr");
 
-                for (const label of ["target", "local", "protocol", "time"]) {
+                for (const label of ["target", "local", "protocol", "verdict", "time"]) {
                   head.appendChild(element("th", null, label));
                 }
 
@@ -1452,6 +1462,7 @@
                   tr.appendChild(
                     element("td", null, endpoint(event.local_addr, event.local_port)),
                   );
+                  tr.appendChild(element("td", null, protocolName(event.protocol)));
                   tr.appendChild(element("td", null, event.kind + blame));
                   tr.appendChild(
                     element("td", null, new Date(event.time_ms).toLocaleTimeString()),
