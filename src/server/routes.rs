@@ -1987,6 +1987,33 @@ pattern = "C:\\Windows\\two.exe"
         assert!(body.contains(r#""remote_addr":"93.184.216.34""#), "{body}");
     }
 
+    /// The account behind a connection reaches the page, and an event that named no user answers
+    /// `null` rather than leaving the field out, so the client never has to guess.
+    #[test]
+    fn the_state_endpoint_carries_the_account_an_event_belongs_to() {
+        let events = Arc::new(EventLog::new());
+
+        let mut named = connection("named.exe");
+        named.user = Some("CORP\\alice".to_owned());
+        events.push(named);
+        events.push(connection("anonymous.exe"));
+
+        let server_state = state_with(Arc::clone(&events), Live::default());
+        let worker = WfpWorker::start_enforcing();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains(r#""user":"CORP\\alice""#), "{body}");
+        assert!(body.contains(r#""user":null"#), "{body}");
+    }
+
     /// Which socket answered and whether the traffic left the machine are the other two things a
     /// reader needs to make sense of a connection, so they travel with it.
     #[test]

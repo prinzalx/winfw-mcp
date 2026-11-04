@@ -1,6 +1,6 @@
 [package]
 name = "winfw-mcp"
-version = "0.71.0"
+version = "0.72.0"
 edition = "2024"
 description = "Portable, web-driven Windows Firewall (WFP) controller with an MCP interface"
 license = "MIT"
@@ -31,6 +31,8 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_NetworkManagement_WindowsFilteringPlatform",
     "Win32_Security",
+    # ConvertSidToStringSidW, for naming the account a connection event belongs to.
+    "Win32_Security_Authorization",
     # QueryDosDeviceW and GetLogicalDrives, for the drive-to-device path mapping.
     "Win32_Storage_FileSystem",
     "Win32_System_Rpc",

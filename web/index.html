@@ -345,7 +345,8 @@
         white-space: nowrap;
       }
 
-      .who .path {
+      .who .path,
+      .who .user {
         color: var(--muted);
         display: block;
         font-size: 0.75rem;
@@ -1319,6 +1320,7 @@
               blocked: 0,
               rule: null,
               lan: 0,
+              user: null,
               targets: [],
             };
             groups.set(key, group);
@@ -1337,6 +1339,11 @@
           // sentence the row has room for.
           if (event.rule) {
             group.rule = event.rule;
+          }
+          // The newest account wins, which is the same rule the blame column follows. A program
+          // run by two users is two rows worth of information we cannot show in one line.
+          if (event.user) {
+            group.user = event.user;
           }
           group.targets.push(event);
         });
@@ -1360,6 +1367,10 @@
             element("span", "name", group.app === "" ? "(no application)" : fileName(group.app)),
           );
           who.appendChild(element("span", "path", group.app));
+
+          if (group.user) {
+            who.appendChild(element("span", "user", group.user));
+          }
 
           const count = element(
             "span",

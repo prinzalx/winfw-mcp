@@ -58,14 +58,20 @@ The page is one column, at most about 1100 pixels wide and centred. Reading it t
 The default tab answers *what reached out*. Connections are grouped by program, newest activity on
 top, one row per program:
 
-- the file name in large type, the full path under it in small grey drive form (`C:\...`);
+- the file name in large type, the full path under it in small grey drive form (`C:\...`), and the
+  account that ran the program under that, as `DOMAIN\name`;
 - how many connections of this run the tool has seen for that program;
 - a badge for the verdict: **blocked** in red, **allowed** in green, or *by rule &lt;name&gt;* when
   one of our rules decided it;
 - **Allow** and **Deny** on the right, which turn the program into a rule at once.
 
-A row expands to the destinations behind it: address and port, protocol, and the time, in a
-monospace table with aligned columns.
+A row expands to the destinations behind it: address and port, the local end, the verdict with the
+rule it blamed, and the time, in a monospace table with aligned columns.
+
+The account is what the firewall reported for the connection, resolved from the security identifier
+of the event. It is read from the event rather than from the running process, so a program that has
+meanwhile exited is still attributed correctly. An identifier that cannot be resolved is shown as its
+SID text, and a connection the engine attributed to no user shows no account line at all.
 
 The monitor's own state sits as a small grey line next to the heading:
 `running, 128 events, last event 42s ago`, `no feed: 0x00000005`, `starting` or `stopped`. It is the

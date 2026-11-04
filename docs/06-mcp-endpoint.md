@@ -19,7 +19,7 @@ Six tools, and every one of them reads.
 | `rules.list` | every rule, in file order |
 | `rules.share` | one rule as a Base64 string (takes `index`) |
 | `detected.list` | what learning mode collected |
-| `events.list` | recent connection events, each naming both endpoints, whether the traffic left the machine, and the deciding filter id and rule |
+| `events.list` | recent connection events, each naming both endpoints, the account that ran the program, whether the traffic left the machine, and the deciding filter id and rule |
 | `profiles.list` | the active profile and the stored profile names |
 
 `rules.share` is the readable half of a rule: an agent can hand the string to a human, and the

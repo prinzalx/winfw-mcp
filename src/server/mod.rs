@@ -445,6 +445,7 @@ pub(crate) mod testsupport {
             seq: 0,
             time_ms: 0,
             app: app.to_owned(),
+            user: None,
             local_addr: String::new(),
             local_port: 49_152,
             remote_port: 443,

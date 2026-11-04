@@ -33,6 +33,12 @@ pub struct NetEvent {
     pub time_ms: u64,
     /// The application path, exactly as the store reported it.
     pub app: String,
+    /// The account that owned the process behind the connection, as `DOMAIN\name`.
+    ///
+    /// `None` when the event named no user at all. An identifier that is present but cannot be
+    /// resolved is reported as its SID text rather than as `None`, so a failed lookup is visible
+    /// instead of looking like traffic with no owner.
+    pub user: Option<String>,
     /// The local address in the text form a human reads, empty when the event carried none.
     ///
     /// A listener shows the address it bound to here, which is how `0.0.0.0` and a single
@@ -629,10 +635,13 @@ fn listen(
 
         let remote_addr = event_address(&event.header, End::Remote);
 
-        let entry = NetEvent {
+        let mut entry = NetEvent {
             seq: 0,
             time_ms: filetime_to_millis(&event.header.timeStamp),
             app: blob_to_string(&event.header.appId),
+            // Filled in below, once we know the event is kept: resolving an account can reach
+            // Active Directory, and a feed that is mostly loopback should not pay for it.
+            user: None,
             local_addr: event_address(&event.header, End::Local),
             local_port: event_port(&event.header, End::Local),
             remote_port: event_port(&event.header, End::Remote),
@@ -655,6 +664,12 @@ fn listen(
         if !shown_in_feed(&entry, sink.debug_show_loopback) {
             return;
         }
+
+        // The identifier is only valid for as long as this callback runs, so it is resolved here
+        // and never stored.
+        entry.user = crate::user::account_name(windows::Win32::Security::PSID(
+            event.header.userId as *mut core::ffi::c_void,
+        ));
 
         // Learning mode looks at the application behind the connection, not at the connection
         // itself, so the log gets a copy and the detector gets the original. With `learn_mode`
@@ -867,6 +882,7 @@ mod tests {
             seq: 0,
             time_ms: 0,
             app: app.to_owned(),
+            user: None,
             local_addr: String::new(),
             local_port: 49_152,
             remote_port: 443,

@@ -76,7 +76,13 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.71.0**: the Detected list reaches the page whole. `/api/state` answered
+The current release is **0.72.0**: connections name the account behind them. WFP hands the user of a
+connection to the event callback as a security identifier, and the tool now resolves it, so a row
+says `waterfox.exe` *run as* `CORP\alice` rather than the program alone. The lookup is cached, runs
+after the loopback drop, and falls back to the SID text when it fails. It reaches the page, the
+state endpoint and the MCP's `events.list`.
+
+Before it, **0.71.0**: the Detected list reaches the page whole. `/api/state` answered
 the newest twenty entries while the list on disk holds a hundred, so forty-seven open questions were
 decided from twenty and the rest had no way to reach a decision at all. The answer now carries the
 same cap the list is kept to, so the two numbers cannot drift apart again, and `detected_total`

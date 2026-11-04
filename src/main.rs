@@ -17,6 +17,7 @@ mod server;
 mod simplewall;
 mod store;
 mod tray;
+mod user;
 #[cfg(windows)]
 mod wfp;
 

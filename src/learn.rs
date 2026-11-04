@@ -386,6 +386,7 @@ mod tests {
             seq: 0,
             time_ms: seq_time,
             app: app.to_owned(),
+            user: None,
             local_addr: String::new(),
             local_port: 49_152,
             remote_port: 443,

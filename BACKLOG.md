@@ -232,6 +232,12 @@ Kept as asked, with the two audits now folded in below.
   agent calls over MCP although both were removed in 0.36.0, and chapter 3 still offered an agent
   `rules.decode` and a profile switch over MCP. The two chapters now say that an agent reads
   `detected.list` and that a human decides on the page.
+- **The expanded connection table promises a protocol it does not show.** Found while the account
+  column was added in 0.72.0: `web/index.html` builds the expanded row with the headings
+  `target, local, protocol, time`, but the third cell holds `event.kind + blame` — the verdict and
+  the rule it blamed. The `protocol` field of the event reaches the browser and is never rendered.
+  Either the heading should read "verdict" or the cell should show the protocol; both are a one-line
+  change and neither belongs in a release about the account name.
 - **`edition = "2024"` is the newest stable edition, not an oversight.** Rust releases an edition every
   three years and each arrives with the toolchain that adopts it, so edition 2027 does not exist for
   `rustc` 1.99.1 yet (it accepts `2015|2018|2021|2024|future`). Migrate deliberately when it lands;
@@ -465,8 +471,11 @@ Roughly by how much they cost to change later:
    API can say "blocked by rule X" honestly. What is left is §4.3's last point (a class derived from
    filter weight) and the two fields no event names directly. The remote address joined the record in
    0.19.0 and the local endpoint with the loopback marker in 0.25.0, so every endpoint an event can
-   name is reported; the user name (the SID in the header, which needs a lookup per event) is what
-   is left.
+   name is reported. The user name landed in **0.72.0**: the event header names the account as a
+   security identifier, `src/user.rs` resolves it through `LookupAccountSidW` behind a bounded cache,
+   and the page, `/api/state` and `events.list` all carry it. What is left of this item is §4.3's last
+   point (a class derived from filter weight) and the package SID, which no event of this tool has
+   needed so far.
 4. ~~**A settings write path** (§3.2)~~ — done in 0.13.0 for the two settings that matter at runtime.
    `POST /api/settings` and the MCP tool `settings.set` change `learn_mode` and `default_policy` on a
    running process, write `config.toml`, and rebuild the store. `theme` joined them in 0.32.0. What
