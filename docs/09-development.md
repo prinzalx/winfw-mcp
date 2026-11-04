@@ -30,7 +30,14 @@ src/server/settings.rs   a settings change written to `config.toml`
 src/server/mcp_tools.rs  the read-only MCP dispatcher over that state
 src/tray.rs              the notification-area icon, its start balloon and its message window
 src/user.rs              the security identifier of an event resolved to an account name
-src/wfp.rs               every Fwpm* call
+src/wfp/mod.rs           the engine handle, the store inventory, apply and clear
+src/wfp/enumerate.rs     enumeration handles and entry arrays, released on scope exit
+src/wfp/filters.rs       the conditions of one rule and the filters handed to the engine
+src/wfp/layers.rs        which authorization layer a rule belongs on
+src/wfp/addr.rs          address conditions, in each address family
+src/wfp/app_id.rs        application identities and the wildcard expansion behind them
+src/wfp/keys.rs          the keys derived from a rule name
+src/wfp/tests.rs         the tests that need the live store
 src/testutil.rs          a scratch directory for the tests
 web/index.html           the single page, embedded in the binary
 assets/                  the icon: `winfw-mcp.ico` and the script that generates it
@@ -42,6 +49,12 @@ to the WFP worker, but it decides nothing about the firewall. The split exists s
 files worth reviewing on their own are small: `guard.rs`, which is the whole answer to *who may
 write*, and `mcp_tools.rs`, which holds no write access to rules, settings, profiles or the store at
 all. Nothing outside the directory names more than `crate::server::` re-exports.
+
+`src/wfp/` is split the same way and for the same reason: every `Fwpm*` call still lives there and
+nowhere else, but the store enumeration, the layers, the addresses, the application identities and
+the keys are each in the one file that owns them. A module that installs filters is the only one
+that has to know what a condition list looks like. The items the modules hand each other are
+`pub(super)` at most, and everything outside the directory still spells the path `crate::wfp::`.
 
 ## Tests
 
