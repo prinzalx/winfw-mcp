@@ -29,6 +29,7 @@ src/server/profiles.rs   create, delete, rename and switch a profile
 src/server/settings.rs   a settings change written to `config.toml`
 src/server/mcp_tools.rs  the read-only MCP dispatcher over that state
 src/tray.rs              the notification-area icon, its start balloon and its message window
+src/user.rs              the security identifier of an event resolved to an account name
 src/wfp.rs               every Fwpm* call
 src/testutil.rs          a scratch directory for the tests
 web/index.html           the single page, embedded in the binary

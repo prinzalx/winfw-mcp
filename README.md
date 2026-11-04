@@ -76,7 +76,7 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.72.0**: connections name the account behind them. WFP hands the user of a
+The current release is **0.72.1**. The release before it, **0.72.0**, is the one that matters: WFP hands the user of a
 connection to the event callback as a security identifier, and the tool now resolves it, so a row
 says `waterfox.exe` *run as* `CORP\alice` rather than the program alone. The lookup is cached, runs
 after the loopback drop, and falls back to the SID text when it fails. It reaches the page, the
