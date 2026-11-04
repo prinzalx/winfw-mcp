@@ -1,5 +1,5 @@
 use super::*;
-use crate::rules::{Cidr, Protocol};
+use crate::rules::{Cidr, MAX_WILDCARD_MATCHES, Protocol};
 use crate::wfp::app_id::*;
 use crate::wfp::keys::*;
 use crate::wfp::layers::*;

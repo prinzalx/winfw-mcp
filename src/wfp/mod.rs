@@ -58,7 +58,7 @@ use crate::wfp::enumerate::{EnumHandle, WfpArray};
 use crate::wfp::keys::{filter_key, wide};
 #[allow(unused_imports)] // Reached through this module by the tests.
 use crate::wfp::layers::LAYERS;
-pub(crate) use app_id::{MAX_WILDCARD_MATCHES, pattern_reach};
+pub(crate) use app_id::pattern_reach;
 
 /// The name the store shows for us, in provider, sublayer and filter display data alike.
 const APP_NAME: &str = env!("CARGO_PKG_NAME");

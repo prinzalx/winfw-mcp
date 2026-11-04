@@ -1,13 +1,8 @@
 //! Application identities: wildcard expansion of a pattern into the applications the detector
 //! has seen, and the blob a filter condition points at.
 
+use crate::rules::MAX_WILDCARD_MATCHES;
 use crate::wfp::*;
-
-/// How many applications one wildcard rule may be expanded into.
-///
-/// A pattern is allowed to be broad, but the store is shared and every match costs four filters.
-/// The cap keeps a careless `*` from turning one rule into thousands.
-pub(crate) const MAX_WILDCARD_MATCHES: usize = 32;
 
 /// What a pattern resolves to: the applications to install filters for, and how many applications
 /// matched in total.

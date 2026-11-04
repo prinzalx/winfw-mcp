@@ -2201,7 +2201,7 @@ pattern = "C:\\Windows\\two.exe"
             "nothing has been seen yet, so nothing is cut",
         );
 
-        for index in 0..crate::wfp::MAX_WILDCARD_MATCHES + 1 {
+        for index in 0..crate::rules::MAX_WILDCARD_MATCHES + 1 {
             let app = crate::device::to_device_path(&format!(
                 "C:\\Program Files\\app{index}\\browser.exe"
             ));
@@ -2218,12 +2218,12 @@ pattern = "C:\\Windows\\two.exe"
         assert_eq!(truncations[0]["name"], "browser", "the rule is named");
         assert_eq!(
             truncations[0]["matches"],
-            crate::wfp::MAX_WILDCARD_MATCHES + 1,
+            crate::rules::MAX_WILDCARD_MATCHES + 1,
             "the matches are counted past the cap",
         );
         assert_eq!(
             truncations[0]["installed"],
-            crate::wfp::MAX_WILDCARD_MATCHES,
+            crate::rules::MAX_WILDCARD_MATCHES,
             "only the cap is installed",
         );
     }

@@ -10,6 +10,7 @@ ten planned headings.
 
 | Version | What changed |
 |---|---|
+| 0.77.4 | `MAX_WILDCARD_MATCHES` is declared in `rules.rs` now, which is where the bound on a rule field belongs, so `rules` no longer imports `wfp` for a number it defines for itself: the dependency between the two modules runs one way. No behavior changed. |
 | 0.77.3 | The WFP module is a directory now: the engine handle and the store inventory stay in `wfp/mod.rs`, and the enumeration, the layers, the addresses, the application identities, the keys, the filters and the tests each moved into the file that owns them. The code is the same code, line for line. No behavior changed. |
 | 0.77.2 | The counting half of the wildcard expansion lives in one function now: `pattern_reach` (what the page shows) and `app_ids` (what the store gets) ask the same question to the same answer instead of each looping over the pattern field on its own. The eight copies of the "clear the store or skip on access denied" test block became one helper. No behavior changed. |
 | 0.77.1 | The enumeration handle and the entry array of the WFP store are held by wrappers that release them on scope exit instead of by hand. No failure path can leave a handle open or an array out there any more, and the three copies of the closing code in the enumeration macro and in `remove_our_filters` are gone. No behavior changed. |

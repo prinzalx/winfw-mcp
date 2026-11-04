@@ -6,7 +6,14 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::store;
-use crate::wfp::MAX_WILDCARD_MATCHES;
+
+/// How many entries one rule field may name, and how many applications one wildcard pattern may
+/// be expanded into.
+///
+/// A pattern is allowed to be broad, but the store is shared and every match costs four filters.
+/// The cap keeps a careless `*` from turning one rule into thousands, and it is the same bound for
+/// every list a rule carries, so one rule can never spend more than this many filters per layer.
+pub const MAX_WILDCARD_MATCHES: usize = 32;
 
 /// What WFP eventually does with a matching connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
