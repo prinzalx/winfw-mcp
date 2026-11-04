@@ -30,7 +30,9 @@ choice is made through CSS variables, so nothing is fetched and nothing is rebui
 
 The page is one column, at most about 1400 pixels wide and centred. Reading it top to bottom:
 
-- **Header**, one row: the name on the left, three status chips on the right.
+- **Header**, one row: the name on the left, three status chips on the right. All three are
+  buttons: *protection* and *learning* switch what they show, *policy* moves to the Settings tab
+  where its dropdown lives.
   - **protection** reads `on` or `paused` and asks the server to put our filters into the store or
     take them out, which is the pause the [lifecycle chapter](08-lifecycle.md#pausing-protection)
     describes.
@@ -43,9 +45,10 @@ The page is one column, at most about 1400 pixels wide and centred. Reading it t
 - **Read only band**, shown only on a tab that has no session token: *Read only · open the page from
   the tray icon to make changes*. It is a band rather than a word in the header because a person who
   cannot click anything needs to see why before the first click, not after it.
-- **Status line**: what the store reported and the address the page is talking to.
-- **Banner**, when there is something the store wants the person to know: a refused store, what the
-  rebuild at startup found, or a `rules.toml` that is not the file the tool itself wrote. Details
+- **Banner**, only when there is something the store wants the person to know: a refused store, what
+  the rebuild at startup found, or a `rules.toml` that is not the file the tool itself wrote. While
+  the store answers, its report — providers, sublayers and filters counted — sits in the small print
+  of the footer instead, next to the note that a reload of the tab loses its write token. Details
   under [Banners](#banners).
 - **Tabs**: Connections, Rules, Detected, Settings. The Detected tab carries a badge with the number
   of open entries. The state answer carries the whole list — as many entries as the Detected list
@@ -69,6 +72,12 @@ top, one row per program:
   dialog prefilled from the program's newest connection — program, protocol, direction, the target
   address and the port the firewall saw — so the least-privilege shape arrives first and widening it
   to `*` is a deliberate edit.
+
+The list is reconciled rather than rebuilt: when an event arrives, the program's existing row is
+updated in place, so an open group stays open, the target and port fields keep what was typed into
+them, and a row never slides out from under the pointer — a program keeps the place it was given
+the first time it was seen and only a new program joins at the top. A hidden tab collects events
+without painting and renders once when it is seen again.
 
 A row expands to the destinations behind it, newest first, in a monospace table: the destination
 address and the port are editable fields prefilled from what the firewall saw, followed by the
@@ -170,9 +179,8 @@ the live store and *Quit* ends the process. Restore is the file half of an expor
 a rules file back in, and the interface asks first, because replacing the list is the one action on the
 page that can lose rules rather than only fail to add them.
 
-**Help** at the end is a collapsed block. It states the two rules worth knowing without opening the
-handbook: a deny always beats an allow whatever the order of the list, and a detected application is
-one no rule speaks about yet.
+The footer holds only the small print named above; the long help text that once ended the page is
+gone, because the tooltips on the controls and this handbook say the same.
 
 ### Banners
 

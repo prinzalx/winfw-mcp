@@ -112,6 +112,14 @@
         white-space: nowrap;
       }
 
+      /* The three header chips are buttons now, so they must not look like one. */
+      button.chip {
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+
       .chip.ok {
         border-color: var(--ok);
         color: var(--ok);
@@ -540,16 +548,17 @@
         pointer-events: none;
       }
 
-      details.help {
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        margin-top: var(--sp-5);
-        padding: var(--sp-2) var(--sp-3);
+      .foot {
+        margin-top: var(--sp-4);
+        padding-top: var(--sp-2);
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.75rem;
+        text-align: center;
       }
 
-      details.help summary {
-        cursor: pointer;
-        font-weight: 600;
+      .foot span + span::before {
+        content: " \00b7 ";
       }
 
       dialog {
@@ -620,19 +629,12 @@
       <header class="topbar">
         <h1>winfw-mcp</h1>
         <div class="chips">
-          <span
-            class="chip"
-            id="chip-protection"
-            title="whether our filters are in the firewall store right now"
-            >protection</span
-          >
-          <span
-            class="chip"
-            id="chip-policy"
-            title="the default policy"
-            >policy</span
-          >
-          <span class="chip" id="chip-learning" title="whether new applications are collected">learning</span>
+          <button type="button" class="chip" id="chip-protection"
+            title="whether our filters are in the firewall store right now — click to pause protection or bring the filters back">protection</button>
+          <button type="button" class="chip" id="chip-policy"
+            title="what happens to a program no rule speaks about — click to reach the setting">policy</button>
+          <button type="button" class="chip" id="chip-learning"
+            title="whether new applications are collected — click to switch learning">learning</button>
         </div>
       </header>
 
@@ -776,28 +778,14 @@
           <button id="quit" class="danger" title="Stop this tool; the rules stay in the firewall">Quit</button>
         </div>
 
-        <details class="help">
-          <summary>Help</summary>
-          <p class="sub">
-            A deny always beats an allow, whatever the order of the list. Patterns accept the
-            wildcards <code>*</code> and <code>?</code>, and one rule can name several
-            applications as a comma-separated list such as
-            <code>C:\test\tool1.exe, C:\test\tool2.exe</code>. A rule can be narrowed to one protocol
-            (<code>tcp</code>, <code>udp</code>, or a number such as <code>47</code>), one
-            direction, a port, a port range such as <code>1024-2048</code> or a comma-separated
-            list of them such as <code>80, 443, 8080-8090</code>, and a destination. The
-            destination field takes addresses such as <code>10.0.0.5</code>, networks such as
-            <code>192.168.1.0/24</code>, spans such as <code>10.0.0.1-10.0.0.9</code> and names
-            such as <code>www.example.com</code> in one comma-separated list; addresses are final,
-            names are resolved when the filters are built, and all of it is a union. Names take
-            no wildcards yet; a rule that names none of them is about all of them.
-            Every change is written to <code>rules.toml</code> and pushed to the store immediately.
-            A detected application is one no rule speaks about yet; widen its path into a pattern
-            such as <code>C:\\Program Files\\*\\app.exe</code> before you allow or deny it, if you want
-            to cover more than that one file.
-          </p>
-        </details>
-      </section>
+</section>
+      <footer class="foot">
+        <span id="foot-store"></span>
+        <span id="foot-token"
+          >a reload of this tab loses its write token &middot; open the page from the tray icon
+          again</span
+        >
+      </footer>
     </div>
 
     <dialog id="rule-dialog">
@@ -882,6 +870,13 @@
       let detectedTotal = 0;
       // The newest events first, so a reload of the state and the stream feed the same list.
       let events = [];
+
+      /* The connection rows are built once and updated in place afterwards, so an open group,
+         its scroll position, its place in the list and the prefilled fields survive every event.
+         `appOrder` fixes the place a program was first given; `rowNodes` holds the rows of the
+         programs currently listed, keyed by the application path. */
+      const appOrder = [];
+      const rowNodes = new Map();
       let learnMode = false;
       let protection = true;
       // `allow` or `deny`, which the header spells out in a sentence because a firewall whose
@@ -889,6 +884,7 @@
       let defaultPolicy = "deny";
       let source = null;
       let detectedTimer = null;
+      let detectedStamp = "";
 
       const el = (id) => document.getElementById(id);
       const MAX_EVENTS = 50;
@@ -982,13 +978,15 @@
             read.push(store.inventory.filters + " filters");
           }
 
-          banner.appendChild(element("p", "sub", "Store readable (" + read.join(", ") + ")."));
+          el("foot-store").textContent = "store readable · " + read.join(", ");
+          banner.replaceChildren();
 
           return;
         }
 
         const note = element("div", "banner");
 
+        el("foot-store").textContent = "";
         note.appendChild(
           element(
             "strong",
@@ -1492,12 +1490,21 @@
         detectedTimer = setTimeout(async () => {
           detectedTimer = null;
 
+          if (document.hidden) {
+            return;
+          }
+
           try {
             const state = await request("GET", "/api/state");
+            const next = JSON.stringify([state.detected, state.detected_total]);
 
-            detected = state.detected;
-            detectedTotal = state.detected_total || detected.length;
-            renderDetected();
+            // The same answer as last time has nothing to paint; the last view stays.
+            if (next !== detectedStamp) {
+              detectedStamp = next;
+              detected = state.detected;
+              detectedTotal = state.detected_total || detected.length;
+              renderDetected();
+            }
           } catch (error) {
             status("could not refresh the detected list: " + error.message);
           }
@@ -1599,149 +1606,248 @@
           group.targets.push(event);
         });
 
-        list.replaceChildren();
-
         if (groups.size === 0) {
-          list.appendChild(
+          rowNodes.clear();
+          list.replaceChildren(
             element("li", "empty", "No connection has left this machine since the page opened."),
           );
 
           return;
         }
 
+        if (rowNodes.size === 0) {
+          list.replaceChildren();
+        }
+
+        /* A program keeps the place it was given the first time it was seen: a later event adds
+           to its row but never slides it past the pointer, and a new program joins at the top. */
         groups.forEach((group) => {
-          const row = element("li");
-          const line = element("div", "rowline");
-          const who = element("div", "who");
-
-          who.appendChild(
-            element("span", "name", group.app === "" ? "(no application)" : fileName(group.app)),
-          );
-          who.appendChild(element("span", "path", group.display || group.app));
-
-          if (group.user) {
-            who.appendChild(element("span", "user", group.user));
+          if (!appOrder.includes(group.app)) {
+            appOrder.unshift(group.app);
           }
-
-          const count = element(
-            "span",
-            "count",
-            group.hits + (group.lan > 0 ? " connections · " + group.lan + " local net" : ""),
-          );
-
-          // A blocked connection is the one worth colouring: green over red would hide a refusal
-          // behind a permission from the same program.
-          const verdict = element(
-            "span",
-            "tag " + (group.blocked > 0 ? "deny" : "allow"),
-            group.blocked > 0 ? "blocked" : group.rule ? "by rule " + group.rule : "allowed",
-          );
-
-          line.appendChild(who);
-          line.appendChild(count);
-          line.appendChild(verdict);
-
-          const ops = element("div", "ops");
-
-          for (const [label, className, action] of [
-            ["Allow", "primary ok", "allow"],
-            ["Deny", "primary bad", "deny"],
-          ]) {
-            const button = element("button", className, label);
-
-            // Least privilege: the dialog opens prefilled with this program's newest
-            // connection - target and port included - so widening it to "*" is a deliberate
-            // edit rather than a silent any/any rule.
-            button.addEventListener("click", () => addRuleFromEvent(action, group.targets[0]));
-            ops.appendChild(button);
-          }
-          line.appendChild(ops);
-          row.appendChild(line);
-
-          const targets = element("table", "targets");
-
-          targets.hidden = true;
-
-          // The body is built as a node of its own rather than through the return value of
-          // `appendChild`, which answers with the child: the table had no `tbody` to find, and
-          // every connection with a target aborted the whole state render.
-          const tbody = element("tbody");
-
-          targets.appendChild(tbody);
-
-          const head = element("tr");
-
-          for (const label of ["target", "port", "proto", "verdict", "time", ""]) {
-            head.appendChild(element("th", null, label));
-          }
-          tbody.appendChild(head);
-
-          group.targets.forEach((event) => {
-            const tr = element("tr");
-
-            // Name the rule the firewall blamed for this verdict. "other" means a filter we
-            // did not install (another firewall) that a later rebuild will not account for.
-            const blame = event.rule
-              ? " by " + event.rule
-              : event.filter_id
-                ? " by other"
-                : "";
-
-            // The two fields a narrower rule is made of, prefilled from this connection: an
-            // allow written from this row reaches this target on this port unless the user
-            // edits the field first ("*" in the target means any, as the rule field does).
-            const target = element("input", null);
-            target.value = event.remote_addr || "*";
-            target.title = "destination of the rule: address, *.domain or * for any";
-            tr.appendChild(element("td", null)).appendChild(target);
-
-            const port = element("input", null);
-            port.value = event.remote_port ? String(event.remote_port) : "*";
-            port.title = "port or range of the rule, * for any";
-            tr.appendChild(element("td", null)).appendChild(port);
-
-            tr.appendChild(element("td", null, protocolName(event.protocol)));
-            tr.appendChild(
-              element("td", "verdict " + (event.allowed ? "allow" : "deny"), event.kind + blame),
-            );
-            tr.appendChild(
-              element("td", null, new Date(event.time_ms).toLocaleTimeString()),
-            );
-
-            const ops = element("td", "ops");
-
-            for (const [label, className, action] of [
-              ["Allow", "primary ok", "allow"],
-              ["Deny", "primary bad", "deny"],
-            ]) {
-              const button = element("button", className, label);
-
-              button.addEventListener("click", () =>
-                decide(
-                  {
-                    app: group.app,
-                    display: group.display || null,
-                    remote: target.value.trim() === "" ? "*" : target.value.trim(),
-                    port: port.value.trim() === "" ? "*" : port.value.trim(),
-                  },
-                  action,
-                ),
-              );
-              ops.appendChild(button);
-            }
-            tr.appendChild(ops);
-            tbody.appendChild(tr);
-          });
-          row.appendChild(targets);
-
-          const caret = element("button", "caret", group.targets.length + " targets");
-
-          caret.addEventListener("click", () => {
-            targets.hidden = !targets.hidden;
-          });
-          ops.appendChild(caret);
-          list.appendChild(row);
         });
+
+        const order = appOrder.filter((key) => groups.has(key));
+
+        order.forEach((key, index) => {
+          const group = groups.get(key);
+          const row = rowNodes.get(key) || buildConnectionRow(group);
+
+          rowNodes.set(key, row);
+
+          // Only the moving numbers and the blamed rule are rewritten; the elements stay.
+          row.group = group;
+          row.count.textContent =
+            group.hits + (group.lan > 0 ? " connections \u00b7 " + group.lan + " local net" : "");
+          row.verdict.textContent =
+            group.blocked > 0 ? "blocked" : group.rule ? "by rule " + group.rule : "allowed";
+          row.verdict.className = "tag " + (group.blocked > 0 ? "deny" : "allow");
+          row.caret.textContent =
+            group.targets.length + (group.targets.length === 1 ? " target" : " targets");
+
+          if (group.user && !row.user) {
+            row.user = element("span", "user", group.user);
+            row.who.appendChild(row.user);
+          }
+
+          renderTargets(row, group);
+
+          // Into place by moving, never by rebuilding: appendChild relocates an existing node.
+          const at = list.children[index];
+
+          if (at !== row.li) {
+            list.insertBefore(row.li, at || null);
+          }
+        });
+
+        // Programs whose events all aged out of the ring leave the list with them.
+        rowNodes.forEach((row, key) => {
+          if (!groups.has(key)) {
+            row.li.remove();
+            rowNodes.delete(key);
+          }
+        });
+      }
+
+      // A program row is built once and kept: the open group, the caret text and the two
+      // prefilled fields of its target rows are state of the person using the page, and a
+      // refresh may not touch them.
+      function buildConnectionRow(group) {
+        const li = element("li");
+        const line = element("div", "rowline");
+        const who = element("div", "who");
+
+        who.appendChild(
+          element("span", "name", group.app === "" ? "(no application)" : fileName(group.app)),
+        );
+        who.appendChild(element("span", "path", group.display || group.app));
+
+        const count = element("span", "count", "");
+
+        // A blocked connection is the one worth colouring: green over red would hide a refusal
+        // behind a permission from the same program.
+        const verdict = element("span", "tag", "");
+
+        line.appendChild(who);
+        line.appendChild(count);
+        line.appendChild(verdict);
+
+        const ops = element("div", "ops");
+        const row = {
+          li: li,
+          who: who,
+          user: null,
+          count: count,
+          verdict: verdict,
+          targets: null,
+          tbody: null,
+          caret: null,
+          targetRows: new Map(),
+          targetKeys: "",
+          group: group,
+        };
+
+        for (const [label, className, action] of [
+          ["Allow", "primary ok", "allow"],
+          ["Deny", "primary bad", "deny"],
+        ]) {
+          const button = element("button", className, label);
+
+          // Least privilege: the dialog opens prefilled with the newest connection of this
+          // program - target and port included - so widening it to "*" stays a deliberate edit.
+          // `row.group` is the newest grouping, refreshed on every render.
+          button.addEventListener("click", () => addRuleFromEvent(action, row.group.targets[0]));
+          ops.appendChild(button);
+        }
+        line.appendChild(ops);
+        li.appendChild(line);
+
+        const targets = element("table", "targets");
+
+        targets.hidden = true;
+
+        const tbody = element("tbody");
+
+        targets.appendChild(tbody);
+
+        const head = element("tr");
+
+        for (const label of ["target", "port", "proto", "verdict", "time", ""]) {
+          head.appendChild(element("th", null, label));
+        }
+        tbody.appendChild(head);
+        li.appendChild(targets);
+
+        const caret = element("button", "caret", "");
+
+        caret.title = "show or hide the connections of this program";
+        caret.addEventListener("click", () => {
+          targets.hidden = !targets.hidden;
+        });
+        ops.appendChild(caret);
+
+        row.targets = targets;
+        row.tbody = tbody;
+        row.caret = caret;
+
+        return row;
+      }
+
+      // The target rows of one program, keyed by what never changes about a connection: the
+      // peer, its port, the protocol and the moment the firewall saw it. New rows join in the
+      // newest-first order, existing rows are only relocated, gone rows are dropped.
+      function renderTargets(row, group) {
+        const keys = group.targets.map((event) =>
+          [event.remote_addr, event.remote_port, event.protocol, event.time_ms].join("|"),
+        );
+
+        if (keys.join(",") === row.targetKeys) {
+          return;
+        }
+
+        row.targetKeys = keys.join(",");
+
+        const next = new Map();
+
+        keys.forEach((key, index) => {
+          let tr = row.targetRows.get(key);
+
+          if (!tr) {
+            tr = buildTargetRow(group, group.targets[index]);
+          }
+          next.set(key, tr);
+
+          // One past the header row.
+          const at = row.tbody.children[index + 1];
+
+          if (at !== tr) {
+            row.tbody.insertBefore(tr, at || null);
+          }
+        });
+
+        row.targetRows.forEach((tr, key) => {
+          if (!next.has(key)) {
+            tr.remove();
+          }
+        });
+        row.targetRows = next;
+      }
+
+      function buildTargetRow(group, event) {
+        const tr = element("tr");
+
+        // Name the rule the firewall blamed for this verdict. "other" means a filter we
+        // did not install (another firewall) that a later rebuild will not account for.
+        const blame = event.rule
+          ? " by " + event.rule
+          : event.filter_id
+            ? " by other"
+            : "";
+
+        // The two fields a narrower rule is made of, prefilled once from this connection:
+        // they belong to the person typing, and no later refresh writes over them.
+        const target = element("input", null);
+
+        target.value = event.remote_addr || "*";
+        target.title = "destination of the rule: address, *.domain or * for any";
+        tr.appendChild(element("td", null)).appendChild(target);
+
+        const port = element("input", null);
+
+        port.value = event.remote_port ? String(event.remote_port) : "*";
+        port.title = "port or range of the rule, * for any";
+        tr.appendChild(element("td", null)).appendChild(port);
+
+        tr.appendChild(element("td", null, protocolName(event.protocol)));
+        tr.appendChild(
+          element("td", "verdict " + (event.allowed ? "allow" : "deny"), event.kind + blame),
+        );
+        tr.appendChild(element("td", null, new Date(event.time_ms).toLocaleTimeString()));
+
+        const ops = element("td", "ops");
+
+        for (const [label, className, action] of [
+          ["Allow", "primary ok", "allow"],
+          ["Deny", "primary bad", "deny"],
+        ]) {
+          const button = element("button", className, label);
+
+          button.addEventListener("click", () =>
+            decide(
+              {
+                app: group.app,
+                display: group.display || null,
+                remote: target.value.trim() === "" ? "*" : target.value.trim(),
+                port: port.value.trim() === "" ? "*" : port.value.trim(),
+              },
+              action,
+            ),
+          );
+          ops.appendChild(button);
+        }
+        tr.appendChild(ops);
+
+        return tr;
       }
 
       function renderEvent(event) {
@@ -1750,8 +1856,19 @@
         while (events.length > MAX_EVENTS) {
           events.pop();
         }
-        renderConnections();
+
+        // A hidden tab only collects. The list is rebuilt when the tab is seen again.
+        if (!document.hidden) {
+          renderConnections();
+        }
       }
+
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          renderConnections();
+          scheduleDetectedRefresh();
+        }
+      });
 
       function watchEvents() {
         if (source !== null || typeof EventSource === "undefined") {
@@ -1814,6 +1931,39 @@
             : "the state of the connection feed";
       }
 
+      // The header chips are controls: protection and learning answer a click with the same
+      // request the settings page makes, and the policy chip moves to the settings tab, where
+      // its dropdown lives - flipping a default policy from a chip wants a confirm dialog of
+      // its own, which the settings page already has.
+      el("chip-protection").addEventListener("click", async () => {
+        try {
+          apply(await request("POST", "/api/settings", { protection: !protection }));
+        } catch (error) {
+          status("could not change protection: " + error.message);
+        }
+      });
+
+      el("chip-learning").addEventListener("click", async () => {
+        try {
+          apply(await request("POST", "/api/settings", { learning: !learnMode }));
+        } catch (error) {
+          status("could not change learning: " + error.message);
+        }
+      });
+
+      el("chip-policy").addEventListener("click", () => {
+        showTab("settings");
+      });
+
+      // F5 loses the token that lives only in this page's memory, and with it the right to
+      // write. A reload cannot be prevented; it can be questioned, so the loss is never silent.
+      window.addEventListener("beforeunload", () => {
+        if (token !== "") {
+          return "reloading loses this tab's write token";
+        }
+        return null;
+      });
+
       // The three header chips only say what the state already told us; the controls that change
       // these values live in Settings, where their explanations have room.
       function renderChips(state) {
@@ -1826,6 +1976,7 @@
 
         policyChip.textContent = state.default_policy === "deny" ? "Block unknown" : "Allow unknown";
         policyChip.className = "chip " + (state.default_policy === "deny" ? "ok" : "warn");
+        policyChip.style.cursor = "pointer";
         policyChip.title =
           state.default_policy === "deny"
             ? "Programs without a rule are blocked. Loopback and the IPv6 base functions stay reachable."
@@ -2074,7 +2225,7 @@
       // Clearing takes the filters out of the store while the rules stay in the file, so it is
       // worth asking before doing it.
       el("clear").addEventListener("click", async () => {
-        if (!confirm("Take our filters out of the store? The rules stay in rules.toml.")) {
+        if (!confirm("Take our filters out of the store? The rules stay in the file.")) {
           return;
         }
 
@@ -2307,4 +2458,6 @@
       load();
     </script>
   </body>
+</html>
+>
 </html>
