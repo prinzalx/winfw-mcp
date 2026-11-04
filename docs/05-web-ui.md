@@ -28,7 +28,7 @@ choice is made through CSS variables, so nothing is fetched and nothing is rebui
 
 ## What is on the page
 
-The page is one column, at most about 1100 pixels wide and centred. Reading it top to bottom:
+The page is one column, at most about 1400 pixels wide and centred. Reading it top to bottom:
 
 - **Header**, one row: the name on the left, three status chips on the right.
   - **protection** reads `on` or `paused` and asks the server to put our filters into the store or
@@ -65,15 +65,18 @@ top, one row per program:
   one of our rules decided it. A rule that blamed more than one of our rules says *by 2 rules*
   and names each of them in its tooltip, because the newest entry is not necessarily the one
   that decided the rest;
-- **Allow** and **Deny** on the right, which turn the program into a rule at once.
+- **Allow** and **Deny** on the right. Neither writes a rule silently: each one opens the rule
+  dialog prefilled from the program's newest connection — program, protocol, direction, the target
+  address and the port the firewall saw — so the least-privilege shape arrives first and widening it
+  to `*` is a deliberate edit.
 
 A row expands to the destinations behind it, newest first, in a monospace table: the destination
 address and the port are editable fields prefilled from what the firewall saw, followed by the
 protocol (`tcp`, `udp`, or the number WFP reported for anything else), the verdict with the rule it
 blamed in red or green, the time, and a pair of **Allow**/**Deny** buttons of their own. A decision
 written from such a row names exactly that target on exactly that port — the least privilege a
-single connection allows — while **Allow**/**Deny** on the program row above still covers the whole
-program. The target field takes an address, a network or a span — the same values the Remote field of the
+single connection allows — and the **Allow**/**Deny** buttons of the program row prefilled its
+dialog from the newest such row. The target field takes an address, a network or a span — the same values the Remote field of the
 rule dialog takes — and names a rule wants belong to the Destination field of the dialog, where a
 later edit can widen `93.184.216.34` to `*.example.com`. `*` in either field means any, which is
 the same thing as leaving the field out of the rule.
@@ -96,7 +99,9 @@ unique local address. See [Connections worth showing](#connections-worth-showing
 ### Rules
 
 A table with fixed column widths: Name, Action, Program, Protocol, Direction, Port, Remote, Comment,
-Order, and the remove button. Action is a badge, Order is a pair of arrows, and a pattern the cap cut
+Order, and the remove button. The Program column names the file (`waterfox.exe`), not the path: the
+full pattern is one hover away and one edit away, which keeps the column readable at a glance.
+Action is a badge, Order is a pair of arrows, and a pattern the cap cut
 carries a small warning badge — *pattern has 42 matches, only 32 installed* — so the cut is visible
 where the rule is read rather than only in the log. The Remote column shows the addresses of `remote`
 and, when the rule has one, the names of `dest` beside them. A name that did not answer, or a list the

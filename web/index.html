@@ -76,7 +76,7 @@
 
       .wrap {
         margin: 0 auto;
-        max-width: 1100px;
+        max-width: 1400px;
       }
 
       [hidden] {
@@ -1234,7 +1234,20 @@
             element("span", "tag " + rule.action, rule.action),
           );
 
-          const program = element("td", "mono", rule.pattern);
+          // The list names programs, not paths: the file name reads, the full path is one hover
+          // or one edit away.
+          const firstPart = rule.pattern.split(",")[0].trim();
+          const shown = fileName(firstPart);
+
+          if (shown === "" || /^[*?]+$/.test(shown)) {
+            shown = firstPart;
+          }
+
+          const program = element(
+            "td",
+            null,
+            shown + (rule.pattern.includes(",") ? " \u2026" : ""),
+          );
 
           program.title = rule.pattern;
           row.appendChild(program);
@@ -1497,6 +1510,28 @@
          A connection that stayed on this machine never reaches the feed at all, so everything here
          left it. What did not leave the local segment is marked, and left out while the filter is
          on. */
+      // The Allow and Deny buttons of a program card append a rule the same way "Add rule"
+      // does, but every field the connection proved is already filled: program, protocol,
+      // direction, remote address and remote port. Cancel takes the fresh row out again,
+      // exactly like cancelling "Add rule".
+      function addRuleFromEvent(action, event) {
+        pendingAdd = true;
+        rules.push({
+          name: "",
+          action: action,
+          pattern: event.display || event.app,
+          enabled: true,
+          protocol: event.protocol ? protocolName(event.protocol) : null,
+          direction: "out",
+          port: event.remote_port ? String(event.remote_port) : null,
+          remote: event.remote_addr || null,
+          dest: null,
+          local: null,
+          comment: null,
+        });
+        openRuleDialog(rules.length - 1);
+      }
+
       function renderConnections() {
         const list = el("events");
         const hideLan = el("hide-lan").checked;
@@ -1596,11 +1631,10 @@
           ]) {
             const button = element("button", className, label);
 
-            // The connection is the evidence, the program is what a rule names: no remote and
-            // no port, so the rule covers every destination this program asked for.
-            button.addEventListener("click", () =>
-              decide({ app: group.app, display: group.display || null, remote: null }, action),
-            );
+            // Least privilege: the dialog opens prefilled with this program's newest
+            // connection - target and port included - so widening it to "*" is a deliberate
+            // edit rather than a silent any/any rule.
+            button.addEventListener("click", () => addRuleFromEvent(action, group.targets[0]));
             ops.appendChild(button);
           }
           line.appendChild(ops);
