@@ -8,7 +8,14 @@
 src/main.rs              argument parsing, startup, the one-shot store commands
 src/config.rs            settings
 src/paths.rs             the data directory and every path inside it
-src/rules.rs             rules.toml, the profile files, and the stamp that records who wrote them last
+src/rules/mod.rs         the action, the direction, the error text, the cap on a list
+src/rules/protocol.rs    the transport a rule is about
+src/rules/address.rs     one address, a range of them, a subnet
+src/rules/fields.rs      the four list fields, read as one shape
+src/rules/pattern.rs     the rule itself and the wildcard language
+src/rules/disk.rs        rules.toml: reading, writing and the checksum it carries
+src/rules/stamp.rs       the stamp that records who wrote the file last
+src/rules/tests.rs       the tests of the rule model
 src/profile_xml.rs         reading the XML profile the reference tool writes
 src/store.rs             atomic file writes
 src/device.rs            device path <-> drive path
