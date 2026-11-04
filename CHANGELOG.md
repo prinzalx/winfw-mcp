@@ -10,6 +10,7 @@ ten planned headings.
 
 | Version | What changed |
 |---|---|
+| 0.77.6 | The four list fields of a rule (`remote`, `dest`, `pattern`, `port`) are read, written and stored through one implementation now: split on commas, trim, refuse an empty element, cap at 32, join back with `", "`. Two messages moved with the code: a bad port element reads `'abc' is not a port` like the other fields do, and the name cap is spent over the elements a field writes rather than over the names that survive the deduplication. |
 | 0.77.5 | `port = 0` is refused everywhere now. The single-value reader accepted it while the field reader refused it, so the same text was a valid port in one place and an error in another; `0` is what WFP uses for "no port", so a rule that named it could never match a connection. |
 | 0.77.4 | `MAX_WILDCARD_MATCHES` is declared in `rules.rs` now, which is where the bound on a rule field belongs, so `rules` no longer imports `wfp` for a number it defines for itself: the dependency between the two modules runs one way. No behavior changed. |
 | 0.77.3 | The WFP module is a directory now: the engine handle and the store inventory stay in `wfp/mod.rs`, and the enumeration, the layers, the addresses, the application identities, the keys, the filters and the tests each moved into the file that owns them. The code is the same code, line for line. No behavior changed. |

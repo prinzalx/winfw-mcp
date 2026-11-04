@@ -540,6 +540,71 @@ impl Remotes {
     }
 }
 
+/// The shared parts of the four list fields a rule carries: `remote`, `dest`, `pattern` and
+/// `port`.
+///
+/// Every one of them is a comma-separated field that is written back joined by `", "`, refuses an
+/// empty element, and is capped at [`MAX_WILDCARD_MATCHES`] elements because each element can
+/// become a filter of its own. Only how an element is read, and the words the refusals are
+/// written with, differ; both are named by the caller of [`read_field`].
+///
+/// Which word goes with which field is fixed here so the four messages stay one family:
+///
+/// | field | element | unit | empty-field refusal |
+/// |---|---|---|---|
+/// | `remote` | `address` | `addresses` | `address '{text}' is not an address` |
+/// | `dest` | `name` | `names` | — (an empty element refuses it first) |
+/// | `pattern` | `pattern` | `applications` | `a rule needs a pattern` |
+/// | `port` | `port` | `ports` | `port '{text}' is not a port` |
+///
+/// The words one list field writes its refusals with.
+struct FieldWords {
+    /// What one element is called, as in `address list '...'`.
+    list: &'static str,
+    /// What the elements are called in the cap message.
+    unit: &'static str,
+}
+
+/// Split one list field, trim its elements, refuse an empty element and cap the count.
+///
+/// `read` turns one element of text into the element value; `empty_field` is the refusal for a
+/// field that holds nothing but blanks, and `None` leaves that case to `read`, which is how
+/// `dest` behaves.
+fn read_field<T>(
+    text: &str,
+    words: &FieldWords,
+    empty_field: Option<&str>,
+    mut read: impl FnMut(&str) -> Result<T, ParseError>,
+) -> Result<Vec<T>, ParseError> {
+    if text.trim().is_empty() {
+        return match empty_field {
+            Some(message) => Err(message.to_owned()),
+            None => Err(format!("{} '{text}' is not a {}", words.list, words.list)),
+        };
+    }
+
+    let mut elements = Vec::new();
+
+    for part in text.split(',') {
+        let part = part.trim();
+
+        if part.is_empty() {
+            return Err(format!("{} list '{text}' has an empty element", words.list));
+        }
+
+        elements.push(read(part)?);
+    }
+
+    if elements.len() > MAX_WILDCARD_MATCHES {
+        return Err(format!(
+            "{} list '{text}' names more than {MAX_WILDCARD_MATCHES} {}",
+            words.list, words.unit
+        ));
+    }
+
+    Ok(elements)
+}
+
 /// The contents of an address field of a rule, split into validated elements.
 ///
 /// An element is the text of a single address parsed on its own, so an element that would be
@@ -550,61 +615,20 @@ impl std::str::FromStr for Remotes {
     type Err = ParseError;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        if text.trim().is_empty() {
-            return Err(format!("address '{text}' is not an address"));
-        }
-
-        let mut elements = Vec::new();
-
         // Splitting on commas is safe for every element form: neither a network nor a span
         // contains a comma, and an IPv6 address never is written with one.
-        for part in text.split(',') {
-            let part = part.trim();
-
-            if part.is_empty() {
-                return Err(format!("address list '{text}' has an empty element"));
-            }
-
-            elements.push(
+        Ok(Self(read_field(
+            text,
+            &FieldWords {
+                list: "address",
+                unit: "addresses",
+            },
+            None,
+            |part| {
                 part.parse::<Remote>()
-                    .map_err(|err| format!("{part}: {err}"))?,
-            );
-        }
-
-        if elements.len() > MAX_WILDCARD_MATCHES {
-            return Err(format!(
-                "address list '{text}' names more than {MAX_WILDCARD_MATCHES} addresses"
-            ));
-        }
-
-        Ok(Self(elements))
-    }
-}
-
-impl std::fmt::Display for Remotes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let joined = self
-            .0
-            .iter()
-            .map(|element| element.to_string())
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        f.write_str(&joined)
-    }
-}
-
-impl Serialize for Remotes {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Remotes {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-
-        text.parse().map_err(serde::de::Error::custom)
+                    .map_err(|err| format!("{part}: {err}"))
+            },
+        )?))
     }
 }
 
@@ -642,60 +666,35 @@ impl std::str::FromStr for Dests {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let mut names = Vec::new();
+        // The refusal a field of nothing but blanks answers with, kept in the words this field
+        // has always used for it.
+        let names = read_field(
+            text,
+            &FieldWords {
+                list: "name",
+                unit: "names",
+            },
+            Some("name list has an empty element"),
+            |part| {
+                if !is_name(part) {
+                    return Err(format!("'{part}' is not a name"));
+                }
 
-        for element in text.split(',') {
-            let name = element.trim();
+                Ok(part.to_lowercase())
+            },
+        )?;
 
-            if name.is_empty() {
-                return Err("name list has an empty element".to_owned());
-            }
+        // A name is one name however often it is written, and the file is written back as the
+        // field reads, so the second copy of a name is dropped here rather than at every reader.
+        let mut unique: Vec<String> = Vec::new();
 
-            if !is_name(name) {
-                return Err(format!("'{name}' is not a name"));
-            }
-
-            let name = name.to_lowercase();
-
-            if !names.contains(&name) {
-                names.push(name);
+        for name in names {
+            if !unique.contains(&name) {
+                unique.push(name);
             }
         }
 
-        if names.len() > MAX_WILDCARD_MATCHES {
-            return Err(format!(
-                "name list '{text}' names more than {MAX_WILDCARD_MATCHES} names"
-            ));
-        }
-
-        Ok(Self(names))
-    }
-}
-
-impl std::fmt::Display for Dests {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let elements = self
-            .0
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        f.write_str(&elements)
-    }
-}
-
-impl Serialize for Dests {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Dests {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-
-        text.parse().map_err(serde::de::Error::custom)
+        Ok(Self(unique))
     }
 }
 
@@ -750,51 +749,19 @@ impl std::str::FromStr for Patterns {
     type Err = ParseError;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        if text.trim().is_empty() {
-            return Err("a rule needs a pattern".to_owned());
-        }
+        Ok(Self(read_field(
+            text,
+            &FieldWords {
+                list: "pattern",
+                unit: "applications",
+            },
+            Some("a rule needs a pattern"),
+            |part| {
+                validate_pattern(part).map_err(|err| err.to_string())?;
 
-        let mut elements = Vec::new();
-
-        for part in text.split(',') {
-            let part = part.trim();
-
-            if part.is_empty() {
-                return Err(format!("pattern list '{text}' has an empty element"));
-            }
-
-            validate_pattern(part).map_err(|err| err.to_string())?;
-
-            elements.push(part.to_owned());
-        }
-
-        if elements.len() > MAX_WILDCARD_MATCHES {
-            return Err(format!(
-                "pattern list '{text}' names more than {MAX_WILDCARD_MATCHES} applications"
-            ));
-        }
-
-        Ok(Self(elements))
-    }
-}
-
-impl std::fmt::Display for Patterns {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0.join(", "))
-    }
-}
-
-impl Serialize for Patterns {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Patterns {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-
-        text.parse().map_err(serde::de::Error::custom)
+                Ok(part.to_owned())
+            },
+        )?))
     }
 }
 
@@ -854,83 +821,57 @@ impl std::str::FromStr for Ports {
     type Err = ParseError;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        if text.trim().is_empty() {
-            return Err(format!("port '{text}' is not a port"));
+        Ok(Self(read_field(
+            text,
+            &FieldWords {
+                list: "port",
+                unit: "ports",
+            },
+            None,
+            |part| part.parse::<PortRange>(),
+        )?))
+    }
+}
+
+/// Writing a list field back, and reading it through serde.
+///
+/// The four list fields a rule carries are stored as one text joined by `", "` in the file, in
+/// JSON and on the page, so all four write and read themselves the same way.
+macro_rules! list_field {
+    ($name:ident) => {
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let joined = self
+                    .0
+                    .iter()
+                    .map(|element| element.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                f.write_str(&joined)
+            }
         }
 
-        let mut elements = Vec::new();
-
-        for part in text.split(',') {
-            let part = part.trim();
-
-            if part.is_empty() {
-                return Err(format!("port list '{text}' has an empty element"));
+        impl Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.collect_str(self)
             }
-
-            let (lo, hi) = match part.split_once('-') {
-                Some((lo, hi)) => (
-                    lo.trim()
-                        .parse::<u16>()
-                        .map_err(|_| format!("port '{part}' is not a port"))?,
-                    hi.trim()
-                        .parse::<u16>()
-                        .map_err(|_| format!("port '{part}' is not a port"))?,
-                ),
-                None => (
-                    part.parse::<u16>()
-                        .map_err(|_| format!("port '{part}' is not a port"))?,
-                    part.parse::<u16>()
-                        .map_err(|_| format!("port '{part}' is not a port"))?,
-                ),
-            };
-
-            if lo > hi {
-                return Err(format!("port range '{part}' runs backwards"));
-            }
-
-            if lo == 0 || hi == 0 {
-                return Err(format!("port '{part}' is not a port"));
-            }
-
-            elements.push(PortRange { lo, hi });
         }
 
-        if elements.len() > MAX_WILDCARD_MATCHES {
-            return Err(format!(
-                "port list '{text}' names more than {MAX_WILDCARD_MATCHES} ports"
-            ));
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let text = String::deserialize(deserializer)?;
+
+                text.parse().map_err(serde::de::Error::custom)
+            }
         }
-
-        Ok(Self(elements))
-    }
+    };
 }
 
-impl std::fmt::Display for Ports {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let joined = self
-            .0
-            .iter()
-            .map(|element| element.to_string())
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        f.write_str(&joined)
-    }
-}
-
-impl Serialize for Ports {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Ports {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-
-        text.parse().map_err(serde::de::Error::custom)
-    }
-}
+list_field!(Remotes);
+list_field!(Dests);
+list_field!(Patterns);
+list_field!(Ports);
 
 /// A port, or an inclusive range of them, written `443` or `1024-2048`.
 ///
@@ -2203,6 +2144,30 @@ mod tests {
         for bad in ["", " ", "*.example.com", "a..b", "a,b,"] {
             assert!(bad.parse::<Dests>().is_err(), "'{bad}' is not a name list");
         }
+    }
+
+    /// A name is held once whatever the field writes it as, and the cap is spent over the
+    /// elements the field writes rather than over the names that survive the deduplication.
+    #[test]
+    fn a_name_field_drops_duplicates_and_caps_the_written_elements() {
+        let list = "a.com, b.com, A.COM"
+            .parse::<Dests>()
+            .expect("parse a name list");
+
+        assert_eq!(list.names(), &["a.com".to_owned(), "b.com".to_owned()]);
+
+        let mut written: Vec<String> = (0..MAX_WILDCARD_MATCHES)
+            .map(|index| format!("host{index}.example"))
+            .collect();
+
+        assert!(written.join(", ").parse::<Dests>().is_ok(), "at the cap");
+
+        written.push("host0.example".to_owned());
+
+        assert!(
+            written.join(", ").parse::<Dests>().is_err(),
+            "one name too many over the elements the field writes, duplicate or not"
+        );
     }
 
     /// `remote` and `dest` are a union: an address matches when the address field names it or
