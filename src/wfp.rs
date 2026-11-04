@@ -156,6 +156,62 @@ pub struct RemovedFilter {
     pub deny: bool,
 }
 
+/// An enumeration handle of one engine family, closed when it goes out of scope.
+///
+/// The three families differ only in the destroy function, so the wrapper holds a pointer to
+/// that function rather than repeating the closing for each family.
+struct EnumHandle {
+    engine: HANDLE,
+    handle: HANDLE,
+    destroy: unsafe fn(HANDLE, HANDLE) -> u32,
+}
+
+impl Drop for EnumHandle {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from a Create call of the same engine and is closed exactly
+        // once, because this type owns it.
+        unsafe { (self.destroy)(self.engine, self.handle) };
+    }
+}
+
+/// An array of entries WFP allocated and owns until the pointer is handed back to
+/// `FwpmFreeMemory0`, which happens on drop.
+///
+/// The elements were never allocated apart from the array, so only the array pointer may be
+/// released; releasing an element as well corrupts the heap.
+struct WfpArray<T> {
+    pointer: *mut *mut T,
+    len: u32,
+}
+
+impl<T> WfpArray<T> {
+    /// The entries WFP returned. A null array holds none, which is how an empty store reads
+    /// rather than a failure; a null slot inside a non-null array is skipped as well.
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        let slots: &[*mut T] = if self.pointer.is_null() {
+            &[]
+        } else {
+            // SAFETY: WFP reported `len` slots for a non-null array, so they are all inside it.
+            unsafe { std::slice::from_raw_parts(self.pointer, self.len as usize) }
+        };
+
+        slots.iter().filter_map(|slot| {
+            // SAFETY: a non-null slot points at an entry that stays readable until the array
+            // is handed back on drop.
+            unsafe { slot.as_ref() }
+        })
+    }
+}
+
+impl<T> Drop for WfpArray<T> {
+    fn drop(&mut self) {
+        if !self.pointer.is_null() {
+            // SAFETY: the array is WFP-owned, and this is the documented way to release it.
+            unsafe { FwpmFreeMemory0(&mut self.pointer as *mut _ as *mut *mut c_void) };
+        }
+    }
+}
+
 /// Run one of the three enumeration sequences end to end and collect the display names.
 ///
 /// The three `Fwpm*` families differ only in name and entry type, which is what makes them worth
@@ -163,50 +219,53 @@ pub struct RemovedFilter {
 ///
 /// Everything is requested in a single call, the way the C reference does it. Not only is that
 /// one round trip instead of several, it also keeps the ownership rule simple: the whole result
-/// is one WFP allocation, released by handing the *array pointer* to `FwpmFreeMemory0`. Freeing
-/// the individual elements as well corrupts the heap, because they were never allocated apart from
-/// the array.
+/// is one WFP allocation, released by [`WfpArray`], and the enumeration handle is closed by
+/// [`EnumHandle`]. Both on scope exit, so no failure path can leak either.
 macro_rules! enumerate {
     ($engine:expr, $create:ident, $fetch:ident, $destroy:ident, $entry:ty) => {{
         let engine = $engine;
-        let mut enum_handle = HANDLE::default();
+        let mut raw = HANDLE::default();
 
-        // SAFETY: a null template asks for every entry, and `enum_handle` is an out parameter.
-        let status = unsafe { $create(engine, None, &mut enum_handle) };
+        // SAFETY: a null template asks for every entry, and `raw` is an out parameter.
+        let status = unsafe { $create(engine, None, &mut raw) };
         if status != 0 {
             anyhow::bail!("{} failed with 0x{status:08X}", stringify!($create));
         }
 
-        let mut entries: *mut *mut $entry = std::ptr::null_mut();
+        let enum_handle = EnumHandle {
+            engine,
+            handle: raw,
+            destroy: $destroy,
+        };
+
+        let mut pointer: *mut *mut $entry = std::ptr::null_mut();
         let mut returned = 0u32;
 
         // SAFETY: both out parameters are valid, and the array they receive belongs to WFP.
-        let status = unsafe { $fetch(engine, enum_handle, u32::MAX, &mut entries, &mut returned) };
+        let status = unsafe {
+            $fetch(
+                engine,
+                enum_handle.handle,
+                u32::MAX,
+                &mut pointer,
+                &mut returned,
+            )
+        };
         if status != 0 {
-            // SAFETY: the enum handle is still open and belongs to this engine.
-            unsafe { $destroy(engine, enum_handle) };
             anyhow::bail!("{} failed with 0x{status:08X}", stringify!($fetch));
         }
 
+        let entries = WfpArray {
+            pointer,
+            len: returned,
+        };
+
         let mut names = Vec::new();
 
-        if !entries.is_null() {
-            for index in 0..returned {
-                // SAFETY: WFP reported `returned` entries, so this slot is inside the array.
-                let entry = unsafe { *entries.add(index as usize) };
-
-                if !entry.is_null() {
-                    // SAFETY: the entry stays readable until the array is handed back below.
-                    names.push(display_name(unsafe { &(*entry).displayData }));
-                }
-            }
-
-            // SAFETY: the array is WFP-owned, and this is the documented way to release it.
-            unsafe { FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut c_void) };
+        for entry in entries.iter() {
+            names.push(display_name(&entry.displayData));
         }
 
-        // SAFETY: the enum handle is still open and belongs to this engine.
-        unsafe { $destroy(engine, enum_handle) };
         Ok(names)
     }};
 }
@@ -484,89 +543,80 @@ impl Engine {
     /// `FWPM_E_INVALID_ENUM_TYPE`, and we already enumerate all filters for the inventory, so the
     /// extra entries cost nothing we were not already paying.
     fn remove_our_filters(&self) -> Result<Vec<RemovedFilter>> {
-        let mut enum_handle = HANDLE::default();
+        let mut raw = HANDLE::default();
 
         // SAFETY: a null template asks for every filter, and the out parameter is a valid handle
         // slot.
-        let status = unsafe { FwpmFilterCreateEnumHandle0(self.handle, None, &mut enum_handle) };
+        let status = unsafe { FwpmFilterCreateEnumHandle0(self.handle, None, &mut raw) };
 
         if status != 0 {
             bail!("FwpmFilterCreateEnumHandle0 failed with 0x{status:08X}");
         }
 
-        let mut entries: *mut *mut FWPM_FILTER0 = std::ptr::null_mut();
+        let enum_handle = EnumHandle {
+            engine: self.handle,
+            handle: raw,
+            destroy: FwpmFilterDestroyEnumHandle0,
+        };
+
+        let mut pointer: *mut *mut FWPM_FILTER0 = std::ptr::null_mut();
         let mut returned = 0u32;
 
         // SAFETY: both out parameters are valid, and the array they receive belongs to WFP.
         let status = unsafe {
             FwpmFilterEnum0(
                 self.handle,
-                enum_handle,
+                enum_handle.handle,
                 u32::MAX,
-                &mut entries,
+                &mut pointer,
                 &mut returned,
             )
         };
 
         if status != 0 {
-            // SAFETY: the enum handle is still open and belongs to this engine.
-            unsafe { FwpmFilterDestroyEnumHandle0(self.handle, enum_handle) };
             bail!("FwpmFilterEnum0 failed with 0x{status:08X}");
         }
+
+        let entries = WfpArray {
+            pointer,
+            len: returned,
+        };
 
         let mut ours = Vec::new();
         let mut keys = Vec::new();
 
-        if !entries.is_null() {
-            for index in 0..returned {
-                // SAFETY: WFP reported `returned` entries, so this slot is inside the array.
-                let entry = unsafe { *entries.add(index as usize) };
+        for filter in entries.iter() {
+            // A filter without a provider key was not added by us. Comparing the key here
+            // instead of in the template keeps the working enumeration path.
+            // SAFETY: the pointer is WFP-owned and either null or a readable GUID, which is
+            // what `as_ref` checks for.
+            let belongs = match unsafe { filter.providerKey.as_ref() } {
+                Some(key) => *key == PROVIDER_KEY,
+                None => false,
+            };
 
-                if entry.is_null() {
-                    continue;
-                }
-
-                // SAFETY: the entry stays readable until the array is handed back below.
-                let filter = unsafe { &*entry };
-
-                // A filter without a provider key was not added by us. Comparing the key here
-                // instead of in the template keeps the working enumeration path.
-                // SAFETY: the pointer is WFP-owned and either null or a readable GUID, which is
-                // what `as_ref` checks for.
-                let belongs = match unsafe { filter.providerKey.as_ref() } {
-                    Some(key) => *key == PROVIDER_KEY,
-                    None => false,
+            if belongs {
+                // The rule's label lives in the description, not the display name, which is
+                // the tool's own name on every filter we add. A filter whose description is
+                // gone was edited by someone else after us; naming it is then impossible, and
+                // an empty name is the honest answer rather than a guess.
+                let label = if filter.displayData.description.is_null() {
+                    String::new()
+                } else {
+                    // SAFETY: the pointer is not null, and WFP guarantees a terminated wide
+                    // string there.
+                    unsafe { filter.displayData.description.to_string() }.unwrap_or_default()
                 };
 
-                if belongs {
-                    // The rule's label lives in the description, not the display name, which is
-                    // the tool's own name on every filter we add. A filter whose description is
-                    // gone was edited by someone else after us; naming it is then impossible, and
-                    // an empty name is the honest answer rather than a guess.
-                    let label = if filter.displayData.description.is_null() {
-                        String::new()
-                    } else {
-                        // SAFETY: the pointer is not null, and WFP guarantees a terminated wide
-                        // string there.
-                        unsafe { filter.displayData.description.to_string() }.unwrap_or_default()
-                    };
+                ours.push(RemovedFilter {
+                    name: label,
+                    deny: filter.action.r#type == FWP_ACTION_BLOCK,
+                });
 
-                    ours.push(RemovedFilter {
-                        name: label,
-                        deny: filter.action.r#type == FWP_ACTION_BLOCK,
-                    });
-
-                    // The key is needed again below, so keep it next to the label.
-                    keys.push(filter.filterKey);
-                }
+                // The key is needed again below, so keep it next to the label.
+                keys.push(filter.filterKey);
             }
-
-            // SAFETY: the array is WFP-owned, and this is the documented way to release it.
-            unsafe { FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut c_void) };
         }
-
-        // SAFETY: the enum handle is still open and belongs to this engine.
-        unsafe { FwpmFilterDestroyEnumHandle0(self.handle, enum_handle) };
 
         for key in &keys {
             // SAFETY: the key came out of the store a few instructions ago, and deleting one
