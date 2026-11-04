@@ -505,7 +505,10 @@ Roughly by how much they cost to change later:
    literals, template literals and comments. It is not a parser and does not claim to be — a syntax
    error inside a balanced block still passes — but it catches the failure an edit actually produces,
    an unclosed block, and it asserts that against a broken snippet rather than trusting itself. A
-   parser stays available if the page ever grows a build step.
+   parser stays available if the page ever grows a build step. One limit is worth knowing before
+   anyone trusts it further: the scanner knows no JavaScript, so it reads a regular expression
+   literal as text. The page holds one such literal as of 0.74.0 and its parentheses balance, so the
+   scan holds; a class like `/[)}]/` would need the scanner to know about regexes.
 
 ## 51. The state of the remaining dimension list
 

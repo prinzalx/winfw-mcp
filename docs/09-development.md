@@ -74,8 +74,11 @@ edit and a page that renders its static HTML and does nothing, which is the fail
 for twelve releases. It is deliberately not a JavaScript parser: it takes the text between `<script>`
 and `</script>`, skips string literals, template literals and comments, and insists every brace,
 parenthesis and bracket matches. A syntax error inside a balanced block still passes it, and adding a
-parser to the test target for that last case is an open question — the page holds no regular
-expression literal, which is the only reason a scanner this simple is sound.
+parser to the test target for that last case is an open question. The scanner knows no JavaScript,
+so a regular expression literal is read as text: it is sound today because the one literal the page
+holds, `/^\d+(-\d+)?$/`, has balanced parentheses. A literal holding an unmatched bracket — a
+character class such as `/[)}]/` — would need the scanner to know about regexes, and until then the
+scan is a check on balance rather than on syntax.
 
 ## The icon and the version information
 
