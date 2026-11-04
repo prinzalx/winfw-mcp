@@ -146,6 +146,10 @@ pub fn to_device_path(path: &str) -> String {
         return lowered;
     }
 
+    // A name written with an environment variable means the directory on this machine, so it is
+    // resolved before anything else looks at the text.
+    let lowered = expand_env_vars(&lowered).to_lowercase();
+
     // A short 8.3 name is not the name the ALE layer reports, so a rule that holds one is repaired
     // before it is mapped. Without this the rule is written, installed, and never matches anything.
     let lowered = if wants_long_form(&lowered) {
@@ -178,6 +182,48 @@ pub fn to_device_path(path: &str) -> String {
 /// the input anyway.
 fn wants_long_form(path: &str) -> bool {
     path.contains('~') && !path.contains('*') && !path.contains('?') && looks_like_drive_path(path)
+}
+
+/// Replace every `%NAME%` in a path with the value of that environment variable.
+///
+/// Only a name the process actually has is replaced, so a name a rules file carried over from
+/// another machine stays visible instead of becoming an empty string, which would turn
+/// `%ProgramFiles%\tool.exe` into `\tool.exe` and match a different directory.
+///
+/// It is the text a person writes when they write the rule by hand, so it is resolved where the
+/// path is mapped and never where the rule is stored: the file keeps the words, and only the filter
+/// sees the value.
+fn expand_env_vars(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let mut rest = path;
+
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('%') else {
+            // One percent sign with no closing partner is ordinary text.
+            out.push('%');
+            out.push_str(after);
+
+            return out;
+        };
+
+        let name = &after[..end];
+
+        if name.is_empty() {
+            // `%%` is one literal percent sign.
+            out.push('%');
+        } else {
+            out.push_str(&std::env::var(name).unwrap_or_else(|_| format!("%{name}%")));
+        }
+
+        rest = &after[end + 1..];
+    }
+
+    out.push_str(rest);
+
+    out
 }
 
 /// Hand a drive path to the system and ask for its long form, falling back to the input.
@@ -511,6 +557,42 @@ mod tests {
 
         assert!(!store_needs_rebuild());
         assert_eq!(QUERIES.load(Ordering::Relaxed), before + 1);
+    }
+
+    #[test]
+    fn an_environment_name_is_replaced_only_when_the_process_has_it() {
+        // One thread at a time is what makes this safe to write here; see the working checklist.
+        unsafe { std::env::set_var("WINFW_TEST_DIR", "C:\\test") };
+
+        assert_eq!(expand_env_vars("%WINFW_TEST_DIR%"), "C:\\test");
+        assert_eq!(
+            expand_env_vars("%WINFW_MISSING_DIR%\\tool.exe"),
+            "%WINFW_MISSING_DIR%\\tool.exe"
+        );
+
+        // A lone percent sign and a doubled one are ordinary text.
+        assert_eq!(
+            expand_env_vars("c:\\tools\\100%.exe"),
+            "c:\\tools\\100%.exe"
+        );
+        assert_eq!(expand_env_vars("50%%"), "50%");
+        assert_eq!(expand_env_vars("plain"), "plain");
+    }
+
+    #[test]
+    fn a_rule_written_with_an_environment_name_is_mapped_with_its_value() {
+        unsafe { std::env::set_var("WINFW_TEST_DIR", "C:\\test") };
+
+        forget();
+        prime(vec![Mapping {
+            drive: "c:".to_string(),
+            device: "\\device\\harddiskvolume3".to_string(),
+        }]);
+
+        assert_eq!(
+            to_device_path("%WINFW_TEST_DIR%\\tool.exe"),
+            "\\device\\harddiskvolume3\\test\\tool.exe"
+        );
     }
 
     #[test]

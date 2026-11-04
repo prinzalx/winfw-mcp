@@ -191,6 +191,14 @@ handed to the system and the answer is used. A path the system does not know is 
 because a rule for a program that is not installed yet is still a rule, and a pattern holding `*` or
 `?` is never asked about, because the call reads those characters literally.
 
+An application pattern may name an environment variable as `%NAME%`. It is resolved where the path is
+mapped, so the value on this machine is what the filter sees, while the rules file keeps the words a
+person wrote. That is deliberate: a file moved to a machine where `Program Files` lives elsewhere
+keeps saying `%ProgramFiles%`, and it is the firewall on that machine that decides what the name
+means. A name the process does not have is left exactly as it stands rather than becoming an empty
+string, because `\tool.exe` would silently mean a different directory, and a doubled `%%` is one
+literal percent sign.
+
 A drive that appears later is noticed on its own as well. A filter that is already in the store was
 built against the smaller answer, so the monitor asks the table once every ten seconds: when the
 answer names a drive the answer before it did not have, the rules are handed to the worker again and
