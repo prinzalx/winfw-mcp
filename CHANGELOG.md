@@ -10,6 +10,7 @@ ten planned headings.
 
 | Version | What changed |
 |---|---|
+| 0.77.8 | `rules.rs` is a directory now: the model, the transport, the addresses, the four list fields, the pattern language, the rule file and the stamp each have a file of their own, and everything still arrives under `crate::rules::...`. A pure move, no behavior changed. |
 | 0.77.7 | Odds and ends in `rules.rs`: FNV-1a is written once (the file fingerprint and the WFP filter keys now share it), an address goes to its sixteen bytes through one helper, a check in `Remote::from_str` that no input could reach is gone, `Remotes::from_vec` asserts the cap it used to bypass, and `is_name` moved next to the field that uses it. No behavior changed. |
 | 0.77.6 | The four list fields of a rule (`remote`, `dest`, `pattern`, `port`) are read, written and stored through one implementation now: split on commas, trim, refuse an empty element, cap at 32, join back with `", "`. Two messages moved with the code: a bad port element reads `'abc' is not a port` like the other fields do, and the name cap is spent over the elements a field writes rather than over the names that survive the deduplication. |
 | 0.77.5 | `port = 0` is refused everywhere now. The single-value reader accepted it while the field reader refused it, so the same text was a valid port in one place and an error in another; `0` is what WFP uses for "no port", so a rule that named it could never match a connection. |
