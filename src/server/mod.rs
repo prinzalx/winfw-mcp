@@ -111,9 +111,10 @@ const EVENT_POLL: Duration = Duration::from_millis(500);
 /// request.
 const STATE_EVENTS: usize = 50;
 
-/// How many detected applications `/api/state` carries. Pi-hole-like: a short list of what needs a
-/// decision, not the whole history.
-const STATE_DETECTED: usize = 20;
+/// How many detected applications `/api/state` carries: the whole Detected list, which is capped at
+/// the same number on disk. Twenty meant a queue of forty asked the page to decide on twenty and
+/// the rest was invisible with no way to reach it (§62.1).
+const STATE_DETECTED: usize = crate::learn::DETECTED_CAP;
 
 /// The server itself: a listener, the shared state and the worker.
 pub struct Server {

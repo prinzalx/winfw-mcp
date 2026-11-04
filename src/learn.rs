@@ -17,7 +17,10 @@ use crate::monitor::NetEvent;
 use crate::rules::{RuleFile, covered_by, reaches};
 
 /// How many applications the Detected list holds. The newest is kept, the oldest falls out.
-const DETECTED_CAP: usize = 100;
+///
+/// `/api/state` carries this many (§62.1), so the page can act on every entry the list is able to
+/// hold and a question is never hidden behind a cut the user cannot reach.
+pub(crate) const DETECTED_CAP: usize = 100;
 
 /// How many application paths the seen list holds. It is the set a wildcard rule is expanded
 /// against, so it is wider than the Detected list and grows whether or not learning mode is on.

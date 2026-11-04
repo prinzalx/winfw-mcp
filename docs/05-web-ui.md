@@ -48,10 +48,10 @@ The page is one column, at most about 1100 pixels wide and centred. Reading it t
   rebuild at startup found, or a `rules.toml` that is not the file the tool itself wrote. Details
   under [Banners](#banners).
 - **Tabs**: Connections, Rules, Detected, Settings. The Detected tab carries a badge with the number
-  of open entries — all of them, which can be more than the tab lists, because the state answer
-  carries only the 20 entries with the newest activity. When more entries are open than are listed,
-  the badge reads `47+`. The page opens on Detected when that list holds something, and on
-  Connections when it does not: an unanswered question outranks a list of what already happened.
+  of open entries. The state answer carries the whole list — as many entries as the Detected list
+  can hold, which is 100 — so a question counted on the badge is never missing from the tab. The
+  page opens on Detected when that list holds something, and on Connections when it does not: an
+  unanswered question outranks a list of what already happened.
 
 ### Connections
 
@@ -101,11 +101,11 @@ One card per application no rule speaks about yet: the file name in large type w
 the destination it reached, how often it was seen, and four buttons. **Allow** and **Deny** are the two
 primary ones and are the widest on the card; **Edit** and **Dismiss** are secondary.
 
-The cards are ordered by the newest activity, and the tab lists the 20 entries that asked most
-recently. A program that has been running for a week asks continuously, so ordering the list by first
-sight would answer its oldest questions and hide the one it is asking now; a program first seen a
-minute ago is the more interesting row. The badge on the tab counts every open entry, so a list cut at
-20 still says how many questions are waiting.
+The cards are ordered by the newest activity, and the tab lists every open entry: the answer carries
+as many as the Detected list can hold, which is 100. A program that has been running for a week asks
+continuously, so ordering the list by first sight would answer its oldest questions and hide the one
+it is asking now; a program first seen a minute ago is the more interesting row. The badge on the tab
+counts every open entry, so the number on it and the rows below it agree.
 
 **Edit** opens the application path before the rule is written, which is where a path becomes a
 pattern: widening `C:\Program Files\Mozilla Firefox\firefox.exe` to

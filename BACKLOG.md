@@ -480,10 +480,12 @@ Roughly by how much they cost to change later:
    the tray menu (`Open`, `Pause learning`, `Quit`) in 0.21.0 and volatile filter mode
    (`volatile_filters`, taken out on a clean stop) in 0.22.0. Log rotation, which was the last
    open part of it, landed in 0.26.0. Nothing of the item is left.
-8. ~~**The Detected list is short in the answer, not in the data** (§62.1)~~ — done in 0.65.0. The
-   answer is ordered by `seen_ms` before it is cut, so the twenty entries the page shows are the
-   twenty that asked most recently, and `detected_total` counts the whole list so a badge can say
-   `47+`. Deciding whether the page should paginate the whole list instead is still open; see §64.
+8. ~~**The Detected list is short in the answer, not in the data** (§62.1)~~ — done in 0.65.0 and
+   closed in 0.71.0. The answer is ordered by `seen_ms` before it is cut, and the cut is now the cap
+   the list itself is kept to, so the answer carries every entry the data can hold and the page can
+   act on all of them; pagination was considered in §64 and dropped for that reason.
+   `detected_total` stays: the badge reads a count rather than the length of a list the server could
+   one day truncate again.
 9. ~~**No test loads the page** (§62.2)~~ — half done in 0.66.0. A test collects every element id the
    script asks for and asserts the markup declares it, which is the disagreement a change to either
    half produces; it was verified to fail when an id is renamed. What it cannot do is notice a script
