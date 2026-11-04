@@ -1147,23 +1147,9 @@ pub(crate) fn pattern_reach(patterns: &crate::rules::Patterns, known: &[String])
     let mut installed = 0;
 
     for pattern in patterns.elements() {
-        if !is_wildcard(pattern) {
-            matches += 1;
-            installed += 1;
-
-            continue;
-        }
-
-        let device_pattern = crate::device::to_device_path(pattern);
-        let hits = known
-            .iter()
-            .filter(|path| wildcard_match(&device_pattern, path))
-            .count();
-
-        // A wildcard that matches nothing installs the pattern itself, so one filter per element
-        // is always the minimum.
+        let (hits, stands) = element_reach(pattern, known);
         matches += hits;
-        installed += hits.max(1);
+        installed += stands.len();
     }
 
     (matches, installed.min(MAX_WILDCARD_MATCHES))
@@ -1181,41 +1167,43 @@ fn app_ids(patterns: &crate::rules::Patterns, known: &[String]) -> Expansion {
     let mut matches = 0;
 
     for pattern in patterns.elements() {
+        let (hits, stands) = element_reach(pattern, known);
+        matches += hits;
+
+        // The cap is spent over the whole field rather than per element, so an element
+        // gets whatever room the field has left.
         let room = MAX_WILDCARD_MATCHES - apps.len().min(MAX_WILDCARD_MATCHES);
-
-        if !is_wildcard(pattern) {
-            matches += 1;
-
-            if room > 0 {
-                apps.push(AppId::resolve(pattern));
-            }
-
-            continue;
-        }
-
-        let device_pattern = crate::device::to_device_path(pattern);
-        let matched: Vec<&String> = known
-            .iter()
-            .filter(|path| wildcard_match(&device_pattern, path))
-            .collect();
-
-        matches += matched.len();
-
-        if matched.is_empty() {
-            if room > 0 {
-                apps.push(AppId::resolve(pattern));
-            }
-        } else {
-            apps.extend(
-                matched
-                    .into_iter()
-                    .take(room)
-                    .map(|path| AppId::resolve(path)),
-            );
-        }
+        apps.extend(stands.into_iter().take(room).map(AppId::resolve));
     }
 
     Expansion { apps, matches }
+}
+
+/// What one element of a pattern field reaches among the applications seen so far: the
+/// number it matched and the paths that stand for it.
+///
+/// An exact element is the pattern itself and needs no lookup. A wildcard is every path
+/// under it, and a wildcard that matches nothing keeps the pattern itself, so one filter
+/// per element is always the minimum. Both `pattern_reach` and `app_ids` ask this one
+/// question and differ only in what they do with the answers; keeping the question in one
+/// place is what stops the state view and the installation from drifting apart.
+fn element_reach<'a>(pattern: &'a str, known: &'a [String]) -> (usize, Vec<&'a str>) {
+    if !is_wildcard(pattern) {
+        return (1, vec![pattern]);
+    }
+
+    let device_pattern = crate::device::to_device_path(pattern);
+    let matched: Vec<&str> = known
+        .iter()
+        .filter(|path| wildcard_match(&device_pattern, path))
+        .map(String::as_str)
+        .collect();
+
+    if matched.is_empty() {
+        (0, vec![pattern])
+    } else {
+        (matched.len(), matched)
+    }
 }
 
 impl Drop for Engine {
@@ -1604,6 +1592,26 @@ mod tests {
         text.parse().expect("parse the application field")
     }
 
+    /// Start a write test from a clean store, or say the test is skipped.
+    ///
+    /// A process without the rights to write the store is the normal reason a WFP test cannot
+    /// run here, and skipping it beats failing it; anything but "access denied" (0x00000005)
+    /// is a real failure and stays an assertion.
+    fn clean_store_or_skip(engine: &Engine) -> bool {
+        match engine.clear() {
+            Ok(leftovers) => {
+                println!("cleared {leftovers} leftover filters");
+                true
+            }
+            Err(error) => {
+                let reason = format!("{error:#}");
+                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
+                println!("write path skipped, access denied");
+                false
+            }
+        }
+    }
+
     /// A rule with no direction is installed everywhere, and each direction picks the two layers
     /// where its connections are authorized.
     #[test]
@@ -1926,14 +1934,8 @@ mod tests {
         let expected = rules.rule.len() * LAYERS.len();
 
         // Start from a clean store, so a count of zero means what it says.
-        match engine.clear() {
-            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
-            Err(error) => {
-                let reason = format!("{error:#}");
-                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
-                println!("write path skipped, access denied");
-                return;
-            }
+        if !clean_store_or_skip(&engine) {
+            return;
         }
 
         let applied = engine
@@ -1969,14 +1971,8 @@ mod tests {
     fn a_narrowed_rule_is_installed_on_its_direction_alone() {
         let engine = Engine::open().expect("open engine");
 
-        match engine.clear() {
-            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
-            Err(error) => {
-                let reason = format!("{error:#}");
-                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
-                println!("write path skipped, access denied");
-                return;
-            }
+        if !clean_store_or_skip(&engine) {
+            return;
         }
 
         for port in ["443", "1024-2048"] {
@@ -2015,14 +2011,8 @@ mod tests {
     fn a_port_list_is_installed_as_one_filter_per_element() {
         let engine = Engine::open().expect("open engine");
 
-        match engine.clear() {
-            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
-            Err(error) => {
-                let reason = format!("{error:#}");
-                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
-                println!("write path skipped, access denied");
-                return;
-            }
+        if !clean_store_or_skip(&engine) {
+            return;
         }
 
         for (ports, expected) in [("443", 2usize), ("80, 443", 4), ("80, 1024-2048", 4)] {
@@ -2056,14 +2046,8 @@ mod tests {
     fn an_address_list_is_installed_as_one_filter_per_element() {
         let engine = Engine::open().expect("open engine");
 
-        match engine.clear() {
-            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
-            Err(error) => {
-                let reason = format!("{error:#}");
-                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
-                println!("write path skipped, access denied");
-                return;
-            }
+        if !clean_store_or_skip(&engine) {
+            return;
         }
 
         for (addresses, expected) in [
@@ -2105,14 +2089,8 @@ mod tests {
     fn a_remote_address_is_installed_on_the_layers_of_its_family() {
         let engine = Engine::open().expect("open engine");
 
-        match engine.clear() {
-            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
-            Err(error) => {
-                let reason = format!("{error:#}");
-                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
-                println!("write path skipped, access denied");
-                return;
-            }
+        if !clean_store_or_skip(&engine) {
+            return;
         }
 
         for address in [
@@ -2153,14 +2131,8 @@ mod tests {
     fn a_local_address_is_installed_on_the_layers_of_its_family() {
         let engine = Engine::open().expect("open engine");
 
-        match engine.clear() {
-            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
-            Err(error) => {
-                let reason = format!("{error:#}");
-                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
-                println!("write path skipped, access denied");
-                return;
-            }
+        if !clean_store_or_skip(&engine) {
+            return;
         }
 
         for address in [
@@ -2225,14 +2197,8 @@ mod tests {
         let engine = Engine::open().expect("open engine");
 
         // Start from a clean store, so a count of zero means what it says.
-        match engine.clear() {
-            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
-            Err(error) => {
-                let reason = format!("{error:#}");
-                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
-                println!("write path skipped, access denied");
-                return;
-            }
+        if !clean_store_or_skip(&engine) {
+            return;
         }
 
         let applied = engine
@@ -2261,14 +2227,8 @@ mod tests {
     fn apply_accounts_for_every_filter_it_installs() {
         let engine = Engine::open().expect("open engine");
 
-        match engine.clear() {
-            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
-            Err(error) => {
-                let reason = format!("{error:#}");
-                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
-                println!("write path skipped, access denied");
-                return;
-            }
+        if !clean_store_or_skip(&engine) {
+            return;
         }
 
         let rules = RuleFile {
