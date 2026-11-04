@@ -1,4 +1,3 @@
-| 0.80.1 | Test corpus, nothing else: 41 more tests over the text the firewall turns back. The Windows Filtering Platform names the application path and the user security descriptor in its own syntax, and a value the parser misreads becomes a filter on the wrong program, so the round is a table of shapes: a path read out of an `FWP_CONDITION_VALUE`, a security descriptor printed as `O:P` and as a long SDDL string, a sid in the form the store returns, an empty value, a malformed one, and the pair of forms a path appears in (device and drive). Nothing in `src` changed, and no rule, filter or setting was reinterpreted. The count is 295. |
 # Changelog
 
 Every release of winfw-mcp, newest first. The version in `Cargo.toml` is the source of truth;

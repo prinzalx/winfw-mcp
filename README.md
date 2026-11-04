@@ -76,7 +76,17 @@ and that is the one thing a firewall in front of an agent should not allow.
 
 ## Releases
 
-The current release is **0.69.0**: the three things a manual start asked for. Without parameters the
+The current release is **0.71.0**: the Detected list reaches the page whole. `/api/state` answered
+the newest twenty entries while the list on disk holds a hundred, so forty-seven open questions were
+decided from twenty and the rest had no way to reach a decision at all. The answer now carries the
+same cap the list is kept to, so the two numbers cannot drift apart again, and `detected_total`
+still counts everything for the badge.
+
+Before it, **0.70.0**: the last piece of the reference's file format arrived. `rules.toml` carries a
+checksum of its own body, so a file edited by hand or torn by a bad write says so in the log and in
+the UI rather than being taken over quietly.
+
+Before that, **0.69.0**: the three things a manual start asked for. Without parameters the
 tool now prints its parameters and the shortest start instead of rewriting the live store, an
 unelevated start asks for administrator rights rather than limping along with an unreadable store,
 and `Quit` takes our filters out of the store so the machine ends as it was found. The stop that
