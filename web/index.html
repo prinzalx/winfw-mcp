@@ -704,7 +704,7 @@
               <th>Protocol</th>
               <th>Direction</th>
               <th>Port</th>
-              <th>Remote</th>
+              <th>Destination</th>
               <th>Local</th>
               <th>Comment</th>
               <th>Order</th>
@@ -785,12 +785,12 @@
             <code>C:\test\tool1.exe, C:\test\tool2.exe</code>. A rule can be narrowed to one protocol
             (<code>tcp</code>, <code>udp</code>, or a number such as <code>47</code>), one
             direction, a port, a port range such as <code>1024-2048</code> or a comma-separated
-            list of them such as <code>80, 443, 8080-8090</code>, and a remote address, network
-            such as <code>192.168.1.0/24</code> or span such as <code>10.0.0.1-10.0.0.9</code> —
-            or a comma-separated list of them such as <code>10.0.0.5, 192.168.1.0/24</code>, or a
-            remote name in the Dest field such as <code>www.example.com</code> which is resolved
-            when the filters are built and joins the Remote field as a union; a rule that names
-            none of them is about all of them.
+            list of them such as <code>80, 443, 8080-8090</code>, and a destination. The
+            destination field takes addresses such as <code>10.0.0.5</code>, networks such as
+            <code>192.168.1.0/24</code>, spans such as <code>10.0.0.1-10.0.0.9</code> and names
+            such as <code>www.example.com</code> in one comma-separated list; addresses are final,
+            names are resolved when the filters are built, and all of it is a union. Names take
+            no wildcards yet; a rule that names none of them is about all of them.
             Every change is written to <code>rules.toml</code> and pushed to the store immediately.
             A detected application is one no rule speaks about yet; widen its path into a pattern
             such as <code>C:\\Program Files\\*\\app.exe</code> before you allow or deny it, if you want
@@ -826,21 +826,12 @@
         />
       </div>
       <div class="field">
-        <span>Remote</span>
+        <span>Destination</span>
         <input
           type="text"
           id="rule-remote"
-          placeholder="any — or a comma-separated list such as 10.0.0.5, 192.168.1.0/24"
-          title="a remote address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9, or a comma-separated list of them"
-        />
-      </div>
-      <div class="field">
-        <span>Dest</span>
-        <input
-          type="text"
-          id="rule-dest"
-          placeholder="any — or a comma-separated list such as www.example.com"
-          title="a name such as www.example.com, or a comma-separated list of names; resolved when the filters are built and joined with the remote addresses"
+          placeholder="any — addresses and names, comma-separated, such as 10.0.0.5, 192.168.1.0/24, www.example.com"
+          title="an address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9, and a name such as www.example.com, mixed in one comma-separated list; names are resolved when the filters are built, and a name takes no wildcard"
         />
       </div>
       <div class="field">
@@ -1101,8 +1092,7 @@
         el("rule-protocol").value = rule.protocol ?? "";
         select_choices("rule-direction", ["", "out", "in"], rule.direction);
         el("rule-port").value = rule.port ?? "";
-        el("rule-remote").value = rule.remote ?? "";
-        el("rule-dest").value = rule.dest ?? "";
+        el("rule-remote").value = [rule.remote, rule.dest].filter(Boolean).join(", ");
         el("rule-local").value = rule.local ?? "";
         el("rule-comment").value = rule.comment ?? "";
         el("rule-enabled").checked = rule.enabled;
@@ -1136,8 +1126,28 @@
         // empty choice is sent as absent rather than as the word "any".
         const protocol = el("rule-protocol").value.trim();
         const port = el("rule-port").value.trim();
-        const remote = el("rule-remote").value.trim();
-        const dest = el("rule-dest").value.trim();
+        // One field on the page, two in the file: an element that reads as an address belongs
+        // to `remote`, anything else is a name and belongs to `dest`. They differ at build
+        // time - an address is final, a name is resolved when the filters are built - so the
+        // file keeps the split the page has given up.
+        const destination = el("rule-remote").value.trim();
+        const addresses = [];
+        const names = [];
+
+        if (destination !== "") {
+          for (const part of destination.split(",")) {
+            const s = part.trim();
+
+            if (s === "") {
+              continue;
+            }
+            if (isAddressLike(s)) {
+              addresses.push(s);
+            } else {
+              names.push(s);
+            }
+          }
+        }
         const local = el("rule-local").value.trim();
         const comment = el("rule-comment").value.trim();
 
@@ -1148,14 +1158,22 @@
         rule.protocol = protocol === "" ? null : protocol;
         rule.direction = el("rule-direction").value || null;
         rule.port = port === "" ? null : port;
-        rule.remote = remote === "" ? null : remote;
-        rule.dest = dest === "" ? null : dest;
+        rule.remote = addresses.length ? addresses.join(", ") : null;
+        rule.dest = names.length ? names.join(", ") : null;
         rule.local = local === "" ? null : local;
         rule.comment = comment === "" ? null : comment;
         rule.enabled = el("rule-enabled").checked;
         el("rule-dialog").close();
         save();
       });
+
+      // Whether an element of the destination field reads as an address rather than as a name:
+      // anything with a colon is IPv6, and anything that starts with a digit and holds only
+      // digits, dots, slashes and dashes is IPv4 in some form. The server decides for certain;
+      // this only chooses which field a word belongs in.
+      function isAddressLike(text) {
+        return text.includes(":") || (/^\d/.test(text) && /^[0-9./-]+$/.test(text));
+      }
 
       // The port field takes a comma-separated list of single ports and ranges. Returns null
       // when an element is malformed; the server refuses such a rule too, but a message here
