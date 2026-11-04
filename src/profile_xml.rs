@@ -1,6 +1,7 @@
 //! Reading a profile written by the C original.
 //!
-//! simplewall stores its rules as XML and its own vocabulary is wider than this tool's: an item
+//! The profile format of the reference stores its rules as XML, and its vocabulary is wider than
+//! this tool's: an item
 //! can name several applications, several ports and several addresses at once, it can speak about
 //! a service instead of a path, and it carries fields this tool has no place for (a rule class, an
 //! OS version gate, a per-application comment). The reference has no importer at all, so there is
@@ -25,7 +26,7 @@ pub struct Import {
     pub notes: Vec<String>,
 }
 
-/// Read the XML text of a simplewall profile.
+/// Read the XML text of an exported profile.
 ///
 /// The items of `rules_custom` and `rules_system` are read, in document order; those are the two
 /// sections that hold rules. Every other section is left alone: `rules_config` only records which

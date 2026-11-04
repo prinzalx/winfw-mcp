@@ -57,7 +57,7 @@ pub struct Settings {
     /// What an application that no rule mentions should get: a firewall (`deny`, the default) or
     /// the Windows default (`allow`).
     ///
-    /// `deny` is the simplewall reading and the reason this tool exists: every connection is
+    /// `deny` is the strict reading and the reason this tool exists: every connection is
     /// blocked at the lowest weight and the rules, the loopback permits and the IPv6 plumbing
     /// permits are what lets traffic through again (BACKLOG section 4.1). It is the default, which
     /// means a first run blocks applications it has no rule for; `allow` keeps the machine exactly

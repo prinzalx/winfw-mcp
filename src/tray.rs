@@ -3,19 +3,21 @@
 //! PLAN.md section 1 asked for a start popup that says the tool is running and shows its address.
 //! That popup is the balloon the icon arrives with: it needs no window of its own, it closes
 //! itself, and it holds nobody up. Clicking the icon opens the browser on the UI, the right button
-//! offers `Open`, `Pause learning`, `Pause protection` and `Quit` (plus `Relaunch elevated` while
-//! the process is not elevated), and nothing else happens at startup, so the tool stays out of the
-//! way until it is asked for.
+//! offers `Open`, `Pause learning`, `Pause protection`, `Quit and remove rules` and `Quit and keep
+//! rules` (plus `Relaunch elevated` while the process is not elevated), and nothing else happens at
+//! startup, so the tool stays out of the way until it is asked for.
 //!
 //! A tray icon is not a widget: `Shell_NotifyIconW` binds an icon to a *window* and delivers its
 //! clicks as messages to that window's procedure. So this module owns a message-only window and the
 //! thread that pumps its messages, which is also why the tray cannot live on one of the server's
 //! request threads.
 //!
-//! The right button opens a menu with `Open`, `Pause learning`, `Pause protection` and `Quit`, and
-//! `Relaunch elevated` before `Quit` while the process is unelevated. The protection pause and the
-//! relaunch are POSTs to the server's own routes, which is what keeps the tray a client of the
-//! guarded API rather than a second way in. The learning pause is the one entry the tray applies
+//! The right button opens a menu with `Open`, `Pause learning`, `Pause protection` and the two
+//! quits, and `Relaunch elevated` above them while the process is unelevated. The protection pause,
+//! the relaunch and both quits are POSTs to the server's own routes, which is what keeps the tray a
+//! client of the guarded API rather than a second way in. The two quits are named apart because they
+//! answer different questions: one takes the installed filters out of the store, the other leaves
+//! them enforcing after the process is gone. The learning pause is the one entry the tray applies
 //! itself: it flips the running [`live`](crate::server::Live) flag and writes no file, so it
 //! reaches the same flag the settings route writes without sending a request of its own. It
 //! lasts for this run, which is what a pause means, and a settings change through the web remains
@@ -83,6 +85,11 @@ const APP_ICON: u16 = 1;
 /// The identifiers of the menu items.
 #[cfg(windows)]
 const MENU_QUIT: usize = 0x100;
+
+/// The entry that stops the process and leaves the installed filters where they are. The other way
+/// out takes them out of the store, which is what "as if it never ran" means.
+#[cfg(windows)]
+const MENU_QUIT_KEEP: usize = 0x105;
 
 #[cfg(windows)]
 const MENU_OPEN: usize = 0x101;
@@ -622,7 +629,8 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
         }
 
         AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()).ok();
-        AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Quit")).ok();
+        AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Quit and remove rules")).ok();
+        AppendMenuW(menu, MF_STRING, MENU_QUIT_KEEP, w!("Quit and keep rules")).ok();
 
         let mut point = windows::Win32::Foundation::POINT::default();
         GetCursorPos(&raw mut point).ok();
@@ -699,13 +707,20 @@ fn show_menu(handle: windows::Win32::Foundation::HWND) {
             return;
         }
 
-        if choice.0 == MENU_QUIT as i32 {
-            // `Quit` means as if nothing had been done, so the filters go out through the route
-            // that takes them out and stops the accept loop. On its own `PostQuitMessage` ends
-            // only this thread's message loop, which would leave a running server behind with no
-            // icon in the notification area, so the flag is cleared as well when the request did
-            // not get through.
-            if !api_post("/api/quit", "{}")
+        if choice.0 == MENU_QUIT as i32 || choice.0 == MENU_QUIT_KEEP as i32 {
+            // `Quit and remove rules` means as if nothing had been done, so it goes through the
+            // route that takes the filters out and stops the accept loop; `Quit and keep rules`
+            // goes through the route that only stops it. On its own `PostQuitMessage` ends only
+            // this thread's message loop, which would leave a running server behind with no icon in
+            // the notification area, so the flag is cleared as well when the request did not get
+            // through.
+            let endpoint = if choice.0 == MENU_QUIT as i32 {
+                "/api/quit"
+            } else {
+                "/api/shutdown"
+            };
+
+            if !api_post(endpoint, "{}")
                 && let Some(running) = SERVER_RUNNING
                     .lock()
                     .expect("running lock poisoned")

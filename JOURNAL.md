@@ -1520,3 +1520,68 @@ the one a person at the icon chooses and the stop that keeps them is the one a p
 *Open, and deliberately so:* the owner has not decided whether an MCP client should be able to ask
 for a stop at all. `shutdown` left the MCP tool list when MCP became read-only, which is honest but
 also means an agent cannot ask for the one action it is surely allowed to take.
+
+## Round: 0.75.0 — what the backlog is allowed to hold
+
+The backlog had grown into two documents in one file: the open points, and the record of what earlier
+rounds closed. Only the first is something you act on, so the closed material moved here and
+`BACKLOG.md` now holds open points, the audit findings still open, and the priorities.
+
+Four things the user had asked for earlier were answered imperfectly and are settled by this round:
+
+- **A double-click starts the tool.** For a while a run without parameters printed the usage and
+  touched nothing, which in a release build with no console window is indistinguishable from a broken
+  program. A bare start now serves; `--apply` stays the one-shot for installing the rules without a
+  running tool.
+- **The tray menu offers both ways out by name:** `Quit and remove rules` and `Quit and keep rules`.
+  One entry meaning "as if nothing had happened" left the other stop unreachable from the icon.
+- **The README describes starting and building** rather than telling the release history, which the
+  changelog does in more detail.
+- **Nothing user-facing names the reference implementation any more.** The name survives in this file
+  and in `CHANGELOG.md`, where it is history rather than explanation, and in the doc comments that
+  cite a line of it (`reference wfp.c:1827-1838`), which point into the knowledge base rather than
+  describe this tool. The module that reads the exported XML became `src/profile_xml.rs`.
+
+### Closed findings carried over from the backlog
+
+The text of what left `BACKLOG.md` in this round, so that a reference to a finding still finds it.
+
+**The likely bugs (old §1), all fixed.** B1 `Quit` in the tray ended only the tray thread's message
+loop — fixed in 0.11.0, `AppState::running` is the flag the accept loop waits on. B2 `learn_mode` was
+inert — fixed in 0.11.2. B3 a port conflict terminated the app — fixed in 0.11.3, `Server::bind`
+walks to the next free port of eight. B4 a wildcard rule silently missed applications until something
+wrote — fixed in 0.11.4. B5 a rules file that cannot be parsed fell back to its backup with no line in
+the log — fixed in 0.67.0. Behind B1 stood the question how to stop the tool from the browser at all;
+`POST /api/shutdown` answers it since 0.11.0.
+
+**The original list (old §2), all answered.** Single instance closed in 0.16.0 and quiet since 0.59.0.
+The stage audit and the reference comparison produced §3 and §4. Escaping is a non-problem in TOML
+literal strings, and what was fragile there (validation, version, backup) closed in 0.24.0. Icon and
+version info closed in 0.17.0. Whether quit keeps the rules is answered by which stop is taken:
+filters are persistent, `--clear` and `Quit and remove rules` take them out. A new destination for an
+allowed application has been noticed since 0.20.0. Blocked versus no-allow entries have been
+attributable since 0.18.0. An application in neither list is denied, since 0.61.0 by our own policy.
+
+**Closed findings from the stage audit (old §3).** The start popup closed in 0.41.0; the tray menu in
+0.21.0 and its protection pause in 0.43.0; the monitor's status in 0.27.0 and its health in 0.46.0;
+the startup reconcile in 0.31.0 and its content in 0.45.0; the log level in 0.39.0, leaving `port`
+file-only on purpose; the `500` for a bad settings value in 0.34.0; `theme` in 0.32.0; log rotation in
+0.26.0; the Profiles area of export in 0.30.0; whole-file import in 0.33.0; the decode direction over
+MCP in 0.29.0; the rules-file backup in 0.24.0; creating a profile from the browser in 0.28.0; the
+per-profile Detected list in 0.55.0; the engine open retry in 0.35.0; "Relaunch elevated" in 0.49.0;
+the drive-map re-ask in 0.50.0; the MCP write gate removed in 0.36.0 rather than implemented; reorder
+in 0.47.0; the write race in 0.48.0; the `rmcp` question settled in 0.44.1; reading an exported XML
+profile in 0.57.0. Four doc-drift findings closed in 0.37.0, 0.38.0, 0.38.1 and 0.53.0, and the
+connection row's missing protocol column in 0.73.1.
+
+**Closed findings from the reference comparison (old §4).** Default deny in 0.12.0, made the default in
+0.61.0, switchable on the page since 0.13.0. Protocol by number in 0.51.0, address family and the
+remote address in 0.15.0, the address span in 0.56.0, ports in 0.14.0, the rule comment in 0.42.0, the
+empty-pattern case in 0.52.0. Of the event record, the filter attribution came in 0.18.0, the remote
+address in 0.19.0, the local endpoint with the loopback marker in 0.25.0, the local-network marker in
+0.37.0 and the user name in 0.72.0. Storage gained validation, version and backup in 0.24.0 and the
+checksum in 0.70.0; a truncated wildcard has been reported since 0.60.0. The reference's window restore
+is closed as not applicable to a tool whose UI is a browser page nobody reloads.
+
+**Closed parts of the priority list (old §6) and of the dimension list (old §51).** Items 1 to 9 are
+done or reduced to a named remainder; the local address landed in 0.73.0 and the port list in 0.74.0.

@@ -85,14 +85,14 @@ const WEIGHT_ALLOW: u8 = 0x0D;
 ///
 /// Above every rule, because these are the traffic the firewall must never block whatever the
 /// rules say. Mirrors the reference, which uses `FWW_IMPORTANT` for exactly these
-/// (`simplewall/src/wfp.c:1605-1688`).
+/// (`reference wfp.c:1605-1688`).
 ///
 /// The reference tops out at `0x0F`, and that ceiling is real: WFP answers
 /// `FWP_E_INVALID_WEIGHT` for a `FWP_UINT8` weight of `0x10`, just as it does for `0`.
 const WEIGHT_BASE_PERMIT: u8 = 0x0F;
 
 /// Filter weight for the unconditional block of the default-deny base: the bottom, so every
-/// permit and every rule is consulted before it (`simplewall/src/wfp.c:1827-1838`). Not
+/// permit and every rule is consulted before it (`reference wfp.c:1827-1838`). Not
 /// literally zero: WFP answers `FWP_E_INVALID_WEIGHT` for a weight of `0`, which is why the
 /// reference's `FWW_LOWEST` is `0x08` rather than `0x00`.
 const WEIGHT_BASE_BLOCK: u8 = 0x01;
@@ -796,7 +796,7 @@ impl Engine {
     }
 
     /// Install the base filters of the default-deny policy, mirroring the reference
-    /// (`simplewall/src/wfp.c:1605-1688` and `1827-1838`).
+    /// (`reference wfp.c:1605-1688` and `1827-1838`).
     ///
     /// An unconditional block sits at the very bottom of the four authorization layers, so
     /// traffic no rule mentions is denied rather than falling through to whatever the rest of

@@ -226,8 +226,8 @@ human may have edited.
 
 ## Importing from the C original
 
-`--import <file>` reads the XML a person exported from simplewall and writes the rules it understands
-into the rule file of the active profile, replacing what was there. The two sections that hold rules
+`--import <file>` reads the XML of a profile exported by the reference tool and writes the rules it
+understands into the rule file of the active profile, replacing what was there. The two sections that hold rules
 are read in document order; the list of applications, the table of built-in rules and the blocklist
 are left alone, because they are not rules of this shape.
 

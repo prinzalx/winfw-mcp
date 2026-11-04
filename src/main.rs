@@ -12,9 +12,9 @@ mod log;
 mod mcp;
 mod monitor;
 mod paths;
+mod profile_xml;
 mod rules;
 mod server;
-mod simplewall;
 mod store;
 mod tray;
 mod user;
@@ -48,21 +48,18 @@ fn tray_url(url: &str, token: &str) -> String {
 
 /// What the process should do with the live store.
 ///
-/// A run that names no flag changes nothing and only prints its parameters: a portable tool is
-/// started by double-click, and installing filters that nobody asked for is not a harmless guess.
-/// The one-shot operations are the ones the web UI exposes as well; `Serve` is the mode the tool is
-/// meant to run in, and it keeps the process alive instead of applying and exiting.
+/// A run that names no flag serves: a portable tool is started by double-click, and a double-click
+/// that ends at once with nothing in the notification area reads as a broken program. The one-shot
+/// operations are the ones the web UI exposes as well; `Serve` is the mode the tool is meant to run
+/// in, and it keeps the process alive instead of applying and exiting.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 enum Command {
-    /// Print the parameters and a minimal start example, and touch neither the files nor the
-    /// store. This is what no arguments mean.
-    #[default]
-    Usage,
     /// Push the loaded rules into the live store.
     Apply,
     /// Take our filters out of the live store again.
     Clear,
-    /// Run the web server until the process is stopped.
+    /// Run the web server until the process is stopped. This is what no arguments mean.
+    #[default]
     Serve,
     /// Run the web server, but wait briefly for the instance that a relaunch is stopping.
     ///
@@ -78,7 +75,7 @@ impl Command {
     /// flag cannot silently install filters the user did not ask for.
     fn parse(args: &[String]) -> Result<Self> {
         match args {
-            [] => Ok(Self::default()),
+            [] => Ok(Self::Serve),
             [flag] if flag == "--apply" => Ok(Self::Apply),
             [flag] if flag == "--clear" => Ok(Self::Clear),
             [flag] if flag == "--serve" => Ok(Self::Serve),
@@ -95,30 +92,30 @@ impl Command {
 
 /// Every parameter the process understands, and the shortest start that does something.
 ///
-/// Both `--help` and a run without parameters print this. A release build has no console, so a
-/// double-click still shows nothing; whoever starts the tool from a shell is the reader, and for
-/// them the difference between "nothing happened" and "this tool is broken" is this text.
+/// `--help` prints this. A release build has no console, so a double-click shows nothing of it; the
+/// reader is whoever starts the tool from a shell, and for them this is the difference between a
+/// tool that serves quietly and a tool they have to guess at.
 fn usage() -> String {
     // One entry per line, joined afterwards, because the line continuation of a string literal
     // swallows the leading spaces that make a usage block readable.
     [
         "winfw-mcp [ --serve | --apply | --clear | --import <profile.xml> ]",
         "",
-        "    (no flag)      print this text and change nothing",
+        "    (no flag)      same as --serve; this is what a double-click starts",
         "    --serve        run the web server until the process is stopped",
         "    --takeover     same, but wait briefly for an instance that is stopping (relaunch)",
         "    --apply        load the rules and install them in the live store",
         "    --clear        remove our filters from the live store",
-        "    --import       read a simplewall profile into the active rule file, replacing it",
+        "    --import       read an exported profile into the active rule file, replacing it",
         "    --help, -h     show this text",
         "    --version, -V  print the version",
         "",
         "Reading and writing the store needs elevation. Without it no rule is installed and the",
         "page shows a store it cannot confirm.",
         "",
-        "Start it with:",
+        "Start it with a double-click, or from a shell with:",
         "",
-        "    winfw-mcp.exe --serve",
+        "    winfw-mcp.exe",
     ]
     .join("\n")
         + "\n"
@@ -155,15 +152,6 @@ fn main() -> Result<()> {
     }
 
     let command = Command::parse(&args)?;
-
-    // No flag means a double-click, and a double-click that rewrites the live store surprised
-    // everyone who tried it. Print the parameters and the shortest start instead, and leave both
-    // the files and the store exactly as they were: this returns before a file is read or written.
-    if command == Command::Usage {
-        print!("{}", usage());
-
-        return Ok(());
-    }
 
     // Everything the tool owns lives under one directory, resolved before anything else reads
     // or writes a file.
@@ -250,7 +238,7 @@ fn main() -> Result<()> {
     if let Command::Import(file) = &command {
         let text = std::fs::read_to_string(file)
             .with_context(|| format!("read the profile {}", file.display()))?;
-        let import = simplewall::parse(&text)
+        let import = profile_xml::parse(&text)
             .with_context(|| format!("read the profile {}", file.display()))?;
 
         import.rules.save(&active_rules)?;
@@ -483,10 +471,10 @@ fn sync_store(rules: &RuleFile, command: Command, known: &[String], policy: Poli
         Command::Clear => engine.clear().map(|removed| {
             info!(removed, "our filters removed from WFP");
         }),
-        // None of these four reaches `sync_store`: `serve` and `takeover` return into their own
-        // loop, an import stops after writing the rule file, and a run without parameters prints
-        // its usage and leaves. The arms only keep the match honest.
-        Command::Usage | Command::Serve | Command::Takeover | Command::Import(_) => Ok(()),
+        // None of these three reaches `sync_store`: `serve` and `takeover` return into their own
+        // loop, and an import stops after writing the rule file. The arms only keep the match
+        // honest.
+        Command::Serve | Command::Takeover | Command::Import(_) => Ok(()),
     };
 
     if let Err(error) = outcome {
@@ -577,7 +565,7 @@ mod tests {
     /// mistake, and it is the reason `parse` refuses instead of shrugging.
     #[test]
     fn the_one_flag_names_the_command() {
-        assert_eq!(Command::parse(&[]).expect("no flag"), Command::Usage);
+        assert_eq!(Command::parse(&[]).expect("no flag"), Command::Serve);
         assert_eq!(
             Command::parse(&["--apply".to_owned()]).expect("--apply"),
             Command::Apply,
@@ -600,11 +588,11 @@ mod tests {
         );
     }
 
-    /// A run without parameters changed nothing for a long time and surprised everyone who
-    /// double-clicked the tool, which is why it now prints its parameters. Printing them is only
-    /// useful if the shortest start that does something is among them.
+    /// A double-click starts the tool, so the usage a reader reaches with `--help` has to name
+    /// every flag and say what the bare start does. Both are decided here rather than left to the
+    /// text alone.
     #[test]
-    fn the_usage_names_the_flags_and_the_shortest_start() {
+    fn the_usage_names_the_flags_and_the_bare_start() {
         let text = super::usage();
 
         for flag in ["--serve", "--apply", "--clear", "--import", "--takeover"] {
@@ -612,12 +600,12 @@ mod tests {
         }
 
         assert!(
-            text.contains("winfw-mcp.exe --serve"),
-            "the usage ends with a minimal start example",
+            text.contains("winfw-mcp.exe"),
+            "the usage ends with the shortest start",
         );
         assert!(
-            text.contains("print this text and change nothing"),
-            "no parameters must say that they change nothing",
+            text.contains("same as --serve"),
+            "no parameters must say that they serve, which is what a double-click does",
         );
     }
 

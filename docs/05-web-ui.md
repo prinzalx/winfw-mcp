@@ -284,8 +284,9 @@ endpoint offers the same string as `rules.share`.
 The `Quit` button posts `/api/quit`, which takes our filters out of the store before it ends the
 process, so the machine is left as it was found. That ends the process, not merely the request, so
 the page reports what happened instead of reloading a server that is no longer there, and it says
-whether the store cooperated. A script that wants the other stop — process out, rules in place —
-posts `/api/shutdown`. See [lifecycle](08-lifecycle.md#stopping).
+whether the store cooperated. The other stop — process out, filters left enforcing — is
+`/api/shutdown`, which the tray offers as `Quit and keep rules` and a script posts by name. See
+[lifecycle](08-lifecycle.md#stopping).
 
 ---
 

@@ -9,8 +9,8 @@ way. In a release build the binary is therefore a Windows program rather than a 
 starting it shows no terminal window at all. Debug builds keep the console, because that is where
 the log goes while the tool is being developed.
 
-`--serve` puts an icon in the notification area. A machine where the icon cannot be added is not a
-failure of the tool: the server answers anyway and the user types the address, so a refused icon is
+A start puts an icon in the notification area, with no flag or with `--serve`. A machine where the
+icon cannot be added is not a failure of the tool: the server answers anyway and the user types the address, so a refused icon is
 only logged. Because the release binary has no console, the startup lines and the outcome of adding
 the icon are appended to the log file in the data directory as well.
 
@@ -131,8 +131,9 @@ the old process to the new one.
 
 - **Left click** opens the browser on the UI. The URL is handed to the shell, which means the
   browser is the user's, not ours.
-- **Right click** opens a menu with `Open`, `Pause learning`, `Pause protection` and `Quit`, and
-  `Relaunch elevated` between the pauses and `Quit` while the process is not elevated. `Open` does
+- **Right click** opens a menu with `Open`, `Pause learning`, `Pause protection`,
+  `Quit and remove rules` and `Quit and keep rules`, and `Relaunch elevated` between the pauses and
+  the quits while the process is not elevated. `Open` does
   what a left click does. `Pause learning` and `Pause protection` flip a running flag and write no
   file, so each pause lasts for this run only: a restart reads `config.toml` again and the labels
   read `Pause` again. The menu is built when it opens, so a label always reflects the flag the
@@ -140,8 +141,9 @@ the old process to the new one.
   menu opens. `Pause protection` and `Relaunch elevated` are the same requests the page sends, so the
   tray is a client of the API rather than a second way in. `Pause learning` is the one entry the tray
   applies itself: it flips the same running flag the settings route writes, without a request of its
-  own, which is invisible to the guard because nothing crosses the socket. `Quit` is the same stop as
-  below.
+  own, which is invisible to the guard because nothing crosses the socket. The two quits are the two
+  stops described under [Stopping](#stopping), and they are named apart so the question "does the
+  firewall outlive the tool?" is answered before it is asked.
 - **A click on the start balloon only dismisses it.** Reporting that click needs the icon to be
   registered with a shell version, and the version also moves where the mouse events sit in the
   callback message. Keeping the click path where it is costs less than the balloon is worth, so the
@@ -178,26 +180,29 @@ worth knowing:
 
 ## Stopping
 
-Both routes end the process rather than only the tray thread:
+Both routes end the process rather than only the tray thread, and both are offered by name:
 
-- the page's `Quit` button posts `POST /api/quit`;
-- the tray's `Quit` posts the same route over the loopback socket, with the session token in a
-  header, and falls back to clearing the flag itself when the request does not get through.
+- `Quit and remove rules` — the page's `Quit` button and the first tray entry — posts
+  `POST /api/quit`;
+- `Quit and keep rules` — the second tray entry — posts `POST /api/shutdown`.
+
+The tray sends both over the loopback socket, with the session token in a header, and falls back to
+clearing the flag itself when the request does not get through.
 
 The flag is `AppState::running`. The accept loop waits on it, and after it is cleared the loop waits
 a short grace period so the client that asked for the stop receives its reply before the process
 ends. The MCP endpoint no longer offers that action: `shutdown` was a writing tool and is gone,
 so an agent cannot stop the process and the page or the tray has to do it.
 
-**`Quit` takes the rules with it.** The route asks the store for a clear before it clears the flag,
-so the machine is as it was before the tool ran: no allow, no deny, nothing installed. This is the
-answer to a tool that was started to look around.
+**`Quit and remove rules` takes the filters with it.** The route asks the store for a clear before
+it clears the flag, so the machine is as it was before the tool ran: no allow, no deny, nothing
+installed. This is the answer to a tool that was started to look around.
 
-**`POST /api/shutdown` keeps them.** The filters we install are persistent and outlive the process,
-so a shutdown leaves the firewall enforcing what `rules.toml` says after the tool is gone. That is
-the option for someone who wants the protection to outlive the tool, and since 0.69.0 it is the
-option a script has to ask for by name: the page and the tray both take the route that clears. A
-one-shot `--clear` does the same to the store without stopping anything.
+**`Quit and keep rules` leaves them.** The filters we install are persistent and outlive the
+process, so a shutdown leaves the firewall enforcing what `rules.toml` says after the tool is gone.
+That is the option for anyone who wants the protection to outlive the tool, and it is the option a
+script has to ask for by name. A one-shot `--clear` does the same to the store without stopping
+anything.
 
 The exception is `volatile_filters = true`: the server then sends itself one last clear on the way
 out, and the rules go with the process. A *killed* process never reaches that last step; the

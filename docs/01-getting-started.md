@@ -2,11 +2,10 @@
 
 *Part of the [winfw-mcp handbook](../README.md#the-handbook).*
 
-winfw-mcp is a rewrite of [simplewall](https://github.com/henrypp/simplewall) in Rust. The C
-original is the functional specification, not a code base to port line by line. Instead of a native
-GUI it runs a small web server: start it, a balloon names the address next to the tray icon, and a
-click on that icon opens the browser on the UI. The same core answers an MCP client, so an agent can
-allow or deny a connection too.
+winfw-mcp is a Windows firewall controller written in Rust. Instead of a native GUI it runs a small
+web server: start it, a balloon names the address next to the tray icon, and a click on that icon
+opens the browser on the UI. The same core answers an MCP client, which is how a local agent reads
+the firewall.
 
 ## What it is, and what it is not
 
@@ -48,27 +47,27 @@ to the same live store, and the result then depends on which of them finished la
 ## Commands
 
 ```
-winfw-mcp                   print the parameters and a minimal start example, change nothing
+winfw-mcp                   serve: what a double-click starts, and the same as --serve
 winfw-mcp --apply           load rules.toml and install it in the live store, then exit
 winfw-mcp --serve           run the web server until stopped
 winfw-mcp --takeover        the same, but wait briefly for an instance that is stopping; a
                             relaunch starts its elevated copy this way
 winfw-mcp --clear           remove our filters from the live store
-winfw-mcp --import <file>   read a simplewall profile into the active rule file, replacing it
+winfw-mcp --import <file>   read an exported profile into the active rule file, replacing it
 winfw-mcp --help            print the usage text (`-h`)
 winfw-mcp --version         print the version (`-V`)
 ```
 
-`--import` needs no elevation: it reads the XML a person exported from the C original, writes the
+`--import` needs no elevation: it reads the XML of an exported profile, writes the
 rules it understands into the rule file of the active profile, and stops there. Nothing reaches the
 live store, because the point of the import is to look at the result on the page before deciding
 whether it is worth installing. What the shape of a profile does not fit is written into the comment
 of the rule it came from, or reported as a note in the log when no rule came from it at all.
 
-No flag means a double-click, and since 0.69.0 it means *nothing*: the parameters are printed and
-neither the files nor the store are touched. Installing the rules that way was what surprised people
-before, because a release build has no console and a double click appeared to do nothing at all while
-the store had been rewritten behind the scenes. `--apply` is the one-shot that does it on purpose.
+No flag means a double-click, and a double-click serves. That was not always so: for a long time a
+run without parameters printed its usage and touched nothing, which in a release build — no console
+window — looked exactly like a program that was broken. `--apply` is the one-shot that installs the
+rules and exits, for anyone who wants that instead of a tool that keeps running.
 
 An unknown flag is an error rather than a shrug, so a mistyped option cannot silently install
 filters nobody asked for. Only one `--serve` may run at a time: a second start finds the name
