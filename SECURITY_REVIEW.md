@@ -2,7 +2,7 @@
 
 A brief for a reviewer who has not seen the code. It describes the process, the request path and
 the questions; it does not describe the answer. Written in English, because the repository is
-English throughout. Current as of 0.62.0.
+English throughout. Current as of 0.77.8.
 
 ## What runs
 
@@ -14,9 +14,10 @@ everything lives under `%APPDATA%\winfw-mcp`.
 A person uses the server through a browser page. The tray icon opens the page at
 `http://127.0.0.1:<port>/#token=<token>`, and the page takes the token out of the address again the
 moment it has read it. An agent uses the same server through one endpoint, `POST /mcp`, which
-speaks JSON-RPC 2.0 and is read-only **in the code**: the six tools it offers (`status`,
+speaks JSON-RPC 2.0 and is read-only **in the code**: the reading tools it offers (`status`,
 `rules.list`, `rules.share`, `detected.list`, `events.list`, `profiles.list`) touch neither a file
-nor the live store, and there is no writing tool to call.
+nor the live store, and there is no writing tool to call. The writing tools were removed from the
+code rather than switched off, so an agent cannot reach a write even by naming one.
 
 ## The request path
 
@@ -103,7 +104,8 @@ file and line as evidence.
 
 - `src/server/guard.rs` — the guard, the Host/Origin helpers, the token maker, eight tests.
 - `src/server/mod.rs` — the accept loop; `guard` runs before the route and before the event stream.
-- `src/server/mcp_tools.rs` — the six reading tools; no `save`, no store work, no rule write.
+- `src/server/mcp_tools.rs` — the reading tools; no `save`, no store work, no rule write, and no
+  write is reachable under `/mcp`.
 - `docs/10-security-model.md` — the chapter that mirrors this brief, including the limits of
   default deny.
 - `CHANGELOG.md` rows 0.36.0, 0.37.0, 0.58.0 and 0.61.0 — the read-only endpoint, the dropped
