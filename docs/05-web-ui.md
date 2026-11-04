@@ -91,13 +91,18 @@ unique local address. See [Connections worth showing](#connections-worth-showing
 A table with fixed column widths: Name, Action, Program, Protocol, Direction, Port, Remote, Comment,
 Order, and the remove button. Action is a badge, Order is a pair of arrows, and a pattern the cap cut
 carries a small warning badge — *pattern has 42 matches, only 32 installed* — so the cut is visible
-where the rule is read rather than only in the log. The Port column shows one chip per port, so a rule
+where the rule is read rather than only in the log. The Remote column shows the addresses of `remote`
+and, when the rule has one, the names of `dest` beside them. A name that did not answer, or a list the
+cap cut, gets a warning badge of its own — *2 unresolved* or *resolved a+b* — and the tooltip names
+the number behind each name. The Port column shows one chip per port, so a rule
 that allows `80, 443` reads as two chips rather than one long string; a rule that names no port shows a
 single *any* chip.
 
 A rule is edited in a dialog, not in ten fields that stay on screen: **Add rule** above the table
 appends a rule and opens it, and a click on a row opens that one. The dialog holds name, action,
-program, protocol, direction, port, remote address, local address, comment and the enabled flag.
+program, protocol, direction, port, remote address, destination name, local address, comment and the
+enabled flag. The destination box takes names, not addresses, and is left empty when the rule should
+reach wherever its addresses are.
 Protocol is a text box rather than a list because a rule may name a protocol number such as `47`;
 the program box takes a comma-separated list of paths such as
 `C:\test\tool1.exe, C:\test\tool2.exe`, the port box takes a comma-separated list of single ports and ranges such as

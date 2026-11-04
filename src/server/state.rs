@@ -285,6 +285,12 @@ pub struct Live {
     /// What the event subscription reported. A mutex rather than an atomic because the report
     /// carries the code that refused it, and only the monitor thread ever writes it.
     monitor: Mutex<MonitorStatus>,
+    /// The addresses the names of the rules stood for when the filters were last built.
+    ///
+    /// Written by the worker that builds the store and read by the monitor, which has to know
+    /// whether a destination a rule names by name is already spoken about. A mutex because the
+    /// two threads are never the same one, and the value is a map rather than a word.
+    answers: Mutex<crate::dns::Answers>,
 }
 
 impl Live {
@@ -295,11 +301,24 @@ impl Live {
             protection: AtomicBool::new(true),
             theme: AtomicU8::new(theme.index()),
             monitor: Mutex::new(MonitorStatus::default()),
+            answers: Mutex::new(crate::dns::Answers::default()),
         }
     }
 
     pub fn learning(&self) -> bool {
         self.learning.load(Ordering::SeqCst)
+    }
+
+    /// The addresses the names of the rules stood for. Held as a guard so a reader cannot see a
+    /// map that a rebuild is in the middle of replacing.
+    pub fn answers(&self) -> std::sync::MutexGuard<'_, crate::dns::Answers> {
+        self.answers.lock().expect("answers lock poisoned")
+    }
+
+    /// Publish the answers a rebuild worked from, so the monitor judges a name by the same
+    /// addresses the store was built with.
+    pub fn set_answers(&self, answers: crate::dns::Answers) {
+        *self.answers.lock().expect("answers lock poisoned") = answers;
     }
 
     pub fn policy(&self) -> Policy {

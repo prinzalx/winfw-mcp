@@ -14,6 +14,9 @@ pub struct DataPaths {
     /// The Detected list of learning mode, as JSON: it is machine state rather than something the
     /// user edits, and JSON keeps it readable without a TOML dependency in the way.
     pub learn: PathBuf,
+    /// The addresses the names of the rules had the last time the filters were built, as JSON:
+    /// it is machine state like the Detected list, and nobody edits it.
+    pub resolved: PathBuf,
     pub profiles: PathBuf,
     pub logs: PathBuf,
     pub export: PathBuf,
@@ -27,6 +30,7 @@ impl DataPaths {
             config: root.join("config.toml"),
             rules: root.join("rules.toml"),
             learn: root.join("learn.json"),
+            resolved: root.join("resolved.json"),
             profiles: root.join("profiles"),
             logs: root.join("logs"),
             export: root.join("export"),

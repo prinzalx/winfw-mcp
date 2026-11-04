@@ -1,6 +1,7 @@
 //! The thread that owns the WFP engine handle, and the work it carries out on behalf of a request
 //! thread.
 
+use std::path::PathBuf;
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -119,7 +120,7 @@ impl WfpWorker {
     ///
     /// `live` carries the protection switch, which the worker honours on every piece of work: a
     /// rebuild asked for while protection is paused must not put filters back into the store.
-    pub fn start(live: Arc<Live>) -> Self {
+    pub fn start(live: Arc<Live>, resolved: PathBuf) -> Self {
         // A bounded queue of one is deliberate: a second change waits for the first to be carried
         // out, which is also what keeps two full filter rebuilds from racing.
         let (sender, receiver) = sync_channel::<WorkItem>(1);
@@ -143,16 +144,37 @@ impl WfpWorker {
                 }
             };
 
+            // The answers the names of the rules stood for last time, read once and owned by this
+            // thread from then on. It is the only thread that builds the store, so it is the only
+            // one that has to know what a name meant.
+            let mut answers = crate::dns::Answers::load(&resolved);
+
             while let Ok((work, reply)) = receiver.recv() {
                 // Read per item rather than remembered, so a pause made a moment ago is honoured
                 // by the work that arrives after it.
                 let work = honouring_protection(work, live.protection());
+
+                // A name has to be an address by the time the store sees it, and looking it up
+                // here delays a rebuild rather than an event. Publishing the answers is what lets
+                // the monitor judge a destination by the addresses the filters were built with.
+                if let StoreWork::Apply { rules, .. } = &work {
+                    let names = crate::dns::Answers::wanted(rules);
+                    let changed = answers.refresh(&names, crate::dns::lookup);
+
+                    answers.retain(&names);
+                    live.set_answers(answers.clone());
+
+                    if changed {
+                        let _ = answers.save(&resolved);
+                    }
+                }
 
                 let outcome = handle_work(
                     #[cfg(windows)]
                     engine.as_ref(),
                     #[cfg(windows)]
                     &shared_owners,
+                    &answers,
                     work,
                 );
 
@@ -174,7 +196,10 @@ impl WfpWorker {
     /// that never pauses protection cannot tell the difference about.
     #[cfg(test)]
     pub fn start_enforcing() -> Self {
-        Self::start(Arc::new(Live::default()))
+        Self::start(
+            Arc::new(Live::default()),
+            crate::testutil::scratch_dir("worker-resolved").join("resolved.json"),
+        )
     }
 
     /// A second handle on the request queue, for a caller that has work but no interest in the
@@ -246,6 +271,7 @@ fn honouring_protection(work: StoreWork, protection: bool) -> StoreWork {
 fn handle_work(
     #[cfg(windows)] engine: Option<&crate::wfp::Engine>,
     #[cfg(windows)] owners: &Mutex<crate::monitor::Attribution>,
+    #[cfg(windows)] answers: &crate::dns::Answers,
     work: StoreWork,
 ) -> Result<StoreOutcome> {
     #[cfg(windows)]
@@ -261,15 +287,17 @@ fn handle_work(
             rules,
             known,
             policy,
-        } => engine.apply(&rules, &known, policy).map(|applied| {
-            let diff = name_diff(&applied.removed_rules, &applied.installed_rules);
+        } => engine
+            .apply(&rules, &known, answers, policy)
+            .map(|applied| {
+                let diff = name_diff(&applied.removed_rules, &applied.installed_rules);
 
-            // The rebuild wrote the whole store, so its table replaces ours wholesale rather
-            // than being merged; a filter the rebuild dropped is no longer in the store.
-            *owners.lock().expect("owners lock poisoned") = applied.owners;
+                // The rebuild wrote the whole store, so its table replaces ours wholesale rather
+                // than being merged; a filter the rebuild dropped is no longer in the store.
+                *owners.lock().expect("owners lock poisoned") = applied.owners;
 
-            (applied.removed, applied.installed, diff)
-        }),
+                (applied.removed, applied.installed, diff)
+            }),
         StoreWork::Clear => engine.clear().map(|removed| {
             owners.lock().expect("owners lock poisoned").clear();
 
@@ -417,7 +445,7 @@ fn summary(inventory: &crate::wfp::Inventory) -> InventorySummary {
 
 /// The non-Windows answer exists so the server can be exercised by a doc build.
 #[cfg(not(windows))]
-fn handle_work(work: StoreWork) -> Result<StoreOutcome> {
+fn handle_work(_answers: &crate::dns::Answers, work: StoreWork) -> Result<StoreOutcome> {
     Ok(StoreOutcome {
         ok: false,
         removed: 0,

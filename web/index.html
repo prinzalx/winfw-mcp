@@ -732,8 +732,10 @@
             direction, a port, a port range such as <code>1024-2048</code> or a comma-separated
             list of them such as <code>80, 443, 8080-8090</code>, and a remote address, network
             such as <code>192.168.1.0/24</code> or span such as <code>10.0.0.1-10.0.0.9</code> —
-            or a comma-separated list of them such as <code>10.0.0.5, 192.168.1.0/24</code>;
-            a rule that names none of them is about all of them.
+            or a comma-separated list of them such as <code>10.0.0.5, 192.168.1.0/24</code>, or a
+            remote name in the Dest field such as <code>www.example.com</code> which is resolved
+            when the filters are built and joins the Remote field as a union; a rule that names
+            none of them is about all of them.
             Every change is written to <code>rules.toml</code> and pushed to the store immediately.
             A detected application is one no rule speaks about yet; widen its path into a pattern
             such as <code>C:\\Program Files\\*\\app.exe</code> before you allow or deny it, if you want
@@ -778,6 +780,15 @@
         />
       </div>
       <div class="field">
+        <span>Dest</span>
+        <input
+          type="text"
+          id="rule-dest"
+          placeholder="any — or a comma-separated list such as www.example.com"
+          title="a name such as www.example.com, or a comma-separated list of names; resolved when the filters are built and joined with the remote addresses"
+        />
+      </div>
+      <div class="field">
         <span>Local</span>
         <input
           type="text"
@@ -815,6 +826,8 @@
       // The rules whose wildcard pattern matched more applications than the cap allows, keyed by
       // name and pattern, which together identify a rule the way the table shows it.
       let truncations = new Map();
+      // The reach of the names a rule holds, keyed by rule name, mirroring `dest_notes`.
+      let destNotes = new Map();
       let detected = [];
 
       // The state answer carries at most twenty entries, so the badge cannot be built from the
@@ -1034,6 +1047,7 @@
         select_choices("rule-direction", ["", "out", "in"], rule.direction);
         el("rule-port").value = rule.port ?? "";
         el("rule-remote").value = rule.remote ?? "";
+        el("rule-dest").value = rule.dest ?? "";
         el("rule-local").value = rule.local ?? "";
         el("rule-comment").value = rule.comment ?? "";
         el("rule-enabled").checked = rule.enabled;
@@ -1059,6 +1073,7 @@
         const protocol = el("rule-protocol").value.trim();
         const port = el("rule-port").value.trim();
         const remote = el("rule-remote").value.trim();
+        const dest = el("rule-dest").value.trim();
         const local = el("rule-local").value.trim();
         const comment = el("rule-comment").value.trim();
 
@@ -1070,6 +1085,7 @@
         rule.direction = el("rule-direction").value || null;
         rule.port = port === "" ? null : port;
         rule.remote = remote === "" ? null : remote;
+        rule.dest = dest === "" ? null : dest;
         rule.local = local === "" ? null : local;
         rule.comment = comment === "" ? null : comment;
         rule.enabled = el("rule-enabled").checked;
@@ -1162,7 +1178,14 @@
           row.appendChild(element("td", null, rule.protocol ?? "any"));
           row.appendChild(element("td", null, rule.direction ?? "any"));
           row.appendChild(element("td", null)).appendChild(portCells(rule.port));
-          row.appendChild(element("td", null, rule.remote ?? "any"));
+          row.appendChild(
+            element(
+              "td",
+              null,
+              // The destination of a rule is the union of its addresses and its resolved names.
+              [rule.remote, rule.dest].filter(Boolean).join(" + ") || "any",
+            ),
+          );
           row.appendChild(element("td", null, rule.local ?? "any"));
           row.appendChild(element("td", null, rule.comment ?? ""));
 
@@ -1215,6 +1238,28 @@
             program.title =
               "pattern has " + cut.matches + " matches, only " + cut.installed + " installed";
             program.appendChild(element("span", "tag cut", cut.matches + "\u2192" + cut.installed));
+          }
+          const note = destNotes.get(rule.name);
+
+          if (note) {
+            const dead = note.names.filter((n) => n.installed === 0);
+            const short = note.names.filter((n) => n.total > n.installed);
+            const tag = element(
+              "span",
+              "tag" + (dead.length || short.length ? " cut" : " allow"),
+              dead.length ? dead.length + " unresolved" : "resolved " + note.names.map((n) => n.installed).join("+"),
+            );
+
+            tag.title = note.names
+              .map((n) =>
+                n.installed === 0
+                  ? n.name + ": unresolved"
+                  : n.total > n.installed
+                    ? n.name + ": " + n.total + " found, only " + n.installed + " installed"
+                    : n.name + ": " + n.installed + " addresses",
+              )
+              .join("\n");
+            program.appendChild(tag);
           }
         });
       }
@@ -1658,6 +1703,7 @@
         truncations = new Map(
           (state.pattern_truncations || []).map((cut) => [ruleKey(cut), cut]),
         );
+        destNotes = new Map((state.dest_notes || []).map((note) => [note.name, note]));
         generation = state.generation;
         elevated = state.elevated;
         detected = state.detected;

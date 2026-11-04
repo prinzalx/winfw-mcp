@@ -711,7 +711,10 @@ fn listen(
 
         let ruleset = sink.rules.lock().expect("rules lock poisoned").clone();
 
-        let detected = sink.live.learning() && sink.detector.observe(&entry, &ruleset);
+        let detected = sink.live.learning()
+            && sink
+                .detector
+                .observe(&entry, &ruleset, &sink.live.answers());
 
         if (newly_seen || detected)
             && let Err(error) = sink.detector.save()

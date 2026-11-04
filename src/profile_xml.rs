@@ -280,6 +280,7 @@ fn one(item: &Item, import: &mut Import) {
             remote: remote.clone(),
             local: None,
             comment: comment.clone(),
+            dest: None,
         });
     }
 }

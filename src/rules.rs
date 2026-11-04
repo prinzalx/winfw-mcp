@@ -327,6 +327,10 @@ pub struct AddressRange {
 /// span between two addresses. All three are written as text in the file, in JSON and in a share
 /// string; a range is told from the other two by the `-` between its ends, which no address text
 /// contains.
+///
+/// A name is not one of these. Names belong to the `dest` field of a rule and are resolved to
+/// addresses when the filters are built; see [`Dests`]. Keeping the two apart means the address
+/// field never guesses: `10.0.0.256` is an error there, not a name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Remote {
     /// One address or a network, written `10.0.0.5` or `10.0.0.0/24`.
@@ -336,16 +340,28 @@ pub enum Remote {
 }
 
 impl Remote {
-    /// The family the destination belongs to, which decides the layers a rule is installed on.
-    pub const fn family(self) -> Family {
+    /// The families the element can be installed in, which decides the layers a rule is
+    /// offered.
+    pub fn families(&self) -> Vec<Family> {
         match self {
-            Self::Network(cidr) => cidr.family,
-            Self::Span(range) => range.family,
+            Self::Network(cidr) => vec![cidr.family],
+            Self::Span(range) => vec![range.family],
         }
     }
 
+    /// The element an address stands for on its own: a host of its family, written as a
+    /// network with the full prefix.
+    pub fn address(addr: std::net::IpAddr) -> Option<Self> {
+        let text = match addr {
+            std::net::IpAddr::V4(v4) => format!("{v4}/32"),
+            std::net::IpAddr::V6(v6) => format!("{v6}/128"),
+        };
+
+        text.parse::<Cidr>().ok().map(Self::Network)
+    }
+
     /// Whether an address is one the rule speaks about.
-    pub fn contains(self, addr: std::net::IpAddr) -> bool {
+    pub fn contains(&self, addr: std::net::IpAddr) -> bool {
         match self {
             Self::Network(cidr) => cidr.contains(addr),
             Self::Span(range) => {
@@ -382,6 +398,12 @@ impl std::str::FromStr for Remote {
             return text.parse::<Cidr>().map(Self::Network);
         };
 
+        // Both halves have to be addresses before the text is taken for a span; anything
+        // else is read as an address, and a name written here is an error the user sees.
+        if !(parse_address(low).is_ok() && parse_address(high).is_ok()) {
+            return text.parse::<Cidr>().map(Self::Network);
+        }
+
         if low.is_empty() || high.is_empty() {
             return Err(format!("'{text}' is not an address range"));
         }
@@ -403,6 +425,25 @@ impl std::str::FromStr for Remote {
 
         Ok(Self::Span(AddressRange { from, to, family }))
     }
+}
+
+/// Whether the text is shaped like a name rather than a mistake in an address: labels of
+/// letters, digits and hyphens separated by dots, at least one dot, no label empty, no label
+/// longer than 63 characters and the whole text no longer than 253, which is what a name may
+/// hold.
+///
+/// A trailing dot is refused, because the file is written back as it was read and the
+/// difference between `example.com` and `example.com.` would show up as a rule that changed.
+fn is_name(text: &str) -> bool {
+    text.len() <= 253
+        && text.contains('.')
+        && text.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
 }
 
 impl std::fmt::Display for Remote {
@@ -469,16 +510,22 @@ impl Remotes {
         self.0.iter().any(|remote| remote.contains(addr))
     }
 
+    /// The elements as a field, without the check the text of a field goes through. Used
+    /// where the elements were built rather than read, which is what resolving a name does.
+    pub fn from_vec(elements: Vec<Remote>) -> Self {
+        Self(elements)
+    }
+
     /// The distinct families the elements are written in. A list that mixes v4 and v6 yields both,
     /// which is what lets such a rule have filters in both stacks.
     pub fn families(&self) -> Vec<Family> {
         let mut families = Vec::new();
 
         for remote in &self.0 {
-            let family = remote.family();
-
-            if !families.contains(&family) {
-                families.push(family);
+            for family in remote.families() {
+                if !families.contains(&family) {
+                    families.push(family);
+                }
             }
         }
 
@@ -547,6 +594,97 @@ impl Serialize for Remotes {
 }
 
 impl<'de> Deserialize<'de> for Remotes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// The destination field of a rule: names, written `www.example.com`, and a comma-separated
+/// list of them for more than one. Unlike `remote`, which holds addresses, this field holds
+/// names and is resolved to addresses when the filters are built.
+///
+/// A name is stored lowercased, because a name is matched without regard to case and the file
+/// is written back as it was read. A name holds no wildcard: `*` is not valid in a hostname,
+/// and a rule that wants a whole domain resolves the names it can see.
+///
+/// The list is capped at [`MAX_WILDCARD_MATCHES`] names; every name resolves to at most
+/// [`crate::dns::MAX_NAME_ADDRESSES`] addresses, which is a bound on the answers, not on the
+/// field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dests(Vec<String>);
+
+impl Dests {
+    /// The names of the field, lowercased, in the order they were written.
+    pub fn names(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Whether the addresses a name was answered with include the given address. A name
+    /// nothing has answered for speaks about nothing, so an unresolved destination matches
+    /// no connection and the Detected list still shows it.
+    pub fn contains(&self, addr: std::net::IpAddr, answers: &crate::dns::Answers) -> bool {
+        self.0
+            .iter()
+            .any(|name| answers.addresses(name).contains(&addr))
+    }
+}
+
+impl std::str::FromStr for Dests {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let mut names = Vec::new();
+
+        for element in text.split(',') {
+            let name = element.trim();
+
+            if name.is_empty() {
+                return Err("name list has an empty element".to_owned());
+            }
+
+            if !is_name(name) {
+                return Err(format!("'{name}' is not a name"));
+            }
+
+            let name = name.to_lowercase();
+
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+
+        if names.len() > MAX_WILDCARD_MATCHES {
+            return Err(format!(
+                "name list '{text}' names more than {MAX_WILDCARD_MATCHES} names"
+            ));
+        }
+
+        Ok(Self(names))
+    }
+}
+
+impl std::fmt::Display for Dests {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let elements = self
+            .0
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        f.write_str(&elements)
+    }
+}
+
+impl Serialize for Dests {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Dests {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
 
@@ -883,6 +1021,14 @@ pub struct Rule {
     /// Absent means any address, which is also what narrows the rule to the application alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<Remotes>,
+    /// The remote names the rule is about, written `www.example.com` and a comma-separated
+    /// list of them for more than one. Names are resolved to addresses when the filters are
+    /// built, and a name nothing answered for matches nothing. `remote` and `dest` narrow the
+    /// same condition and are used as a union: a connection matches when its remote address is
+    /// in `remote` or among the addresses `dest` resolved to. Absent means no name narrows the
+    /// rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest: Option<Dests>,
     /// The local address or addresses the rule is about, written `192.168.1.0/24`, `10.0.0.5` or
     /// `10.0.0.1-10.0.0.9`, and a comma-separated list of them for more than one source.
     /// Absent means any address, which is also what leaves the rule about the destination alone.
@@ -917,8 +1063,21 @@ impl Rule {
             direction: None,
             port: None,
             remote: None,
+            dest: None,
             local: None,
             comment: None,
+        }
+    }
+
+    /// Whether the remote end of a connection is one this rule speaks about, given the
+    /// addresses its names were answered with. `remote` and `dest` are a union; a rule that
+    /// names neither speaks about every address.
+    pub fn reaches(&self, addr: std::net::IpAddr, answers: &crate::dns::Answers) -> bool {
+        match (self.remote.as_ref(), self.dest.as_ref()) {
+            (None, None) => true,
+            (Some(remote), None) => remote.contains(addr),
+            (None, Some(dest)) => dest.contains(addr, answers),
+            (Some(remote), Some(dest)) => remote.contains(addr) || dest.contains(addr, answers),
         }
     }
 }
@@ -1056,15 +1215,17 @@ pub fn covered_by(rules: &RuleFile, path: &str) -> bool {
 /// A rule that names no destination reaches every address, and a rule that names one has to
 /// contain it. A destination no enabled rule of this application contains is new even when the
 /// application itself is not, which is what learning mode asks next.
-pub fn reaches(rules: &RuleFile, path: &str, addr: std::net::IpAddr) -> bool {
+pub fn reaches(
+    rules: &RuleFile,
+    path: &str,
+    addr: std::net::IpAddr,
+    answers: &crate::dns::Answers,
+) -> bool {
     rules
         .rule
         .iter()
         .filter(|rule| rule.enabled && rule.pattern.matches(path))
-        .any(|rule| match rule.remote.as_ref() {
-            Some(remote) => remote.contains(addr),
-            None => true,
-        })
+        .any(|rule| rule.reaches(addr, answers))
 }
 
 /// The contents of `rules.toml`. Order is significant: the first matching rule wins, which is
@@ -1610,14 +1771,39 @@ mod tests {
         let inside = "10.0.0.5".parse().expect("parse an address");
         let outside = "93.184.216.34".parse().expect("parse an address");
 
-        assert!(reaches(&wide, "C:\\Windows\\a.exe", inside));
-        assert!(reaches(&wide, "C:\\Windows\\a.exe", outside));
+        assert!(reaches(
+            &wide,
+            "C:\\Windows\\a.exe",
+            inside,
+            &crate::dns::Answers::default(),
+        ));
+        assert!(reaches(
+            &wide,
+            "C:\\Windows\\a.exe",
+            outside,
+            &crate::dns::Answers::default(),
+        ));
 
-        assert!(reaches(&narrow, "C:\\Windows\\a.exe", inside));
-        assert!(!reaches(&narrow, "C:\\Windows\\a.exe", outside));
+        assert!(reaches(
+            &narrow,
+            "C:\\Windows\\a.exe",
+            inside,
+            &crate::dns::Answers::default(),
+        ));
+        assert!(!reaches(
+            &narrow,
+            "C:\\Windows\\a.exe",
+            outside,
+            &crate::dns::Answers::default(),
+        ));
 
         // A rule about a different application decides nothing about this one.
-        assert!(!reaches(&narrow, "C:\\other\\a.exe", inside));
+        assert!(!reaches(
+            &narrow,
+            "C:\\other\\a.exe",
+            inside,
+            &crate::dns::Answers::default(),
+        ));
     }
 
     #[test]
@@ -1902,6 +2088,8 @@ mod tests {
         assert!(!list.contains("172.16.0.7".parse().expect("parse an address")));
         assert_eq!(list.families(), vec![Family::V4]);
 
+        // The union with `dest` is tested on the rule itself, where both fields meet.
+
         let mixed = "10.0.0.0/24, 2001:db8::/32"
             .parse::<Remotes>()
             .expect("parse a list of both families");
@@ -1969,6 +2157,52 @@ mod tests {
 
             assert_eq!(ports.to_string(), text, "written back as read");
         }
+    }
+
+    /// A name list reads a single name and a comma-separated list, lowercases every element,
+    /// and refuses what is not a name: an empty element, an element with a wildcard, an element
+    /// with an empty label.
+    #[test]
+    fn a_name_field_reads_names_and_refuses_the_rest() {
+        let list = "WWW.example.com, a.example"
+            .parse::<Dests>()
+            .expect("parse a name list");
+
+        assert_eq!(
+            list.names(),
+            &["www.example.com".to_owned(), "a.example".to_owned()],
+        );
+        assert_eq!(list.to_string(), "www.example.com, a.example");
+
+        for bad in ["", " ", "*.example.com", "a..b", "a,b,"] {
+            assert!(bad.parse::<Dests>().is_err(), "'{bad}' is not a name list");
+        }
+    }
+
+    /// `remote` and `dest` are a union: an address matches when the address field names it or
+    /// when a name was answered with it, and a name nothing answered for adds nothing.
+    #[test]
+    fn a_destination_is_a_union_of_addresses_and_answers() {
+        let rule = Rule {
+            remote: Some("10.0.0.0/24".parse().expect("parse a network")),
+            dest: Some("www.example.com".parse().expect("parse a name")),
+            ..Rule::plain("union", Action::Allow, "C:\\a.exe")
+        };
+
+        let answered = "93.184.216.34".parse().expect("parse an address");
+        let answers = crate::dns::Answers::from_pairs(&[(
+            "www.example.com",
+            &["93.184.216.34"
+                .parse::<std::net::IpAddr>()
+                .expect("parse an address")][..],
+        )]);
+
+        assert!(rule.reaches("10.0.0.5".parse().expect("parse an address"), &answers));
+        assert!(rule.reaches(answered, &answers));
+        assert!(!rule.reaches("93.184.216.35".parse().expect("parse an address"), &answers));
+
+        // Without an answer the same rule knows only its address half.
+        assert!(!rule.reaches(answered, &crate::dns::Answers::default()));
     }
 
     /// The file holds the text the field was read from: one port is written exactly as it

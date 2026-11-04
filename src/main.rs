@@ -4,6 +4,7 @@
 
 mod config;
 mod device;
+mod dns;
 mod elevated;
 mod export;
 mod instance;
@@ -272,7 +273,13 @@ fn main() -> Result<()> {
         _ => Vec::new(),
     };
 
-    sync_store(&rules, command, &known, settings.default_policy);
+    sync_store(
+        &rules,
+        command,
+        &known,
+        settings.default_policy,
+        &paths.resolved,
+    );
 
     Ok(())
 }
@@ -328,7 +335,10 @@ fn serve(
         settings.default_policy,
         settings.theme,
     ));
-    let worker = Arc::new(server::WfpWorker::start(Arc::clone(&live)));
+    let worker = Arc::new(server::WfpWorker::start(
+        Arc::clone(&live),
+        paths.resolved.clone(),
+    ));
 
     // Captured before `settings` moves into the state: a volatile run takes its filters out
     // again when the server stops.
@@ -446,7 +456,13 @@ fn serve(
 /// need elevation, so an ordinary double-click on the executable reports the store as unreadable
 /// and leaves the filters untouched; the web UI will show that state instead of an empty list.
 #[cfg(windows)]
-fn sync_store(rules: &RuleFile, command: Command, known: &[String], policy: Policy) {
+fn sync_store(
+    rules: &RuleFile,
+    command: Command,
+    known: &[String],
+    policy: Policy,
+    resolved: &std::path::Path,
+) {
     let engine = match wfp::Engine::open_retrying() {
         Ok(engine) => engine,
         Err(error) => {
@@ -461,13 +477,22 @@ fn sync_store(rules: &RuleFile, command: Command, known: &[String], policy: Poli
     report("filters", &inventory.filters);
 
     let outcome = match command {
-        Command::Apply => engine.apply(rules, known, policy).map(|applied| {
-            info!(
-                removed = applied.removed,
-                installed = applied.installed,
-                "rules applied to WFP",
-            );
-        }),
+        Command::Apply => {
+            let mut answers = dns::Answers::load(resolved);
+            let names = dns::Answers::wanted(rules);
+
+            if answers.refresh(&names, dns::lookup) {
+                let _ = answers.save(resolved);
+            }
+
+            engine.apply(rules, known, &answers, policy).map(|applied| {
+                info!(
+                    removed = applied.removed,
+                    installed = applied.installed,
+                    "rules applied to WFP",
+                );
+            })
+        }
         Command::Clear => engine.clear().map(|removed| {
             info!(removed, "our filters removed from WFP");
         }),
@@ -499,7 +524,14 @@ fn report(category: &str, entries: &wfp::Entries) {
 
 /// The non-Windows variant exists only so the crate still builds for a doc tool.
 #[cfg(not(windows))]
-fn sync_store(_rules: &RuleFile, _command: Command, _known: &[String], _policy: Policy) {}
+fn sync_store(
+    _rules: &RuleFile,
+    _command: Command,
+    _known: &[String],
+    _policy: Policy,
+    _resolved: &std::path::Path,
+) {
+}
 
 /// The filter `tracing` installed at startup, wrapped so a settings change can replace it.
 ///

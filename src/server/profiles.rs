@@ -325,6 +325,7 @@ mod tests {
                 ..crate::server::testsupport::connection("\\device\\harddiskvolume3\\a.exe")
             },
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
 
         Server::route(

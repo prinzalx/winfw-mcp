@@ -565,6 +565,31 @@ struct StateJson {
     ///
     /// Rules within the cap are left out entirely; an empty list means nothing was cut.
     pattern_truncations: Vec<PatternTruncation>,
+    /// How far the names in the `dest` field of the enabled rules reached the last time the
+    /// filters were built, so the page can mark a name that did not answer and a name the cap
+    /// held down instead of letting both look like a rule that simply matches little.
+    dest_notes: Vec<DestNote>,
+}
+
+/// One rule that names destinations, with one entry per name.
+#[derive(Debug, Clone, Serialize)]
+struct DestNote {
+    /// The name of the rule as the user wrote it.
+    name: String,
+    /// One entry per destination the rule holds.
+    names: Vec<DestName>,
+}
+
+/// How far one destination name reached the last time the filters were built.
+#[derive(Debug, Clone, Serialize)]
+struct DestName {
+    /// The name, lowercased, as the rule stores it.
+    name: String,
+    /// The addresses installed for it. Zero means no answer, which under a default-deny policy
+    /// keeps the application blocked rather than letting it reach everything.
+    installed: usize,
+    /// The addresses the lookup had found before the cap. Greater than `installed` means cut.
+    total: usize,
 }
 
 /// One rule whose wildcard pattern was held down by the cap.
@@ -635,6 +660,32 @@ impl StateJson {
             })
             .collect();
 
+        // The same answers the worker installed the filters from, so the numbers on the page are
+        // the numbers the store was built from and not those of a lookup done after it.
+        let answers = state.live.answers();
+        let dest_notes: Vec<DestNote> = rules
+            .rule
+            .iter()
+            .filter(|rule| rule.enabled)
+            .filter_map(|rule| {
+                let dest = rule.dest.as_ref()?;
+
+                Some(DestNote {
+                    name: rule.name.clone(),
+                    names: dest
+                        .names()
+                        .iter()
+                        .map(|name| DestName {
+                            name: name.clone(),
+                            installed: answers.addresses(name).len(),
+                            total: answers.total(name),
+                        })
+                        .collect(),
+                })
+            })
+            .collect();
+        drop(answers);
+
         Self {
             port: state.settings.port,
             learn_mode: state.learn_mode(),
@@ -655,6 +706,7 @@ impl StateJson {
             generation: state.rules_generation(),
             elevated: crate::elevated::is_elevated(),
             pattern_truncations,
+            dest_notes,
         }
     }
 }
@@ -914,6 +966,7 @@ mod tests {
         server_state.detector.observe(
             &connection("\\device\\harddiskvolume3\\windows\\system32\\thing.exe"),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
 
         let response = Server::route(
@@ -974,6 +1027,7 @@ mod tests {
                 ..connection("\\device\\harddiskvolume3\\windows\\system32\\thing.exe")
             },
             &covered,
+            &crate::dns::Answers::default(),
         );
 
         let response = Server::route(
@@ -1795,7 +1849,9 @@ pattern = "C:\\Windows\\two.exe"
             event.time_ms = 1_000 + u64::try_from(index).expect("an index fits a u64") * 1_000;
 
             assert!(
-                server_state.detector.observe(&event, &rules),
+                server_state
+                    .detector
+                    .observe(&event, &rules, &crate::dns::Answers::default()),
                 "tool{index} is a new question"
             );
         }
@@ -1807,7 +1863,9 @@ pattern = "C:\\Windows\\two.exe"
         latest.time_ms = 1_000_000;
 
         assert!(
-            !server_state.detector.observe(&latest, &rules),
+            !server_state
+                .detector
+                .observe(&latest, &rules, &crate::dns::Answers::default()),
             "a refreshed entry is not a new one"
         );
 
@@ -2167,6 +2225,58 @@ pattern = "C:\\Windows\\two.exe"
             truncations[0]["installed"],
             crate::wfp::MAX_WILDCARD_MATCHES,
             "only the cap is installed",
+        );
+    }
+
+    /// A rule that names destinations is reported in the state with what each name answered
+    /// with, so the page can mark a name that did not answer instead of letting the rule look
+    /// like it matches little. A rule without a destination is not reported at all.
+    #[test]
+    fn the_state_reports_the_reach_of_a_destination() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        {
+            let mut rules = server_state.rules.lock().expect("rules lock poisoned");
+
+            rules.rule.push(crate::rules::Rule {
+                dest: Some("www.example.com, off.example".parse().expect("names")),
+                ..crate::rules::Rule::plain(
+                    "named",
+                    crate::rules::Action::Allow,
+                    "C:\\Tools\\named.exe",
+                )
+            });
+        }
+
+        server_state
+            .live
+            .set_answers(crate::dns::Answers::from_pairs(&[(
+                "www.example.com",
+                &["93.184.216.34"
+                    .parse::<std::net::IpAddr>()
+                    .expect("an address")][..],
+            )]));
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = json(&response);
+        let notes = body["dest_notes"].as_array().expect("an array");
+
+        assert_eq!(notes.len(), 1, "the one rule with names is reported");
+        assert_eq!(notes[0]["name"], "named", "the rule is named");
+        assert_eq!(notes[0]["names"][0]["name"], "www.example.com");
+        assert_eq!(notes[0]["names"][0]["installed"], 1);
+        assert_eq!(notes[0]["names"][0]["total"], 1);
+        assert_eq!(notes[0]["names"][1]["name"], "off.example");
+        assert_eq!(
+            notes[0]["names"][1]["installed"], 0,
+            "a name nothing answered for is reported as such",
         );
     }
 }

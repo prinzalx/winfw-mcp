@@ -242,7 +242,12 @@ impl Detector {
     /// application that *is* covered, the destination is asked next, because a rule that allows
     /// one network does not decide the next one. Returns whether the *file* changed, which is
     /// only the case when a new entry appeared — refreshing a timestamp is not worth a write.
-    pub fn observe(&self, event: &NetEvent, rules: &RuleFile) -> bool {
+    pub fn observe(
+        &self,
+        event: &NetEvent,
+        rules: &RuleFile,
+        answers: &crate::dns::Answers,
+    ) -> bool {
         if event.app.is_empty() {
             return false;
         }
@@ -256,7 +261,8 @@ impl Detector {
         let remote = if covered {
             match event.remote_addr.parse::<std::net::IpAddr>() {
                 Ok(addr)
-                    if !reaches(rules, &display, addr) && !reaches(rules, &event.app, addr) =>
+                    if !reaches(rules, &display, addr, answers)
+                        && !reaches(rules, &event.app, addr, answers) =>
                 {
                     Some(event.remote_addr.clone())
                 }
@@ -427,11 +433,13 @@ mod tests {
 
         assert!(detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 10),
-            &RuleFile::default()
+            &RuleFile::default(),
+            &crate::dns::Answers::default()
         ));
         assert!(!detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 20),
-            &RuleFile::default()
+            &RuleFile::default(),
+            &crate::dns::Answers::default()
         ));
 
         let snapshot = detector.snapshot();
@@ -448,6 +456,7 @@ mod tests {
         let covered = detector.observe(
             &event("\\device\\harddiskvolume3\\windows\\a.exe", 10),
             &rules("\\device\\harddiskvolume3\\windows\\*"),
+            &crate::dns::Answers::default(),
         );
 
         assert!(!covered);
@@ -469,7 +478,7 @@ mod tests {
         };
 
         assert!(
-            !detector.observe(&local_only, &covered),
+            !detector.observe(&local_only, &covered, &crate::dns::Answers::default()),
             "no remote address, no destination",
         );
         assert!(detector.snapshot().is_empty());
@@ -479,7 +488,7 @@ mod tests {
             ..event(app, 20)
         };
 
-        assert!(detector.observe(&remote, &covered));
+        assert!(detector.observe(&remote, &covered, &crate::dns::Answers::default()));
 
         let snapshot = detector.snapshot();
 
@@ -501,7 +510,7 @@ mod tests {
         };
 
         assert!(
-            detector.observe(&entry, &covered),
+            detector.observe(&entry, &covered, &crate::dns::Answers::default()),
             "the marker is not a filter"
         );
         assert_eq!(detector.snapshot()[0].remote.as_deref(), Some("127.0.0.1"));
@@ -523,10 +532,10 @@ mod tests {
             ..event("\\device\\harddiskvolume3\\windows\\a.exe", 20)
         };
 
-        assert!(!detector.observe(&inside, &covered));
+        assert!(!detector.observe(&inside, &covered, &crate::dns::Answers::default()));
         assert!(detector.snapshot().is_empty(), "the rule reaches this one");
 
-        assert!(detector.observe(&outside, &covered));
+        assert!(detector.observe(&outside, &covered, &crate::dns::Answers::default()));
 
         let snapshot = detector.snapshot();
 
@@ -538,7 +547,7 @@ mod tests {
         );
 
         // The same destination again only refreshes the entry.
-        assert!(!detector.observe(&outside, &covered));
+        assert!(!detector.observe(&outside, &covered, &crate::dns::Answers::default()));
         assert_eq!(detector.snapshot()[0].hits, 2);
     }
 
@@ -550,7 +559,11 @@ mod tests {
         let detector = detector("detect-two-entries");
         let app = "\\device\\harddiskvolume3\\b.exe";
 
-        assert!(detector.observe(&event(app, 10), &RuleFile::default()));
+        assert!(detector.observe(
+            &event(app, 10),
+            &RuleFile::default(),
+            &crate::dns::Answers::default()
+        ));
 
         let covered = rules_reaching("\\device\\harddiskvolume3\\*", "10.0.0.0/24");
 
@@ -560,6 +573,7 @@ mod tests {
                 ..event(app, 20)
             },
             &covered,
+            &crate::dns::Answers::default()
         ));
 
         let snapshot = detector.snapshot();
@@ -581,7 +595,11 @@ mod tests {
     fn an_event_without_an_application_is_not_detected() {
         let detector = detector("detect-empty");
 
-        assert!(!detector.observe(&event("", 10), &RuleFile::default()));
+        assert!(!detector.observe(
+            &event("", 10),
+            &RuleFile::default(),
+            &crate::dns::Answers::default()
+        ));
     }
 
     #[test]
@@ -591,6 +609,7 @@ mod tests {
         detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 10),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
 
         assert!(
@@ -613,6 +632,7 @@ mod tests {
         detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 10),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
         detector.note_app("\\device\\harddiskvolume3\\a.exe");
         detector.save().expect("save");
@@ -637,6 +657,7 @@ mod tests {
         assert!(!detector.observe(
             &event("\\device\\harddiskvolume3\\windows\\a.exe", 10),
             &covered,
+            &crate::dns::Answers::default()
         ));
         assert!(detector.snapshot().is_empty());
 
@@ -657,6 +678,7 @@ mod tests {
         detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 10),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
         detector.note_app("\\device\\harddiskvolume3\\a.exe");
         detector
@@ -679,10 +701,12 @@ mod tests {
         detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 10),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
         detector.observe(
             &event("\\device\\harddiskvolume3\\b.exe", 20),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
 
         assert_eq!(
@@ -701,6 +725,7 @@ mod tests {
         detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 10),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
         detector.set_profile("work").expect("switch");
 
@@ -712,6 +737,7 @@ mod tests {
         detector.observe(
             &event("\\device\\harddiskvolume3\\b.exe", 20),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
 
         assert_eq!(detector.snapshot().len(), 1);
@@ -731,15 +757,18 @@ mod tests {
         detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 10),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
         detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 20),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
         detector.set_profile("work").expect("switch");
         detector.observe(
             &event("\\device\\harddiskvolume3\\b.exe", 30),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
         detector.set_profile("").expect("switch back");
 
@@ -809,11 +838,19 @@ mod tests {
         let rules = RuleFile::default();
 
         assert!(
-            detector.observe(&event("\\device\\HarddiskVolume3\\A.exe", 10), &rules),
+            detector.observe(
+                &event("\\device\\HarddiskVolume3\\A.exe", 10),
+                &rules,
+                &crate::dns::Answers::default()
+            ),
             "the first spelling is a new entry",
         );
         assert!(
-            !detector.observe(&event("\\DEVICE\\harddiskvolume3\\a.exe", 20), &rules),
+            !detector.observe(
+                &event("\\DEVICE\\harddiskvolume3\\a.exe", 20),
+                &rules,
+                &crate::dns::Answers::default()
+            ),
             "the second one is the same application, so the file does not change",
         );
 
@@ -836,8 +873,16 @@ mod tests {
         let detector = detector("detect-dismiss-spelling");
         let rules = RuleFile::default();
 
-        detector.observe(&event("\\device\\HarddiskVolume3\\A.exe", 10), &rules);
-        detector.observe(&event("\\device\\harddiskvolume3\\a.exe", 20), &rules);
+        detector.observe(
+            &event("\\device\\HarddiskVolume3\\A.exe", 10),
+            &rules,
+            &crate::dns::Answers::default(),
+        );
+        detector.observe(
+            &event("\\device\\harddiskvolume3\\a.exe", 20),
+            &rules,
+            &crate::dns::Answers::default(),
+        );
 
         assert!(
             detector
@@ -910,6 +955,7 @@ mod tests {
         detector.observe(
             &event("\\device\\harddiskvolume3\\a.exe", 10),
             &RuleFile::default(),
+            &crate::dns::Answers::default(),
         );
         detector.rename_profile("before", "after").expect("rename");
 

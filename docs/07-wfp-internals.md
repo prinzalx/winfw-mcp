@@ -106,6 +106,12 @@ the same reason, and a v6 span adds a pointer of its own inside each bound.
 > the four shapes rather than an `Option` of each, and why the bounds of a span are held next to the
 > `FWP_RANGE0` that points at them instead of inside it.
 
+A destination of names never reaches the store as a name. Before a rule is installed, the answers
+cached in `resolved.json` are merged into its address field, so WFP is handed nothing but prefixes
+and ranges. The file is written back whenever a lookup changed something, an entry is looked up
+again after fifteen minutes, and a failed lookup keeps the answers it had, which means the filters
+of a running tool only ever hold addresses someone actually saw.
+
 ## The application condition
 
 A rule about an application is installed as a `FWP_BYTE_BLOB` condition obtained from

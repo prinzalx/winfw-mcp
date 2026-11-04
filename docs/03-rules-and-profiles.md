@@ -38,7 +38,7 @@ is left empty, because it exists by then and is not written again.
 
 ## Narrowing a rule
 
-Beyond the application, a rule can be narrowed by five optional fields. A rule that names none of
+Beyond the application, a rule can be narrowed by six optional fields. A rule that names none of
 them is about all of them, which is every rule written before these fields existed.
 
 | Field | Values | Meaning |
@@ -48,6 +48,7 @@ them is about all of them, which is every rule written before these fields exist
 | `port` | `"443"`, `"1024-2048"`, `"80, 443, 8080-8090"` | one port, an inclusive range of them, or a comma-separated list of either |
 | `remote` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"`, `"10.0.0.5, 192.168.1.0/24"` | the address or addresses the connection goes to |
 | `local` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"`, `"10.0.0.5, 192.168.1.0/24"` | the address or addresses the connection has on this machine |
+| `dest` | `"example.com"`, `"example.com, api.example.org"` | the name or names the connection goes to, resolved to addresses when the filters are installed |
 
 ```toml
 [[rule]]
@@ -105,8 +106,8 @@ A bare address is a prefix as wide as its family, so it names one host. Host bit
 the text is read, which is why `10.0.0.5/24` is stored and shown as `10.0.0.0/24`: what is in the
 file is exactly the network the filter matches. A prefix longer than the family (`10.0.0.5/33`,
 `::/129`) is refused, and so is text that is not an address at all. A hostname such as
-`example.com` is not an address; resolving names is not something WFP does for a filter condition,
-so a name would have to be turned into an address by hand.
+`example.com` is not an address; WFP does not resolve names in a filter condition, so a name
+belongs in `dest`, which is described in [Destinations by Name](#destinations-by-name).
 
 A span is told from the other two shapes by the `-` between its ends, which no address text
 contains. It covers what a prefix cannot: `10.0.0.1-10.0.0.9` is nine hosts, while the narrowest
@@ -148,6 +149,32 @@ cap of 32 on application matches is a separate bound and is described in
 Writing a path by hand in TOML needs doubled backslashes, as in the example above: a single
 backslash starts an escape sequence, and a file that fails to parse stops the tool at startup rather
 than being partly read. Anything this tool writes itself is escaped correctly.
+
+## Destinations by Name
+
+`remote` holds addresses and nothing else; a name written into it is an error. Names have their own
+field, `dest`, which holds a comma-separated list such as `example.com, api.example.org`. A name is
+not a wildcard and holds no `*`; it is looked up while the filters are being installed, so the
+kernel only ever sees addresses.
+
+The answers of `dest` and the addresses of `remote` together describe where a rule reaches: a
+connection matches when its destination is one of the addresses in `remote` or one of the answers
+of `dest`. Against the `local` field both still work as before, so every combination of the remote
+side and the local side is installed.
+
+The tool does the lookups itself and keeps the results in `resolved.json` beside the other files.
+An entry is looked up again when it is older than fifteen minutes. A failed lookup keeps the last
+known answers instead of dropping them, so a brief DNS outage does not quietly change what a rule
+matches. A name that never answers contributes nothing: under a deny policy an application whose
+destination name has no answer stays blocked.
+
+Two caps hold the filter count down, because the store is shared with everything else on the
+machine: one name contributes at most twelve addresses, and the merged list of addresses and
+answers is held to 32 filters. When a cap cuts the list short, the page says so at the rule with
+the numbers behind it; nothing is dropped quietly.
+
+Names apply to the remote end only. There is no name field for `local`, because the address this
+machine holds on a connection is known without asking anyone.
 
 ## Order, and why deny still wins
 
