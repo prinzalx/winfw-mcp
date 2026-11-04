@@ -82,6 +82,14 @@ pub fn to_device_path(path: &str) -> String {
         return lowered;
     }
 
+    // A short 8.3 name is not the name the ALE layer reports, so a rule that holds one is repaired
+    // before it is mapped. Without this the rule is written, installed, and never matches anything.
+    let lowered = if wants_long_form(&lowered) {
+        expand_short_path(&lowered)
+    } else {
+        lowered
+    };
+
     let drive_like = looks_like_drive_path(&lowered);
 
     if let Some(resolved) = search_device(&lowered) {
@@ -96,6 +104,47 @@ pub fn to_device_path(path: &str) -> String {
     }
 
     lowered
+}
+
+/// Whether it is worth asking the system for the long form of a path.
+///
+/// A tilde is the marker of an 8.3 name, so a path without one is already long and the question is
+/// not asked at all. A pattern that holds a wildcard is not a path the system could resolve:
+/// `GetLongPathNameW` reads `*` as a literal character, finds no such file, and the answer would be
+/// the input anyway.
+fn wants_long_form(path: &str) -> bool {
+    path.contains('~') && !path.contains('*') && !path.contains('?') && looks_like_drive_path(path)
+}
+
+/// Hand a drive path to the system and ask for its long form, falling back to the input.
+///
+/// A path that does not exist comes back unchanged, which is the only honest answer: the tool does
+/// not know what the volume would have called it. A path longer than the buffer also comes back
+/// unchanged rather than truncated.
+#[cfg(windows)]
+fn expand_short_path(path: &str) -> String {
+    use windows::Win32::Storage::FileSystem::GetLongPathNameW;
+
+    let mut wide: Vec<u16> = path.encode_utf16().collect();
+    wide.push(0);
+    let mut buffer = [0u16; 512];
+
+    let length =
+        unsafe { GetLongPathNameW(windows::core::PCWSTR(wide.as_ptr()), Some(&mut buffer)) };
+
+    // Zero means the path is unknown to the volume, and a length past the end of the buffer means
+    // the answer did not fit. Both are a reason to keep what the user wrote.
+    if length == 0 || usize::try_from(length).unwrap_or(usize::MAX) > buffer.len() {
+        return path.to_string();
+    }
+
+    String::from_utf16_lossy(&buffer[..length as usize]).to_lowercase()
+}
+
+/// There is nothing to expand off Windows.
+#[cfg(not(windows))]
+fn expand_short_path(path: &str) -> String {
+    path.to_string()
 }
 
 /// Rewrite a device path into drive form for display, falling back to the input unchanged.
@@ -348,5 +397,26 @@ mod tests {
         assert_eq!(to_dos_path("*"), "*");
 
         assert_eq!(QUERIES.load(Ordering::Relaxed), before);
+    }
+
+    #[test]
+    fn wants_long_form_is_only_asked_for_a_short_path() {
+        assert!(wants_long_form("c:\\progra~1\\tool.exe"));
+
+        assert!(!wants_long_form("c:\\tools\\tool.exe"));
+        assert!(!wants_long_form("c:\\tools\\*.exe"));
+        assert!(!wants_long_form("c:\\tools\\tool?.exe"));
+        assert!(!wants_long_form(
+            "\\device\\harddiskvolume3\\progra~1\\tool.exe"
+        ));
+    }
+
+    #[test]
+    fn expand_short_path_falls_back_to_the_input() {
+        let known = expand_short_path("c:\\windows\\system32\\notepad.exe");
+        assert!(known.ends_with("notepad.exe"), "{known}");
+
+        let unknown = "c:\\windows\\definitely-not-here-9x.exe";
+        assert_eq!(expand_short_path(unknown), unknown);
     }
 }
