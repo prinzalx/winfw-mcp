@@ -10,8 +10,13 @@
 //! portable tool that has to be restarted because a USB stick appeared later would be a poor
 //! tool. So a lookup whose drive prefix is unknown re-asks the system, throttled to one re-ask per
 //! second, which catches the mount without a device-notification window in the tray.
+//!
+//! Catching the mount is only half of it, because a filter that is already in the store was built
+//! against the smaller answer. When an answer names a drive the answer before it did not have,
+//! `store_needs_rebuild` says so once, and the monitor answers by handing the rules to the worker
+//! again. That is what makes a rule for a drive mounted after start take effect on its own.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 /// One `(drive prefix, device prefix)` pair, both lowercase.
@@ -27,6 +32,12 @@ struct Mapping {
 /// rule list full of such patterns from turning every render into a system query.
 const REQUERY_PAUSE_MS: u64 = 1000;
 
+/// How long the monitor's probe has to wait after the previous one, in milliseconds.
+///
+/// The probe is not chasing a known miss, it is watching for a volume to appear, so it can afford
+/// to be slower than a lookup that is waiting for an answer.
+const PROBE_PAUSE_MS: u64 = 10_000;
+
 /// The mappings of this machine, resolved on first use and replaced when a lookup misses.
 ///
 /// The read lock is dropped before the write lock is taken, which matters because a lock is never
@@ -35,6 +46,16 @@ static CACHE: RwLock<Option<Arc<[Mapping]>>> = RwLock::new(None);
 
 /// When the last re-ask happened, in milliseconds since the epoch.
 static LAST_QUERY_MS: AtomicU64 = AtomicU64::new(0);
+
+/// When the monitor's last probe happened, in milliseconds since the epoch.
+static LAST_PROBE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Set when an answer named a drive the answer before it did not have.
+///
+/// The filters already in the store were built against the smaller answer, so the flag says
+/// "build them again". It is taken by the monitor rather than read, which is what keeps one mount
+/// from queueing a rebuild on every event.
+static MOUNT_SEEN: AtomicBool = AtomicBool::new(false);
 
 fn mappings() -> Arc<[Mapping]> {
     {
@@ -57,9 +78,52 @@ fn requery() -> Arc<[Mapping]> {
     let fresh: Arc<[Mapping]> = Arc::from(query());
 
     LAST_QUERY_MS.store(now_ms(), Ordering::Relaxed);
-    *CACHE.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&fresh));
+
+    {
+        let mut guard = CACHE.write().unwrap_or_else(PoisonError::into_inner);
+
+        if grew_against(&fresh, guard.as_deref()) {
+            MOUNT_SEEN.store(true, Ordering::Relaxed);
+        }
+
+        *guard = Some(Arc::clone(&fresh));
+    }
 
     fresh
+}
+
+/// Whether a fresh answer names a drive the previous answer did not.
+///
+/// Only a drive that appeared counts. One that disappeared is not a reason to build the filters
+/// again: the filters that hold its paths match nothing, which is what a missing volume means, and
+/// a drive that changed volume is not a new pattern to translate either.
+fn grew_against(fresh: &[Mapping], previous: Option<&[Mapping]>) -> bool {
+    let Some(previous) = previous else {
+        // The first answer is the baseline rather than a change.
+        return false;
+    };
+
+    fresh
+        .iter()
+        .any(|found| !previous.iter().any(|known| known.drive == found.drive))
+}
+
+/// Ask the system again once the probe pause has passed, and say whether the filters in the store
+/// were built against a mapping set that is known to be smaller now.
+///
+/// A rule for a drive that did not exist when the filters were built went into the store as the text
+/// the user wrote, and the event stream never reports that text. The next write to the rule list
+/// fixes it, so this is the part that notices on its own: a volume mounted after start takes effect
+/// without anyone editing a rule.
+pub fn store_needs_rebuild() -> bool {
+    let now = now_ms();
+    let previous = LAST_PROBE_MS.swap(now, Ordering::Relaxed);
+
+    if previous == 0 || now.saturating_sub(previous) >= PROBE_PAUSE_MS {
+        requery();
+    }
+
+    MOUNT_SEEN.swap(false, Ordering::Relaxed)
 }
 
 /// Milliseconds since the epoch, or zero if the clock cannot be read.
@@ -276,6 +340,8 @@ mod tests {
     fn forget() {
         *CACHE.write().unwrap_or_else(PoisonError::into_inner) = None;
         LAST_QUERY_MS.store(0, Ordering::Relaxed);
+        LAST_PROBE_MS.store(0, Ordering::Relaxed);
+        MOUNT_SEEN.store(false, Ordering::Relaxed);
     }
 
     /// Put a list of mappings in the cache without asking the system, and note the moment as
@@ -409,6 +475,42 @@ mod tests {
         assert!(!wants_long_form(
             "\\device\\harddiskvolume3\\progra~1\\tool.exe"
         ));
+    }
+
+    #[test]
+    fn only_a_drive_that_appeared_counts_as_a_mount() {
+        let mapping = |drive: &str, volume: &str| Mapping {
+            drive: drive.to_string(),
+            device: format!("\\device\\harddiskvolume{volume}"),
+        };
+
+        let before = vec![mapping("c:", "3")];
+
+        assert!(grew_against(
+            &[mapping("c:", "3"), mapping("d:", "7")],
+            Some(&before),
+        ));
+
+        assert!(!grew_against(&before, Some(&before)));
+
+        // The same letter pointing at another volume is not a drive that appeared.
+        assert!(!grew_against(&[mapping("c:", "9")], Some(&before)));
+
+        // The first answer of a process is the baseline, not a change.
+        assert!(!grew_against(&before, None));
+    }
+
+    #[test]
+    fn the_probe_asks_the_system_once_per_pause() {
+        forget();
+
+        let before = QUERIES.load(Ordering::Relaxed);
+
+        assert!(!store_needs_rebuild());
+        assert_eq!(QUERIES.load(Ordering::Relaxed), before + 1);
+
+        assert!(!store_needs_rebuild());
+        assert_eq!(QUERIES.load(Ordering::Relaxed), before + 1);
     }
 
     #[test]

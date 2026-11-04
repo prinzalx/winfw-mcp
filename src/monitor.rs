@@ -333,6 +333,34 @@ struct Sink {
     debug_show_loopback: bool,
 }
 
+/// Hand a full rebuild to the WFP worker without waiting for the answer.
+///
+/// Two things ask for one: an application that no wildcard filter knows yet, and a drive that
+/// appeared after the filters were built. Both are a full rebuild over the rules and the seen list
+/// as they stand, so a full queue loses nothing — the rebuild that is already on its way reads the
+/// same state by the time it is carried out.
+#[cfg(windows)]
+fn queue_rebuild(sink: &Sink, rules: crate::rules::RuleFile, app: &str, note: &str) {
+    use tracing::{debug, info};
+
+    let Some(rebuild) = &sink.rebuild else {
+        return;
+    };
+
+    let work = crate::server::StoreWork::Apply {
+        rules,
+        known: sink.detector.apps(),
+        policy: sink.live.policy(),
+    };
+
+    let (reply, _reply) = sync_channel(1);
+
+    match rebuild.try_send((work, reply)) {
+        Ok(()) => info!(app = %app, "{note}"),
+        Err(error) => debug!(reason = %format!("{error:?}"), "store rebuild not queued"),
+    }
+}
+
 /// The thread that keeps a subscription open.
 ///
 /// It opens an engine handle of its own, so subscribing and unsubscribing cannot interleave with
@@ -408,7 +436,7 @@ fn listen(
 ) {
     use std::ffi::c_void;
 
-    use tracing::{debug, info, warn};
+    use tracing::{debug, warn};
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
         FWP_UINT32, FWP_VALUE0, FWP_VALUE0_0, FWPM_ENGINE_COLLECT_NET_EVENTS,
@@ -691,6 +719,20 @@ fn listen(
             warn!(reason = %format!("{error:#}"), "could not write learn.json");
         }
 
+        // A drive that appeared after start is the second reason a filter in the store may be
+        // wrong: `d:\tool.exe` went in as the text the user wrote because no D: existed when the
+        // filters were built, and the event stream never reports that text. The next write to the
+        // rule list would fix it; this is the part that notices on its own.
+        if crate::device::store_needs_rebuild() {
+            queue_rebuild(
+                sink,
+                ruleset,
+                &entry.app,
+                "drive mounted, store rebuild queued",
+            );
+            return;
+        }
+
         if !newly_seen {
             return;
         }
@@ -703,27 +745,16 @@ fn listen(
             .iter()
             .any(|rule| rule.enabled && crate::rules::is_wildcard(&rule.pattern));
 
-        let Some(rebuild) = &sink.rebuild else {
-            return;
-        };
-
         if !pattern_in_use {
             return;
         }
 
-        let (reply, _reply) = sync_channel(1);
-        let work = crate::server::StoreWork::Apply {
-            rules: ruleset,
-            known: sink.detector.apps(),
-            policy: sink.live.policy(),
-        };
-
-        // A full queue means a rebuild is already on its way, and that rebuild reads the rules
-        // and the seen list as they stand by then, so dropping this one loses nothing.
-        match rebuild.try_send((work, reply)) {
-            Ok(()) => info!(app = %entry.app, "new application, wildcard rebuild queued"),
-            Err(error) => debug!(reason = %format!("{error:?}"), "wildcard rebuild not queued"),
-        }
+        queue_rebuild(
+            sink,
+            ruleset,
+            &entry.app,
+            "new application, wildcard rebuild queued",
+        );
     }
 }
 

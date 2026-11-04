@@ -184,10 +184,19 @@ noticed the next time a path is looked up and does not match: the table is asked
 a second, and the lookup is retried against the answer. A pattern that is not a path at all (`*`, or
 a host name) never triggers that re-ask.
 
-What the re-ask does not do is rewrite filters that are already in the store. A rule pointing at a
-drive that did not exist when the filters were installed went in with the drive form untranslated,
-and it stays that way until the rules are applied again, which every later write to the rule list
-does anyway.
+A short name is repaired before it is translated. `C:\PROGRA~1\tool.exe` is a legitimate way to write
+the path of a program, but the firewall reports the long name of everything it sees, so a filter
+built from the short form matches nothing. A pattern that holds `~` and no wildcard is therefore
+handed to the system and the answer is used. A path the system does not know is kept as written,
+because a rule for a program that is not installed yet is still a rule, and a pattern holding `*` or
+`?` is never asked about, because the call reads those characters literally.
+
+A drive that appears later is noticed on its own as well. A filter that is already in the store was
+built against the smaller answer, so the monitor asks the table once every ten seconds: when the
+answer names a drive the answer before it did not have, the rules are handed to the worker again and
+the rule for that drive is installed in device form without anyone editing it. A drive that
+disappears is not such an event. The filters that hold its paths match nothing, which is what a
+missing volume means.
 
 ## Commenting a rule
 
