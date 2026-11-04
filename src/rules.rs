@@ -561,6 +561,131 @@ impl From<Remote> for Remotes {
     }
 }
 
+/// The application field of a rule: one path, or a comma-separated list of them such as
+/// `C:\test\tool1.exe, C:\test\tool2.exe`.
+///
+/// It holds at least one element; a field that names no application at all is refused. The
+/// elements are written back joined by commas, so a single path stays exactly the single path it
+/// was before lists existed and a file written by an older version reads back unchanged.
+///
+/// A path may hold a comma on Windows, and splitting on commas then cuts it in two: the second
+/// half is no absolute path, so such a pattern is refused out loud rather than installed as a rule
+/// that silently matches nothing. The wildcard the directory tree offers is the way around it.
+///
+/// The list is capped at [`MAX_WILDCARD_MATCHES`] elements. That is a bound on the text of the
+/// field; the bound on what reaches the store is over the whole field, because every application
+/// costs a filter per layer and the store is shared with everything else on the machine. See
+/// [`crate::wfp::pattern_reach`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Patterns(Vec<String>);
+
+impl Patterns {
+    /// The elements of the field, in the order they were written.
+    pub fn elements(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Whether any element needs matching at all rather than being an exact path. Only such an
+    /// element is expanded against the applications this tool has seen.
+    pub fn has_wildcard(&self) -> bool {
+        self.0.iter().any(|element| is_wildcard(element))
+    }
+
+    /// Whether any of the elements speaks about this path.
+    pub fn matches(&self, path: &str) -> bool {
+        self.0.iter().any(|element| wildcard_match(element, path))
+    }
+}
+
+/// The contents of the application field of a rule, split into validated elements.
+///
+/// Every element is validated on its own, so an element that would be refused as the whole field
+/// is refused here too.
+impl std::str::FromStr for Patterns {
+    type Err = ParseError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text.trim().is_empty() {
+            return Err("a rule needs a pattern".to_owned());
+        }
+
+        let mut elements = Vec::new();
+
+        for part in text.split(',') {
+            let part = part.trim();
+
+            if part.is_empty() {
+                return Err(format!("pattern list '{text}' has an empty element"));
+            }
+
+            validate_pattern(part).map_err(|err| err.to_string())?;
+
+            elements.push(part.to_owned());
+        }
+
+        if elements.len() > MAX_WILDCARD_MATCHES {
+            return Err(format!(
+                "pattern list '{text}' names more than {MAX_WILDCARD_MATCHES} applications"
+            ));
+        }
+
+        Ok(Self(elements))
+    }
+}
+
+impl std::fmt::Display for Patterns {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.join(", "))
+    }
+}
+
+impl Serialize for Patterns {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Patterns {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// A list of one, which is what a path that came from elsewhere is.
+///
+/// The text is split the way the field is split, so the elements always are what writing the
+/// field back would read as. A text that cannot be split into valid elements is kept whole: this
+/// constructor cannot report an error, and a rule that came from a file is validated there.
+impl From<String> for Patterns {
+    fn from(text: String) -> Self {
+        text.parse().unwrap_or_else(|_| Self(vec![text]))
+    }
+}
+
+/// A list of one, which is what a path that came from elsewhere is.
+impl From<&str> for Patterns {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
+}
+
+/// A field that names exactly this path is equal to it, which is how a caller compares a rule
+/// against one application without going through the text of the field.
+impl PartialEq<str> for Patterns {
+    fn eq(&self, other: &str) -> bool {
+        self.0.len() == 1 && self.0[0] == other
+    }
+}
+
+/// A field that names exactly this path is equal to it.
+impl PartialEq<&str> for Patterns {
+    fn eq(&self, other: &&str) -> bool {
+        self == *other
+    }
+}
+
 /// The port field of a rule: one port, one inclusive range, or a comma-separated list of
 /// them such as `80, 443, 8080-8090`.
 ///
@@ -731,7 +856,8 @@ impl<'de> Deserialize<'de> for PortRange {
 
 /// A single user rule.
 ///
-/// `pattern` may contain the wildcards `*` and `?` (plan section 4). Matching is our job,
+/// `pattern` names one application or a comma-separated list of them, and may contain the
+/// wildcards `*` and `?` (plan section 4). Matching is our job,
 /// not the kernel's, so the string is stored exactly as the user typed it.
 ///
 /// `protocol`, `direction`, `port`, `remote` and `local` narrow the rule and are absent when it is
@@ -743,7 +869,7 @@ impl<'de> Deserialize<'de> for PortRange {
 pub struct Rule {
     pub name: String,
     pub action: Action,
-    pub pattern: String,
+    pub pattern: Patterns,
     #[serde(default = "always_enabled")]
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -781,7 +907,7 @@ impl Rule {
     /// A rule that narrows nothing: an enabled rule about an application, with no protocol,
     /// direction, port, remote address or local address. This is what a detected application and an
     /// MCP agent turn into.
-    pub fn plain(name: impl Into<String>, action: Action, pattern: impl Into<String>) -> Self {
+    pub fn plain(name: impl Into<String>, action: Action, pattern: impl Into<Patterns>) -> Self {
         Self {
             name: name.into(),
             action,
@@ -922,7 +1048,7 @@ pub fn covered_by(rules: &RuleFile, path: &str) -> bool {
         .rule
         .iter()
         .filter(|rule| rule.enabled)
-        .any(|rule| wildcard_match(&rule.pattern, path))
+        .any(|rule| rule.pattern.matches(path))
 }
 
 /// Whether the destination of an application a rule covers is decided as well.
@@ -934,7 +1060,7 @@ pub fn reaches(rules: &RuleFile, path: &str, addr: std::net::IpAddr) -> bool {
     rules
         .rule
         .iter()
-        .filter(|rule| rule.enabled && wildcard_match(&rule.pattern, path))
+        .filter(|rule| rule.enabled && rule.pattern.matches(path))
         .any(|rule| match rule.remote.as_ref() {
             Some(remote) => remote.contains(addr),
             None => true,
@@ -1335,7 +1461,7 @@ mod tests {
 
         // Each names one application and one network, which is the shape the manual describes.
         for rule in &examples.rule {
-            assert!(rule.pattern.contains("C:\\test\\tool"));
+            assert!(rule.pattern.to_string().contains("C:\\test\\tool"));
             assert!(rule.remote.is_some());
         }
     }
@@ -1969,7 +2095,7 @@ mod tests {
     #[test]
     fn a_rule_file_refuses_a_port_it_cannot_read() {
         let parsed: Result<RuleFile, toml::de::Error> = toml::from_str(
-            "[[rule]]\nname = \"x\"\naction = \"allow\"\npattern = \"a\"\nport = \"http\"\n",
+            "[[rule]]\nname = \"x\"\naction = \"allow\"\npattern = \"C:\\\\a.exe\"\nport = \"http\"\n",
         );
 
         assert!(parsed.is_err(), "a port must be a port");
@@ -1985,7 +2111,7 @@ mod tests {
     /// Read one rule file whose only interesting field is the text given.
     fn rule_file_with(field: &str) -> Result<RuleFile, toml::de::Error> {
         toml::from_str(&format!(
-            "[[rule]]\nname = \"x\"\naction = \"allow\"\npattern = \"a\"\n{field}\n"
+            "[[rule]]\nname = \"x\"\naction = \"allow\"\npattern = \"C:\\\\a.exe\"\n{field}\n"
         ))
     }
 
@@ -2063,6 +2189,128 @@ mod tests {
         assert!(validate_pattern("\\device\\harddiskvolume3\\x.exe").is_ok());
         assert!(validate_pattern("browser.exe").is_err(), "no root at all");
         assert!(validate_pattern("").is_err(), "nothing is not a path");
+    }
+
+    /// One rule can name a handful of applications, which is what keeps the action, the ports and
+    /// the addresses from being written once per program.
+    #[test]
+    fn a_pattern_field_can_name_a_list_of_applications() {
+        let patterns: Patterns = "C:\\test\\tool1.exe, C:\\test\\tool2.exe"
+            .parse()
+            .expect("parse a list of applications");
+
+        assert_eq!(patterns.elements().len(), 2);
+        assert_eq!(
+            patterns.to_string(),
+            "C:\\test\\tool1.exe, C:\\test\\tool2.exe",
+            "the field is written back the way it was read"
+        );
+        assert!(patterns.matches("C:\\test\\tool2.exe"));
+        assert!(!patterns.matches("C:\\test\\tool3.exe"));
+        assert!(!patterns.has_wildcard(), "neither element needs matching");
+    }
+
+    /// A list of one is written back exactly as a single path was written before lists existed,
+    /// which is what lets a file of an older version read back and be saved again unchanged.
+    #[test]
+    fn a_pattern_field_of_one_element_keeps_the_old_text() {
+        let patterns: Patterns = "C:\\test\\tool1.exe".parse().expect("parse one path");
+
+        assert_eq!(patterns.to_string(), "C:\\test\\tool1.exe");
+        assert_eq!(
+            patterns, "C:\\test\\tool1.exe",
+            "the field is that one path"
+        );
+        assert_ne!(
+            patterns, "C:\\test\\tool2.exe",
+            "and not any other single path"
+        );
+    }
+
+    /// The field is written as text and read back as elements, so a file that names several
+    /// applications in one rule stays ordinary TOML a person can edit by hand.
+    #[test]
+    fn a_pattern_list_survives_a_round_trip_through_the_file() {
+        let path = crate::testutil::scratch_dir("rules-pattern-list").join("rules.toml");
+        let rules = RuleFile {
+            rule: vec![Rule::plain(
+                "browsers",
+                Action::Allow,
+                "C:\\Program Files\\*\\firefox.exe, C:\\Program Files\\*\\waterfox.exe",
+            )],
+        };
+
+        rules.save(&path).expect("save");
+
+        let text = std::fs::read_to_string(&path).expect("read");
+
+        // TOML writes a path with no escape of its own as a literal string, which is the shape a
+        // person editing the file by hand would write.
+        assert!(
+            text.contains(
+                "pattern = 'C:\\Program Files\\*\\firefox.exe, C:\\Program Files\\*\\waterfox.exe'"
+            ),
+            "{text}"
+        );
+        assert_eq!(
+            RuleFile::load_or_create(&path).expect("load"),
+            rules,
+            "the list reads back as the field it was"
+        );
+    }
+
+    /// A path may hold a comma on Windows, and the split then cuts it in two. The second half is
+    /// no absolute path, so the field is refused out loud rather than installed as a rule that
+    /// silently matches half of what it names.
+    #[test]
+    fn a_pattern_that_holds_a_comma_is_refused_loudly() {
+        let err = "C:\\a,b\\tool.exe"
+            .parse::<Patterns>()
+            .expect_err("the comma cuts the path in two");
+
+        assert!(
+            err.contains("absolute path"),
+            "the reason names the shape, not the comma: {err}"
+        );
+    }
+
+    /// The same bounds the other list fields hold themselves: an element that names nothing is
+    /// refused, and so is a field longer than the store can carry.
+    #[test]
+    fn a_pattern_list_refuses_an_empty_element_and_a_long_list() {
+        assert!("C:\\a.exe,,C:\\b.exe".parse::<Patterns>().is_err());
+        assert!(
+            " ".parse::<Patterns>().is_err(),
+            "nothing names no application"
+        );
+
+        let within = (0..MAX_WILDCARD_MATCHES)
+            .map(|index| format!("C:\\test\\app{index}.exe"))
+            .collect::<Vec<String>>()
+            .join(", ");
+        let over = format!("{within}, C:\\test\\one.exe");
+
+        assert!(
+            within.parse::<Patterns>().is_ok(),
+            "{MAX_WILDCARD_MATCHES} elements fit"
+        );
+        assert!(
+            over.parse::<Patterns>().is_err(),
+            "one more than the bound is refused"
+        );
+    }
+
+    /// A wildcard in any element makes the field one that has to be expanded, which is the
+    /// question the monitor asks before it rebuilds the filters for a newly seen application.
+    #[test]
+    fn any_wildcard_element_makes_the_field_a_pattern() {
+        let mixed: Patterns = "C:\\test\\tool1.exe, C:\\Windows\\*.exe"
+            .parse()
+            .expect("parse a mixed field");
+
+        assert!(mixed.has_wildcard());
+        assert!(mixed.matches("C:\\Windows\\notepad.exe"));
+        assert!(!mixed.matches("C:\\other\\notepad.exe"));
     }
 
     #[test]
@@ -2158,10 +2406,11 @@ mod tests {
             crate::export::decode(&crate::export::encode(&sample().rule[0]).expect("encode"))
                 .expect("decode");
 
+        let text = shared.pattern.to_string();
+
         assert!(
-            validate_pattern(&shared.pattern).is_ok(),
-            "{}",
-            shared.pattern
+            text.parse::<Patterns>().is_ok(),
+            "{text} should read back as a field the store accepts"
         );
     }
 

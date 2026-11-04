@@ -1012,60 +1012,91 @@ impl Expansion {
     }
 }
 
-/// How far one rule's pattern reaches: the number of applications it matched and the number of
-/// them the cap allows to be installed. Only a wildcard pattern can be truncated, and the two
-/// numbers differ exactly then, which is what [`pattern_reach`] is asked for by `/api/state`.
+/// How far one rule's pattern field reaches: the number of applications it matched and the number
+/// of them the cap allows to be installed. Only a wildcard element can be truncated, and the two
+/// numbers differ exactly then, which is what `pattern_reach` is asked for by `/api/state`.
+///
+/// The cap is over the whole field rather than per element. A list of applications multiplies with
+/// the ports and the addresses of the rule, and every application costs a filter per layer in a
+/// store that is shared with everything else on the machine, so holding each element down on its
+/// own could still install a multiple of the limit.
 ///
 /// Unlike [`app_ids`] nothing is resolved with WFP, so this only counts and never touches the
 /// filter store.
-pub(crate) fn pattern_reach(pattern: &str, known: &[String]) -> (usize, usize) {
-    if !is_wildcard(pattern) {
-        return (1, 1);
+pub(crate) fn pattern_reach(patterns: &crate::rules::Patterns, known: &[String]) -> (usize, usize) {
+    let mut matches = 0;
+    let mut installed = 0;
+
+    for pattern in patterns.elements() {
+        if !is_wildcard(pattern) {
+            matches += 1;
+            installed += 1;
+
+            continue;
+        }
+
+        let device_pattern = crate::device::to_device_path(pattern);
+        let hits = known
+            .iter()
+            .filter(|path| wildcard_match(&device_pattern, path))
+            .count();
+
+        // A wildcard that matches nothing installs the pattern itself, so one filter per element
+        // is always the minimum.
+        matches += hits;
+        installed += hits.max(1);
     }
 
-    let device_pattern = crate::device::to_device_path(pattern);
-    let matches = known
-        .iter()
-        .filter(|path| wildcard_match(&device_pattern, path))
-        .count();
-
-    // A wildcard that matches nothing installs the pattern itself, so one filter is always the
-    // minimum; anything above the cap is left out.
-    (matches, matches.clamp(1, MAX_WILDCARD_MATCHES))
+    (matches, installed.min(MAX_WILDCARD_MATCHES))
 }
 
 /// Build the application identities one rule needs.
 ///
 /// An exact pattern is resolved on its own, which is the normal case a Detected entry produces.
 /// A wildcard pattern is matched against the paths this tool has seen; when nothing has been seen
-/// yet the pattern itself goes into the store, so the rule is at least visible to the user.
-fn app_ids(pattern: &str, known: &[String]) -> Expansion {
-    if !is_wildcard(pattern) {
-        return Expansion {
-            apps: vec![AppId::resolve(pattern)],
-            matches: 1,
-        };
+/// yet the pattern itself goes into the store, so the rule is at least visible to the user. Both
+/// happen per element of the field, and [`MAX_WILDCARD_MATCHES`] is spent over the whole field
+/// rather than per element.
+fn app_ids(patterns: &crate::rules::Patterns, known: &[String]) -> Expansion {
+    let mut apps: Vec<AppId> = Vec::new();
+    let mut matches = 0;
+
+    for pattern in patterns.elements() {
+        let room = MAX_WILDCARD_MATCHES - apps.len().min(MAX_WILDCARD_MATCHES);
+
+        if !is_wildcard(pattern) {
+            matches += 1;
+
+            if room > 0 {
+                apps.push(AppId::resolve(pattern));
+            }
+
+            continue;
+        }
+
+        let device_pattern = crate::device::to_device_path(pattern);
+        let matched: Vec<&String> = known
+            .iter()
+            .filter(|path| wildcard_match(&device_pattern, path))
+            .collect();
+
+        matches += matched.len();
+
+        if matched.is_empty() {
+            if room > 0 {
+                apps.push(AppId::resolve(pattern));
+            }
+        } else {
+            apps.extend(
+                matched
+                    .into_iter()
+                    .take(room)
+                    .map(|path| AppId::resolve(path)),
+            );
+        }
     }
 
-    let device_pattern = crate::device::to_device_path(pattern);
-
-    let matched: Vec<&String> = known
-        .iter()
-        .filter(|path| wildcard_match(&device_pattern, path))
-        .collect();
-    let matches = matched.len();
-
-    let mut ids: Vec<AppId> = matched
-        .into_iter()
-        .take(MAX_WILDCARD_MATCHES)
-        .map(|path| AppId::resolve(path))
-        .collect();
-
-    if ids.is_empty() {
-        ids.push(AppId::resolve(pattern));
-    }
-
-    Expansion { apps: ids, matches }
+    Expansion { apps, matches }
 }
 
 impl Drop for Engine {
@@ -1445,7 +1476,12 @@ mod tests {
     use crate::rules::{Cidr, Protocol};
 
     /// A path that exists on every Windows install, so the application-id resolution succeeds.
-    const TEST_APP: &str = "C:\\Windows\\System32\\cmd.exe";
+    const TEST_APP: &str = r"C:\Windows\System32\notepad.exe";
+
+    /// The text of an application field, read as the rule file reads it.
+    fn patterns(text: &str) -> crate::rules::Patterns {
+        text.parse().expect("parse the application field")
+    }
 
     /// A rule with no direction is installed everywhere, and each direction picks the two layers
     /// where its connections are authorized.
@@ -1564,7 +1600,7 @@ mod tests {
             .collect();
 
         assert_eq!(
-            app_ids("C:\\test\\*.exe", &known).apps.len(),
+            app_ids(&patterns("C:\\test\\*.exe"), &known).apps.len(),
             MAX_WILDCARD_MATCHES,
             "the cap holds the expansion down",
         );
@@ -1579,7 +1615,7 @@ mod tests {
             .map(|index| crate::device::to_device_path(&format!("C:\\test\\app{index}.exe")))
             .collect();
 
-        let over = app_ids("C:\\test\\*.exe", &known);
+        let over = app_ids(&patterns("C:\\test\\*.exe"), &known);
         assert_eq!(
             over.matches,
             MAX_WILDCARD_MATCHES + 8,
@@ -1587,31 +1623,97 @@ mod tests {
         );
         assert!(over.truncated(), "a pattern over the cap is truncated");
 
-        let within = app_ids("C:\\test\\app*.exe", &known[..MAX_WILDCARD_MATCHES]);
+        let within = app_ids(
+            &patterns("C:\\test\\app*.exe"),
+            &known[..MAX_WILDCARD_MATCHES],
+        );
         assert_eq!(
             within.matches, MAX_WILDCARD_MATCHES,
             "the matches within the cap"
         );
         assert!(!within.truncated(), "a pattern at the cap is not truncated");
 
-        let exact = app_ids("C:\\test\\app0.exe", &known[..4]);
+        let exact = app_ids(&patterns("C:\\test\\app0.exe"), &known[..4]);
         assert!(!exact.truncated(), "an exact pattern is never truncated");
 
         assert_eq!(
-            pattern_reach("C:\\test\\*.exe", &known),
+            pattern_reach(&patterns("C:\\test\\*.exe"), &known),
             (MAX_WILDCARD_MATCHES + 8, MAX_WILDCARD_MATCHES),
             "the state view reports the same numbers",
         );
         assert_eq!(
-            pattern_reach("C:\\test\\app*.exe", &known[..MAX_WILDCARD_MATCHES]),
+            pattern_reach(
+                &patterns("C:\\test\\app*.exe"),
+                &known[..MAX_WILDCARD_MATCHES]
+            ),
             (MAX_WILDCARD_MATCHES, MAX_WILDCARD_MATCHES),
             "a pattern at the cap is not truncated in the state view either",
         );
         assert_eq!(
-            pattern_reach("C:\\test\\app0.exe", &known),
+            pattern_reach(&patterns("C:\\test\\app0.exe"), &known),
             (1, 1),
             "an exact pattern reaches exactly itself",
         );
+    }
+
+    /// The bound is spent over the whole field rather than per element. A field of applications
+    /// multiplies with the ports and the addresses of the rule, and every application costs a
+    /// filter per layer in a store that is shared with everything else on the machine.
+    #[test]
+    fn the_bound_is_spent_over_the_whole_field() {
+        let known: Vec<String> = (0..MAX_WILDCARD_MATCHES + 8)
+            .map(|index| crate::device::to_device_path(&format!("C:\\test\\app{index}.exe")))
+            .collect();
+
+        // Two elements that both reach the whole set, written as one field.
+        let expansion = app_ids(&patterns("C:\\test\\*.exe, C:\\test\\app?.exe"), &known);
+
+        assert_eq!(
+            expansion.installed(),
+            MAX_WILDCARD_MATCHES,
+            "the second element adds nothing once the field has used the bound"
+        );
+        assert!(expansion.truncated(), "and says so");
+
+        assert_eq!(
+            pattern_reach(&patterns("C:\\test\\*.exe, C:\\test\\app?.exe"), &known),
+            ((MAX_WILDCARD_MATCHES + 8) + 10, MAX_WILDCARD_MATCHES),
+            "the state view counts the same numbers",
+        );
+    }
+
+    /// An exact path and a wildcard share one field, and the exact application is not the one
+    /// that falls off the end when the bound is reached.
+    #[test]
+    fn an_exact_path_and_a_wildcard_share_one_field() {
+        let known = vec![crate::device::to_device_path("C:\\test\\app0.exe")];
+
+        let expansion = app_ids(&patterns("C:\\other\\tool.exe, C:\\test\\*.exe"), &known);
+
+        assert_eq!(
+            expansion.installed(),
+            2,
+            "both elements get their application"
+        );
+        assert!(!expansion.truncated());
+    }
+
+    /// Two applications in one field are two sets of filters, and the key of the second must not
+    /// be the key of the first, or the store would hold one of them.
+    #[test]
+    fn two_applications_in_one_field_get_keys_of_their_own() {
+        let apps = app_ids(&patterns("C:\\test\\tool1.exe, C:\\test\\tool2.exe"), &[]).apps;
+
+        assert_eq!(apps.len(), 2, "one application per element");
+
+        let mut keys = Vec::new();
+
+        for index in 0..apps.len() {
+            let key = filter_key(&format!("list#{index}"), &FWPM_LAYER_ALE_AUTH_CONNECT_V4);
+
+            assert!(!keys.contains(&key), "one key per application");
+            keys.push(key);
+        }
     }
 
     /// An exact path has nothing to expand, so the applications this tool has seen are not looked
@@ -1622,7 +1724,7 @@ mod tests {
             .map(|index| crate::device::to_device_path(&format!("C:\\other\\app{index}.exe")))
             .collect();
 
-        assert_eq!(app_ids(TEST_APP, &known).apps.len(), 1);
+        assert_eq!(app_ids(&patterns(TEST_APP), &known).apps.len(), 1);
     }
 
     /// A wildcard that has matched nothing so far still goes into the store as its own text. The
@@ -1630,7 +1732,7 @@ mod tests {
     /// store and cannot explain.
     #[test]
     fn a_wildcard_that_matches_nothing_seen_yet_still_installs_its_pattern() {
-        assert_eq!(app_ids("C:\\test\\*.exe", &[]).apps.len(), 1);
+        assert_eq!(app_ids(&patterns("C:\\test\\*.exe"), &[]).apps.len(), 1);
     }
 
     /// The port a user means is the remote one on the way out and the local one on the way in.

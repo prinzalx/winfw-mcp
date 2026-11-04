@@ -86,8 +86,6 @@ fn post_rules(state: &AppState, worker: &WfpWorker, request: &Request) -> Result
     let incoming: Replacement = parse_body(&request.body, "a rule file object")?;
 
     for rule in &incoming.rule {
-        validate_pattern(&rule.pattern).with_context(|| format!("rule '{}'", rule.name))?;
-
         if let Some(comment) = &rule.comment {
             validate_comment(comment).with_context(|| format!("rule '{}'", rule.name))?;
         }
@@ -329,9 +327,9 @@ fn post_rules_share(state: &AppState, request: &Request) -> Result<Response> {
 /// What `POST /api/rules/import` answers: the state an appended rule settled on.
 fn post_rules_import(state: &AppState, worker: &WfpWorker, request: &Request) -> Result<Response> {
     let body: Share = parse_body(&request.body, "a share string")?;
+    // The pattern is validated by the deserializer of the rule, which the share string is read
+    // through, so nothing is left to check here but the comment.
     let incoming = export::decode(&body.share)?;
-
-    validate_pattern(&incoming.pattern)?;
 
     if let Some(comment) = &incoming.comment {
         validate_comment(comment)?;
@@ -372,8 +370,6 @@ fn post_rules_replace(state: &AppState, worker: &WfpWorker, request: &Request) -
     // Every pattern goes through the check a single rule goes through, because a file
     // that was edited by hand after an export has not been read by anything since.
     for rule in &incoming.rule {
-        validate_pattern(&rule.pattern)?;
-
         if let Some(comment) = &rule.comment {
             validate_comment(comment)?;
         }
@@ -632,7 +628,7 @@ impl StateJson {
                 let (matches, installed) = crate::wfp::pattern_reach(&rule.pattern, &known);
                 (matches > installed).then(|| PatternTruncation {
                     name: rule.name.clone(),
-                    pattern: rule.pattern.clone(),
+                    pattern: rule.pattern.to_string(),
                     matches,
                     installed,
                 })

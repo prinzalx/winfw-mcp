@@ -147,7 +147,7 @@ fn read_attributes(element: &quick_xml::events::BytesStart<'_>) -> Result<Item> 
 
 /// Turn one item into rules, appending to `import`.
 ///
-/// An item names a *list* of applications and this tool's rule holds exactly one pattern, so one
+/// An item names a *list* of applications and an imported rule holds exactly one of them, so one
 /// item with three applications becomes three rules that differ only in their pattern. The
 /// reference reaches the same shape internally: it installs one filter per application.
 fn one(item: &Item, import: &mut Import) {
@@ -270,7 +270,7 @@ fn one(item: &Item, import: &mut Import) {
             } else {
                 Action::Allow
             },
-            pattern: app,
+            pattern: app.into(),
             enabled: is_true(&item.is_enabled),
             protocol,
             direction,

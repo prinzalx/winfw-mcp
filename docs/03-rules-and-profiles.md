@@ -2,8 +2,9 @@
 
 *Part of the [winfw-mcp handbook](../README.md#the-handbook).*
 
-A rule names an action (`allow` or `deny`), an application pattern, a name, and whether it is
-enabled. Rules live in `rules.toml` in the order they were written, and that order matters.
+A rule names an action (`allow` or `deny`), one application pattern or a comma-separated list of
+them, a name, and whether it is enabled. Rules live in `rules.toml` in the order they were
+written, and that order matters.
 
 ## The first two rules
 
@@ -173,18 +174,32 @@ to the rest of the machine. The base filters behind this are in
 Rules match on `*` and `?`. Those wildcards are ours, not the kernel's: the translation to WFP is
 done by this program, in one place. WFP itself compares an application path exactly, so a pattern
 with a wildcard is expanded into the applications this tool has actually seen, and each of them
-gets its own filter. The expansion is capped at 32 applications: a broader pattern is installed for
-the first 32 and says so, both as a warning in the log and as a note under the rule on the page
-("pattern has 42 matches, only 32 installed"), because a firewall that quietly stops matching is one
-nobody can reason about. A pattern nothing was seen for yet is installed as it stands, so the rule
-stays visible even before it can match.
+gets its own filter. The bound of 32 applications is spent **over the whole field** rather than per
+element: a broad pattern, or a list of them, is installed for the first 32 applications and says
+so, both as a warning in the log and as a note under the rule on the page ("pattern has 42 matches,
+only 32 installed"), because a firewall that quietly stops matching is one nobody can reason about.
+A pattern nothing was seen for yet is installed as it stands, so the rule stays visible even before
+it can match.
 
-A pattern is checked on the way in, because a rule that cannot match anything is not a harmless
+The field can hold a comma-separated list of paths instead of one of them, which is how one rule
+covers a handful of programs without writing the action, the ports and the addresses once per
+program: `C:\test\tool1.exe, C:\test\tool?\tool2.exe`. The elements are joined by commas when the
+rule is written out, so a rule that names one application is written exactly as it was before lists
+existed, and the page hands the text of the field through unchanged.
+
+A path is checked on the way in, because a rule that cannot match anything is not a harmless
 typo in a firewall: the connection it was supposed to decide goes the other way. It must be an
 absolute path — rooted at a drive (`C:\...`) or at a single separator (`\device\...`, which is what
 an application looks like before the drive map resolves it) — and it cannot contain a control
 character or any of `"`, `<`, `>`, `|`, which a Windows path cannot hold either. `not-a-path` is
-refused rather than stored as a rule nothing will ever match.
+refused rather than stored as a rule nothing will ever match. The check happens per element, and it
+happens while the file is read, so a rule the store could never use stops the tool at startup rather
+than sitting in the list quietly deciding nothing.
+
+A Windows path may itself contain a comma, and the split of the field then cuts it in two: of
+`C:\a,b\tool.exe` only the first half is an absolute path, so the field is refused out loud rather
+than installed as a rule that matches half of what it names. The wildcards are the way around it,
+since `?` stands for the comma there.
 
 The set of seen applications is wider than the Detected list: it grows whether or not
 `learn_mode` is on, it includes applications an existing rule already covers, and dismissing or

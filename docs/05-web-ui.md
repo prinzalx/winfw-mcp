@@ -99,10 +99,12 @@ A rule is edited in a dialog, not in ten fields that stay on screen: **Add rule*
 appends a rule and opens it, and a click on a row opens that one. The dialog holds name, action,
 program, protocol, direction, port, remote address, local address, comment and the enabled flag.
 Protocol is a text box rather than a list because a rule may name a protocol number such as `47`;
-the port box takes a comma-separated list of single ports and ranges such as
+the program box takes a comma-separated list of paths such as
+`C:\test\tool1.exe, C:\test\tool2.exe`, the port box takes a comma-separated list of single ports and ranges such as
 `443, 8443, 1024-2048` and either address box `10.0.0.5`, `192.168.1.0/24` or a span such as
 `10.0.0.1-10.0.0.9`, all left empty for anything goes. The comma separator is spelled out in the hint
-the port box shows when the cursor rests on it, and an element the page cannot read is reported with
+the program, port and address boxes show when the cursor rests on them, and an element the page cannot
+read is reported with
 the dialog left open. A value the server cannot read bounces back as an error and the row is redrawn
 from what the server has.
 

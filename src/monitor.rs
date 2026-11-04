@@ -743,7 +743,7 @@ fn listen(
         let pattern_in_use = ruleset
             .rule
             .iter()
-            .any(|rule| rule.enabled && crate::rules::is_wildcard(&rule.pattern));
+            .any(|rule| rule.enabled && rule.pattern.has_wildcard());
 
         if !pattern_in_use {
             return;

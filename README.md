@@ -69,7 +69,8 @@ console window and lives as a tray icon. Any area can be copied into `export\` o
 travels as a Base64 string, and an MCP agent talks JSON-RPC to `POST /mcp`. Rules are organised
 into named profiles, and protection can be paused from the page or from the tray menu.
 
-A rule matches an application path with `*` and `?`, a remote address, network, range or list, a
+A rule matches one application path or a list of them with `*` and `?`, a remote address, network,
+range or list, a
 local address, a port or list of ports, a protocol number, and a direction. `default_policy` is
 `deny`, so an application no ALLOW rule mentions does not connect.
 

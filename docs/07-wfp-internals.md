@@ -93,7 +93,7 @@ A single port is matched with `FWP_UINT16` and `FWP_MATCH_EQUAL`; a range with `
 `FWP_MATCH_RANGE`. A port field that names several elements is built from those same two shapes: the
 list becomes one filter per element, each carrying the condition its own element needs, rather than
 one filter with a `FWP_UINT16_ARRAY`, because a range has no place in such an array. A list of more
-than 32 elements is refused while the rule is read, which keeps the third axis a rule multiplies along
+than 32 elements is refused while the rule is read, which keeps each axis a rule multiplies along
 a bound of its own. An address field is built the same way, so a rule multiplies its layers by the
 elements of its port field and of both of its address fields. The range is one of the conditions WFP keeps a **pointer** to rather than a copy,
 so the `FWP_RANGE0` has to outlive the call. The four address conditions are pointer conditions too, for
@@ -108,12 +108,17 @@ the same reason, and a v6 span adds a pointer of its own inside each bound.
 
 ## The application condition
 
-A rule about one application is installed as a `FWP_BYTE_BLOB` condition obtained from
+A rule about an application is installed as a `FWP_BYTE_BLOB` condition obtained from
 `FwpmGetAppIdFromFileName0`, which resolves a file that exists into the device path WFP matches on.
 A pattern that names no existing file is handed over as it stands, and the match becomes exact. A
-pattern that matches several applications is expanded against the applications the monitor has seen,
-under a cap of 32 (`MAX_WILDCARD_MATCHES`): a pattern that matches more installs the first 32 and
-names the cut in the log, in the state and on the page.
+The field can name several applications as a comma-separated list, and each of them is installed as
+a condition of its own, so the application field is the fourth axis a rule multiplies along.
+
+A pattern that matches several applications is expanded against the applications the monitor has
+seen under a bound of 32 (`MAX_WILDCARD_MATCHES`). The bound is spent over the whole field rather
+than per element: a field whose elements together reach more than 32 applications installs the
+first 32 and names the cut in the log, in the state and on the page. Holding each element down on
+its own would not do, because a list multiplies with the ports and the addresses on top of it.
 
 Measured on a live store: a rule written `C:\WINDOWS\system32\CURL.EXE` allowed a program whose
 path the firewall reports as `C:\Windows\System32\curl.exe`. The resolution does not care about
