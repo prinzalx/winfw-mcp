@@ -1,27 +1,13 @@
 //! The wide-string helper and the stable keys derived from rule names.
 
+use crate::rules::{FNV_OFFSET, fnv1a};
 use crate::wfp::*;
-
-/// FNV-1a parameters, used to derive a filter key from a rule name.
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 /// Encode a string as the NUL terminated UTF-16 buffer the WFP structs point at.
 pub(super) fn wide(value: &str) -> Vec<u16> {
     let mut units: Vec<u16> = value.encode_utf16().collect();
     units.push(0);
     units
-}
-
-fn fnv1a(seed: u64, bytes: &[u8]) -> u64 {
-    let mut hash = seed;
-
-    for byte in bytes {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-
-    hash
 }
 
 /// The bytes of a GUID in the order a UUID is written down.

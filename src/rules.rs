@@ -165,23 +165,30 @@ impl Family {
     }
 }
 
+/// Turn one address into the sixteen bytes it is stored as, with the family that decides
+/// which layers a rule about it goes on.
+fn addr_bytes(addr: std::net::IpAddr) -> ([u8; 16], Family) {
+    match addr {
+        std::net::IpAddr::V4(v4) => {
+            let mut bytes = [0u8; 16];
+
+            bytes[..4].copy_from_slice(&v4.octets());
+
+            (bytes, Family::V4)
+        }
+        std::net::IpAddr::V6(v6) => (v6.octets(), Family::V6),
+    }
+}
+
 /// Read one address of either family into the sixteen bytes WFP is given, with the family that
 /// decides which layers a rule about it goes on.
 ///
 /// IPv4 is tried first, because Rust reads a dotted quad as an IPv4-mapped IPv6 address too, and
 /// `10.0.0.5` should stay the four byte address the user typed.
 fn parse_address(host: &str) -> Result<([u8; 16], Family), String> {
-    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
-        let mut addr = [0u8; 16];
-
-        addr[..4].copy_from_slice(&v4.octets());
-
-        Ok((addr, Family::V4))
-    } else if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
-        Ok((v6.octets(), Family::V6))
-    } else {
-        Err(format!("'{host}' is not an IP address"))
-    }
+    host.parse::<std::net::IpAddr>()
+        .map(addr_bytes)
+        .map_err(|_| format!("'{host}' is not an IP address"))
 }
 
 /// A remote address, written `192.168.1.0/24`, `10.0.0.5` or `fe80::/10`.
@@ -374,16 +381,7 @@ impl Remote {
             Self::Span(range) => {
                 // The address goes into the same sixteen byte layout a stored end uses, so the
                 // comparison below needs no knowledge of the family it is reading.
-                let (other, family) = match addr {
-                    std::net::IpAddr::V4(v4) => {
-                        let mut bytes = [0u8; 16];
-
-                        bytes[..4].copy_from_slice(&v4.octets());
-
-                        (bytes, Family::V4)
-                    }
-                    std::net::IpAddr::V6(v6) => (v6.octets(), Family::V6),
-                };
+                let (other, family) = addr_bytes(addr);
 
                 if family != range.family {
                     return false;
@@ -411,10 +409,6 @@ impl std::str::FromStr for Remote {
             return text.parse::<Cidr>().map(Self::Network);
         }
 
-        if low.is_empty() || high.is_empty() {
-            return Err(format!("'{text}' is not an address range"));
-        }
-
         let (from, family) = parse_address(low)?;
         let (to, high_family) = parse_address(high)?;
 
@@ -432,25 +426,6 @@ impl std::str::FromStr for Remote {
 
         Ok(Self::Span(AddressRange { from, to, family }))
     }
-}
-
-/// Whether the text is shaped like a name rather than a mistake in an address: labels of
-/// letters, digits and hyphens separated by dots, at least one dot, no label empty, no label
-/// longer than 63 characters and the whole text no longer than 253, which is what a name may
-/// hold.
-///
-/// A trailing dot is refused, because the file is written back as it was read and the
-/// difference between `example.com` and `example.com.` would show up as a rule that changed.
-fn is_name(text: &str) -> bool {
-    text.len() <= 253
-        && text.contains('.')
-        && text.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        })
 }
 
 impl std::fmt::Display for Remote {
@@ -520,6 +495,11 @@ impl Remotes {
     /// The elements as a field, without the check the text of a field goes through. Used
     /// where the elements were built rather than read, which is what resolving a name does.
     pub fn from_vec(elements: Vec<Remote>) -> Self {
+        debug_assert!(
+            elements.len() <= MAX_WILDCARD_MATCHES,
+            "a built field holds no more elements than a read field may name"
+        );
+
         Self(elements)
     }
 
@@ -537,6 +517,13 @@ impl Remotes {
         }
 
         families
+    }
+}
+
+/// A list of one, which is what a single address is.
+impl From<Remote> for Remotes {
+    fn from(remote: Remote) -> Self {
+        Self(vec![remote])
     }
 }
 
@@ -662,6 +649,24 @@ impl Dests {
     }
 }
 
+/// Whether the text is shaped like a name: labels of letters, digits and hyphens separated by
+/// dots, at least one dot, no label empty, no label longer than 63 characters and the whole text
+/// no longer than 253, which is what a name may hold.
+///
+/// A trailing dot is refused, because the file is written back as it was read and the
+/// difference between `example.com` and `example.com.` would show up as a rule that changed.
+fn is_name(text: &str) -> bool {
+    text.len() <= 253
+        && text.contains('.')
+        && text.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+}
+
 impl std::str::FromStr for Dests {
     type Err = String;
 
@@ -695,13 +700,6 @@ impl std::str::FromStr for Dests {
         }
 
         Ok(Self(unique))
-    }
-}
-
-/// A list of one, which is what a single address is.
-impl From<Remote> for Remotes {
-    fn from(remote: Remote) -> Self {
-        Self(vec![remote])
     }
 }
 
@@ -1425,19 +1423,33 @@ pub struct Fingerprint {
     hash: u64,
 }
 
+/// FNV-1a over a byte string, from any seed.
+///
+/// One hash for the whole tool: it answers both the file fingerprint here and the stable filter
+/// keys in [`crate::wfp`], which is the only other place it was written out by hand.
+pub(crate) fn fnv1a(seed: u64, bytes: &[u8]) -> u64 {
+    let mut hash = seed;
+
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    hash
+}
+
+/// The start value of FNV-1a.
+pub(crate) const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// The multiplier of FNV-1a.
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
 impl Fingerprint {
     /// The fingerprint of bytes exactly as they are on disk.
     fn of(bytes: &[u8]) -> Self {
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-
-        for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-
         Self {
             len: bytes.len() as u64,
-            hash,
+            hash: fnv1a(FNV_OFFSET, bytes),
         }
     }
 
