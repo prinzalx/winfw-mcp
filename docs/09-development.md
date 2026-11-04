@@ -101,6 +101,10 @@ and a GitHub release written. The version in `Cargo.toml` is the source of truth
 released milestone is a patch release of its own, which is why some versions have no milestone of
 their own.
 
+Three documents at the top of the tree are not published: the plan that started the tool, the diary
+of the rounds and the list of open points. Git ignores them, so they live on the development machine
+only, a change to one of them is not a release, and `git add -A` will not notice that change.
+
 The history of every release lives in the [changelog](../CHANGELOG.md), newest first. This
 chapter answers how development works; the changelog answers what it produced.
 

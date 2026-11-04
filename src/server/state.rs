@@ -326,8 +326,8 @@ impl Live {
 
     /// Whether our filters are in the store right now.
     ///
-    /// Pausing protection is not a setting and reaches no file: it is the run-time switch plan
-    /// section 1 promises, and a restart is enforcing again, which is what a firewall is for.
+    /// Pausing protection is not a setting and reaches no file: it is the run-time switch the plan,
+    /// section 1, promises, and a restart is enforcing again, which is what a firewall is for.
     pub fn protection(&self) -> bool {
         self.protection.load(Ordering::SeqCst)
     }
