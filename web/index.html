@@ -728,9 +728,10 @@
             wildcards <code>*</code> and <code>?</code>. A rule can be narrowed to one protocol
             (<code>tcp</code>, <code>udp</code>, or a number such as <code>47</code>), one
             direction, a port, a port range such as <code>1024-2048</code> or a comma-separated
-            list of them such as <code>80, 443, 8080-8090</code>, one remote address or
-            network such as <code>192.168.1.0/24</code>, or a span of addresses such as
-            <code>10.0.0.1-10.0.0.9</code>; a rule that names none of them is about all of them.
+            list of them such as <code>80, 443, 8080-8090</code>, and a remote address, network
+            such as <code>192.168.1.0/24</code> or span such as <code>10.0.0.1-10.0.0.9</code> —
+            or a comma-separated list of them such as <code>10.0.0.5, 192.168.1.0/24</code>;
+            a rule that names none of them is about all of them.
             Every change is written to <code>rules.toml</code> and pushed to the store immediately.
             A detected application is one no rule speaks about yet; widen its path into a pattern
             such as <code>C:\\Program Files\\*\\app.exe</code> before you allow or deny it, if you want
@@ -762,8 +763,8 @@
         <input
           type="text"
           id="rule-remote"
-          placeholder="any"
-          title="a remote address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9"
+          placeholder="any — or a comma-separated list such as 10.0.0.5, 192.168.1.0/24"
+          title="a remote address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9, or a comma-separated list of them"
         />
       </div>
       <div class="field">
@@ -771,8 +772,8 @@
         <input
           type="text"
           id="rule-local"
-          placeholder="any"
-          title="a local address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9"
+          placeholder="any — or a comma-separated list such as 10.0.0.5, 192.168.1.0/24"
+          title="a local address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9, or a comma-separated list of them"
         />
       </div>
       <div class="field"><span>Comment</span><input type="text" id="rule-comment" placeholder="why" spellcheck="false" /></div>

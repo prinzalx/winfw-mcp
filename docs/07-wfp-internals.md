@@ -37,9 +37,9 @@ the engine with `FWPM_E_INVALID_ENUM_TYPE`, so the filter list is read whole and
 compared in code. A filter with no provider key was not added by us.
 
 A filter key is derived from the rule name **plus its index**, so the UI's repeated default name
-`new rule` cannot collide. A rule whose port field names several elements adds the element number as
-well, which keeps the filters of one list apart without changing the key a single-port rule has always
-used.
+`new rule` cannot collide. A rule whose port field or address field names several elements adds the
+element number of each such field as well, which keeps the filters of one list apart without changing
+the key a rule with one element per field has always used.
 
 ## Applying
 
@@ -53,9 +53,10 @@ the write path accepts.
 
 ## The layers a rule is installed on
 
-One rule becomes one filter per application it matches, per layer it applies to, and per port its
-port field names. Which layers that are depends on the direction of the rule, and an address narrows
-them further, because an IPv4 address can never match on an IPv6 layer:
+One rule becomes one filter per application it matches, per layer it applies to, per port its port
+field names, and per address each of its address fields names. Which layers that are depends on the
+direction of the rule, and an address narrows them further, because an IPv4 address can never match
+on an IPv6 layer:
 
 | `direction` | Layers |
 |---|---|
@@ -66,12 +67,15 @@ them further, because an IPv4 address can never match on an IPv6 layer:
 | `remote`, `local` | Of those, only |
 |---|---|
 | absent | all of them |
-| an IPv4 address, network or span | the two `..._V4` layers |
-| an IPv6 address, network or span | the two `..._V6` layers |
+| addresses of one family | the layers of that family |
+| addresses of both families | the layers of both, one filter per element |
 
-Each address narrows the layers on its own, and the two of them have to agree on a family: a rule
-that names a v4 destination behind a v6 local address is left on no layer at all, because no
-connection has ends of both families.
+Each address field narrows the layers on its own, and the two of them have to agree on at least one
+family: a rule that names a v4 destination behind a v6 local address is left on no layer at all,
+because no connection has ends of both families. A field that holds a list of both families is the
+case that opens both stacks, and on each layer only the elements of that layer's own family are
+installed, so a mixed list installs one filter per element per stack rather than a filter that
+carries an address of the wrong family.
 
 Each filter carries the application condition (`FWPM_CONDITION_ALE_APP_ID`) and, when the rule
 narrows, a protocol condition (`FWPM_CONDITION_IP_PROTOCOL`, `FWP_UINT8`), a port condition and an
@@ -90,7 +94,8 @@ A single port is matched with `FWP_UINT16` and `FWP_MATCH_EQUAL`; a range with `
 list becomes one filter per element, each carrying the condition its own element needs, rather than
 one filter with a `FWP_UINT16_ARRAY`, because a range has no place in such an array. A list of more
 than 32 elements is refused while the rule is read, which keeps the third axis a rule multiplies along
-a bound of its own. The range is one of the conditions WFP keeps a **pointer** to rather than a copy,
+a bound of its own. An address field is built the same way, so a rule multiplies its layers by the
+elements of its port field and of both of its address fields. The range is one of the conditions WFP keeps a **pointer** to rather than a copy,
 so the `FWP_RANGE0` has to outlive the call. The four address conditions are pointer conditions too, for
 the same reason, and a v6 span adds a pointer of its own inside each bound.
 

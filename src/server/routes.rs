@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use crate::export::{self, Area};
 use crate::learn::Detected;
 use crate::monitor::NetEvent;
-use crate::rules::{Action, Remote, Rule, RuleFile, validate_comment, validate_pattern};
+use crate::rules::{Action, Remotes, Rule, RuleFile, validate_comment, validate_pattern};
 
 use super::http::{Request, Response, parse_body, parse_or_default};
 use super::mcp_tools::mcp_endpoint;
@@ -157,10 +157,12 @@ fn post_detected(state: &AppState, worker: &WfpWorker, request: &Request) -> Res
         let mut rule = Rule::plain(name, decision.action, pattern);
 
         // A destination entry is decided by a rule that reaches that address and no
-        // other, which is the whole point of asking about it.
+        // other, which is the whole point of asking about it. The body names the one
+        // address of the connection that was seen, so the rule it produces holds a list
+        // of one element.
         if let Some(text) = decision.remote.as_deref() {
             rule.remote = Some(
-                text.parse::<Remote>()
+                text.parse::<Remotes>()
                     .map_err(anyhow::Error::msg)
                     .with_context(|| format!("'{text}' is not an address"))?,
             );

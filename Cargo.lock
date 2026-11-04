@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "winfw-mcp"
-version = "0.75.6"
+version = "0.75.7"
 dependencies = [
  "anyhow",
  "base64",

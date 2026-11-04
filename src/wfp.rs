@@ -37,7 +37,7 @@ use crate::monitor::Attribution as Owners;
 
 use crate::config::Policy;
 use crate::rules::{
-    Action, Direction, Family, PortRange, Ports, Remote, Rule, RuleFile, is_wildcard,
+    Action, Direction, Family, PortRange, Ports, Remote, Remotes, Rule, RuleFile, is_wildcard,
     wildcard_match,
 };
 
@@ -682,112 +682,133 @@ impl Engine {
                 })
                 .collect();
 
-            // Both address conditions are a pointer into a struct WFP reads while the filter is
-            // added, so the value lives here for as long as this application's filters are being
-            // added. It is not an `Option` of the struct: the pointer has to reach the struct.
-            let addr = rule.remote.map(addr_value);
-            let addr_range = span_range(addr.as_ref());
-            let local = rule.local.map(addr_value);
-            let local_range = span_range(local.as_ref());
+            // The address values live here for as long as this application's filters are being
+            // added, because WFP keeps a pointer into them rather than a copy. Each element of a
+            // field becomes a filter of its own; a field that names no address keeps the single
+            // empty variant it always had.
+            let remote_values = addr_values(rule.remote.as_ref());
+            let remote_ranges = span_ranges(&remote_values);
+            let local_values = addr_values(rule.local.as_ref());
+            let local_ranges = span_ranges(&local_values);
 
             for layer in rule_layers(rule) {
+                // Only an element of the layer's own family can be matched on it, so a list that
+                // mixes families is installed in both stacks, one element per filter.
+                let remote_variants = addr_variants(&remote_values, layer_family(layer));
+                let local_variants = addr_variants(&local_values, layer_family(layer));
+
                 for (port_index, port) in port_variants.iter().enumerate() {
-                    let mut conditions = vec![app_condition];
+                    for (remote_index, addr) in remote_variants.iter().enumerate() {
+                        for (local_index, local) in local_variants.iter().enumerate() {
+                            let mut conditions = vec![app_condition];
 
-                    if let Some(condition) = protocol {
-                        conditions.push(condition);
-                    }
-
-                    if let Some(port) = port {
-                        // One port is matched exactly; a range needs the range type and the range
-                        // the store keeps a pointer to.
-                        conditions.push(if port.is_single() {
-                            FWPM_FILTER_CONDITION0 {
-                                fieldKey: port_condition(layer),
-                                matchType: FWP_MATCH_EQUAL,
-                                conditionValue: FWP_CONDITION_VALUE0 {
-                                    r#type: FWP_UINT16,
-                                    Anonymous: FWP_CONDITION_VALUE0_0 { uint16: port.lo },
-                                },
+                            if let Some(condition) = protocol {
+                                conditions.push(condition);
                             }
-                        } else {
-                            FWPM_FILTER_CONDITION0 {
-                                fieldKey: port_condition(layer),
-                                matchType: FWP_MATCH_RANGE,
-                                conditionValue: FWP_CONDITION_VALUE0 {
-                                    r#type: FWP_RANGE_TYPE,
-                                    Anonymous: FWP_CONDITION_VALUE0_0 {
-                                        rangeValue: &raw const port_ranges[port_index] as *mut _,
-                                    },
-                                },
+
+                            if let Some(port) = port {
+                                // One port is matched exactly; a range needs the range type and the range
+                                // the store keeps a pointer to.
+                                conditions.push(if port.is_single() {
+                                    FWPM_FILTER_CONDITION0 {
+                                        fieldKey: port_condition(layer),
+                                        matchType: FWP_MATCH_EQUAL,
+                                        conditionValue: FWP_CONDITION_VALUE0 {
+                                            r#type: FWP_UINT16,
+                                            Anonymous: FWP_CONDITION_VALUE0_0 { uint16: port.lo },
+                                        },
+                                    }
+                                } else {
+                                    FWPM_FILTER_CONDITION0 {
+                                        fieldKey: port_condition(layer),
+                                        matchType: FWP_MATCH_RANGE,
+                                        conditionValue: FWP_CONDITION_VALUE0 {
+                                            r#type: FWP_RANGE_TYPE,
+                                            Anonymous: FWP_CONDITION_VALUE0_0 {
+                                                rangeValue: &raw const port_ranges[port_index]
+                                                    as *mut _,
+                                            },
+                                        },
+                                    }
+                                });
                             }
-                        });
+
+                            if let Some(addr) = addr {
+                                conditions.push(addr_condition(
+                                    FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                                    addr,
+                                    remote_ranges[remote_index].as_ref(),
+                                ));
+                            }
+
+                            if let Some(local) = local {
+                                conditions.push(addr_condition(
+                                    FWPM_CONDITION_IP_LOCAL_ADDRESS,
+                                    local,
+                                    local_ranges[local_index].as_ref(),
+                                ));
+                            }
+
+                            // The key stays exactly what a rule with one element per field always used;
+                            // only a field that names more elements tells its filters apart by the
+                            // element number, so no two of them collide.
+                            let mut key = format!("{}#{index}", rule.name);
+
+                            if port_variants.len() > 1 {
+                                key.push_str(&format!(".{port_index}"));
+                            }
+
+                            if remote_variants.len() > 1 {
+                                key.push_str(&format!(".{remote_index}"));
+                            }
+
+                            if local_variants.len() > 1 {
+                                key.push_str(&format!(".{local_index}"));
+                            }
+
+                            let mut filter = FWPM_FILTER0::default();
+
+                            filter.filterKey = filter_key(&key, &layer);
+                            filter.displayData = FWPM_DISPLAY_DATA0 {
+                                name: PWSTR(owner.as_ptr() as *mut _),
+                                description: PWSTR(label.as_ptr() as *mut _),
+                            };
+                            filter.flags = flags;
+                            filter.providerKey = &mut provider_key;
+                            filter.layerKey = layer;
+                            filter.subLayerKey = SUBLAYER_KEY;
+                            filter.weight = FWP_VALUE0 {
+                                r#type: FWP_UINT8,
+                                Anonymous: FWP_VALUE0_0 { uint8: weight },
+                            };
+                            filter.numFilterConditions = conditions.len() as u32;
+                            filter.filterCondition = conditions.as_ptr() as *mut _;
+                            filter.action = FWPM_ACTION0 {
+                                r#type: action,
+                                ..Default::default()
+                            };
+
+                            let mut filter_id = 0u64;
+
+                            // SAFETY: every pointer in the filter points into memory owned by this
+                            // function, and all of it outlives the call. WFP copies what it needs.
+                            let status = unsafe {
+                                FwpmFilterAdd0(self.handle, &filter, None, Some(&mut filter_id))
+                            };
+
+                            if status != 0 {
+                                bail!(
+                                    "FwpmFilterAdd0 failed with 0x{status:08X} for rule '{}' on layer {}",
+                                    rule.name,
+                                    layer_index(layer),
+                                );
+                            }
+
+                            owners.insert(filter_id, rule.name.clone());
+
+                            installed += 1;
+                        }
                     }
-
-                    if let Some(addr) = &addr {
-                        conditions.push(addr_condition(
-                            FWPM_CONDITION_IP_REMOTE_ADDRESS,
-                            addr,
-                            addr_range.as_ref(),
-                        ));
-                    }
-
-                    if let Some(local) = &local {
-                        conditions.push(addr_condition(
-                            FWPM_CONDITION_IP_LOCAL_ADDRESS,
-                            local,
-                            local_range.as_ref(),
-                        ));
-                    }
-
-                    let mut filter = FWPM_FILTER0::default();
-                    // The key stays what a single-port rule always used; a list tells its
-                    // filters apart by the element number, so no two of them collide.
-                    filter.filterKey = filter_key(
-                        &if port_variants.len() > 1 {
-                            format!("{}#{}.{}", rule.name, index, port_index)
-                        } else {
-                            format!("{}#{index}", rule.name)
-                        },
-                        &layer,
-                    );
-                    filter.displayData = FWPM_DISPLAY_DATA0 {
-                        name: PWSTR(owner.as_ptr() as *mut _),
-                        description: PWSTR(label.as_ptr() as *mut _),
-                    };
-                    filter.flags = flags;
-                    filter.providerKey = &mut provider_key;
-                    filter.layerKey = layer;
-                    filter.subLayerKey = SUBLAYER_KEY;
-                    filter.weight = FWP_VALUE0 {
-                        r#type: FWP_UINT8,
-                        Anonymous: FWP_VALUE0_0 { uint8: weight },
-                    };
-                    filter.numFilterConditions = conditions.len() as u32;
-                    filter.filterCondition = conditions.as_ptr() as *mut _;
-                    filter.action = FWPM_ACTION0 {
-                        r#type: action,
-                        ..Default::default()
-                    };
-
-                    let mut filter_id = 0u64;
-
-                    // SAFETY: every pointer in the filter points into memory owned by this
-                    // function, and all of it outlives the call. WFP copies what it needs.
-                    let status =
-                        unsafe { FwpmFilterAdd0(self.handle, &filter, None, Some(&mut filter_id)) };
-
-                    if status != 0 {
-                        bail!(
-                            "FwpmFilterAdd0 failed with 0x{status:08X} for rule '{}' on layer {}",
-                            rule.name,
-                            layer_index(layer),
-                        );
-                    }
-
-                    owners.insert(filter_id, rule.name.clone());
-
-                    installed += 1;
                 }
             }
         }
@@ -1207,15 +1228,21 @@ fn layer_family(layer: GUID) -> Family {
 
 /// The layers a rule is installed on, narrowed by its direction and by both of its addresses.
 ///
-/// The remote address decides the family as it always has, and a local address narrows what is
-/// left over the same way. A rule that names addresses of two different families ends up on no
-/// layer at all, because no connection has ends of both.
+/// The remote field decides which families have a layer at all, and the local field narrows what
+/// is left over to the families it names too. A rule whose two fields name no family in common
+/// ends up on no layer at all, because no connection has ends of two families; a list that spans
+/// both families is what makes a rule reach into both stacks.
 fn rule_layers(rule: &Rule) -> Vec<GUID> {
-    layers_for(rule.direction, rule.remote.map(Remote::family))
+    layers_for(rule.direction, None)
         .into_iter()
         .filter(|layer| {
-            rule.local
-                .is_none_or(|local| layer_family(*layer) == local.family())
+            rule.remote
+                .as_ref()
+                .is_none_or(|remote| remote.families().contains(&layer_family(*layer)))
+                && rule
+                    .local
+                    .as_ref()
+                    .is_none_or(|local| local.families().contains(&layer_family(*layer)))
         })
         .collect()
 }
@@ -1287,6 +1314,46 @@ fn span_range(value: Option<&AddrValue>) -> Option<FWP_RANGE0> {
             },
         }),
         _ => None,
+    }
+}
+
+/// The value of every element of an address field, in the order the field was written.
+///
+/// A field that names no address yields no value at all, which [`addr_variants`] turns into the
+/// single empty variant a rule without an address has always had.
+fn addr_values(field: Option<&Remotes>) -> Vec<AddrValue> {
+    field
+        .map_or(&[][..], Remotes::elements)
+        .iter()
+        .map(|element| addr_value(*element))
+        .collect()
+}
+
+/// The range each value of a field points at, in a vector parallel to it, empty for a field that
+/// names no address.
+fn span_ranges(values: &[AddrValue]) -> Vec<Option<FWP_RANGE0>> {
+    values.iter().map(|value| span_range(Some(value))).collect()
+}
+
+/// Which elements of a field are installed as a condition on a layer of the given family, each
+/// paired with the empty variant a field that names no address is matched with.
+fn addr_variants(values: &[AddrValue], family: Family) -> Vec<Option<&AddrValue>> {
+    if values.is_empty() {
+        return vec![None];
+    }
+
+    values
+        .iter()
+        .filter(|value| addr_family(value) == family)
+        .map(Some)
+        .collect()
+}
+
+/// Which family an installed value belongs to, whichever of the four shapes it has.
+fn addr_family(value: &AddrValue) -> Family {
+    match value {
+        AddrValue::V4(_) | AddrValue::V4Range(_) => Family::V4,
+        AddrValue::V6(_) | AddrValue::V6Range(_) => Family::V6,
     }
 }
 
@@ -1436,8 +1503,8 @@ mod tests {
 
         let layers_of = |remote: Option<Cidr>, local: Option<Cidr>| {
             rule_layers(&Rule {
-                remote: remote.map(Remote::Network),
-                local: local.map(Remote::Network),
+                remote: remote.map(|cidr| Remotes::from(Remote::Network(cidr))),
+                local: local.map(|cidr| Remotes::from(Remote::Network(cidr))),
                 ..Rule::plain("local layer test", Action::Deny, TEST_APP)
             })
         };
@@ -1449,6 +1516,41 @@ mod tests {
             layers_of(Some(v4), Some(v6)),
             Vec::<GUID>::new(),
             "an address of each family matches nothing",
+        );
+    }
+
+    /// A field that names addresses of both families reaches the layers of both, which is the
+    /// difference a list makes over a single address: the rule of one family is installed on one
+    /// stack, the rule of a list that spans both is installed on both.
+    #[test]
+    fn an_address_list_reaches_the_layers_of_every_family_it_names() {
+        let both: Remotes = "192.168.1.0/24, fe80::/10"
+            .parse()
+            .expect("parse a list of both families");
+        let layers = rule_layers(&Rule {
+            remote: Some(both.clone()),
+            local: None,
+            ..Rule::plain("list layer test", Action::Deny, TEST_APP)
+        });
+
+        assert_eq!(
+            layers,
+            vec![LAYERS[0], LAYERS[1], LAYERS[2], LAYERS[3]],
+            "a list of both families has a layer in each stack",
+        );
+
+        // The local field narrows what the remote field opened, exactly as a single address did.
+        let v4: Remotes = "192.168.1.0/24".parse().expect("parse a v4 network");
+        let narrowed = rule_layers(&Rule {
+            remote: Some(both),
+            local: Some(v4),
+            ..Rule::plain("list layer test", Action::Deny, TEST_APP)
+        });
+
+        assert_eq!(
+            narrowed,
+            vec![LAYERS[0], LAYERS[2]],
+            "a local address of one family keeps the v4 layers",
         );
     }
 
@@ -1721,6 +1823,55 @@ mod tests {
             let cleared = engine.clear().expect("clear the store");
 
             assert_eq!(cleared, expected, "port '{ports}': nothing is left behind");
+        }
+    }
+
+    /// An address field with more than one element is installed as one filter per element, the
+    /// same way a port list is. A list that names both families is installed in both stacks, one
+    /// element per filter there too, which is what the two-layer counts of the mixed case show.
+    #[test]
+    fn an_address_list_is_installed_as_one_filter_per_element() {
+        let engine = Engine::open().expect("open engine");
+
+        match engine.clear() {
+            Ok(leftovers) => println!("cleared {leftovers} leftover filters"),
+            Err(error) => {
+                let reason = format!("{error:#}");
+                assert!(reason.contains("0x00000005"), "unexpected failure {reason}");
+                println!("write path skipped, access denied");
+                return;
+            }
+        }
+
+        for (addresses, expected) in [
+            ("10.0.0.5", 1usize),
+            ("10.0.0.5, 10.0.0.9", 2),
+            ("10.0.0.5, 10.0.0.9, 192.168.1.0/24", 3),
+            ("10.0.0.5, 2001:db8::1", 2),
+        ] {
+            let rules = RuleFile {
+                rule: vec![Rule {
+                    direction: Some(Direction::Out),
+                    remote: Some(addresses.parse().expect("parse an address field")),
+                    ..Rule::plain("winfw-mcp address list test", Action::Allow, TEST_APP)
+                }],
+            };
+
+            let applied = engine
+                .apply(&rules, &[], Policy::Allow)
+                .expect("apply the listed rule");
+
+            assert_eq!(
+                applied.installed, expected,
+                "addresses '{addresses}': one filter per element of the field",
+            );
+
+            let cleared = engine.clear().expect("clear the store");
+
+            assert_eq!(
+                cleared, expected,
+                "addresses '{addresses}': nothing is left behind"
+            );
         }
     }
 

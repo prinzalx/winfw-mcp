@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use crate::rules::{Action, Direction, Protocol, Remote, Rule, RuleFile, validate_comment};
+use crate::rules::{Action, Direction, Protocol, Remotes, Rule, RuleFile, validate_comment};
 
 /// What reading a profile produced: the rules this tool can use, and one sentence per part of the
 /// profile it could not turn into a rule.
@@ -198,8 +198,9 @@ fn one(item: &Item, import: &mut Import) {
     };
 
     // One port or one address, which is what a single entry of an item can be; the import never
-    // collects several entries into the list a rule's port field can hold. Anything wider stays
-    // in the comment, because "port 53" and "224.0.0.0/4" are different claims about the traffic.
+    // collects several entries into the list a rule's address field can hold. Anything wider
+    // stays in the comment, because "port 53" and "224.0.0.0/4" are different claims about the
+    // traffic.
     let entries = split(&item.rule);
     let mut port = None;
     let mut remote = None;
@@ -209,7 +210,7 @@ fn one(item: &Item, import: &mut Import) {
         [only] => {
             if let Ok(parsed) = only.parse() {
                 port = Some(parsed);
-            } else if let Ok(parsed) = only.parse::<Remote>() {
+            } else if let Ok(parsed) = only.parse::<Remotes>() {
                 remote = Some(parsed);
             } else {
                 dropped.push(format!("rule '{only}'"));
@@ -276,7 +277,7 @@ fn one(item: &Item, import: &mut Import) {
             // The port field holds a list, which is not `Copy` as a single value once was, and
             // one item's port belongs to every rule the item spreads over.
             port: port.clone(),
-            remote,
+            remote: remote.clone(),
             local: None,
             comment: comment.clone(),
         });
@@ -528,7 +529,7 @@ mod tests {
 
         assert_eq!(rule.port, None, "224.0.0.0/4 is not a port");
         assert_eq!(
-            rule.remote.map(|remote| remote.to_string()),
+            rule.remote.as_ref().map(|remote| remote.to_string()),
             Some("224.0.0.0/4".to_owned())
         );
         assert_eq!(

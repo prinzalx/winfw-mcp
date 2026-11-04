@@ -45,8 +45,8 @@ them is about all of them, which is every rule written before these fields exist
 | `protocol` | `"tcp"`, `"udp"`, `47` | the transport the connection uses |
 | `direction` | `"in"`, `"out"` | which way the connection goes |
 | `port` | `"443"`, `"1024-2048"`, `"80, 443, 8080-8090"` | one port, an inclusive range of them, or a comma-separated list of either |
-| `remote` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"` | the address the connection goes to |
-| `local` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"` | the address the connection has on this machine |
+| `remote` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"`, `"10.0.0.5, 192.168.1.0/24"` | the address or addresses the connection goes to |
+| `local` | `"10.0.0.5"`, `"192.168.1.0/24"`, `"10.0.0.1-10.0.0.9"`, `"10.0.0.5, 192.168.1.0/24"` | the address or addresses the connection has on this machine |
 
 ```toml
 [[rule]]
@@ -88,7 +88,8 @@ leaves other connections alone rather than deciding them. Details in
 ## Writing a remote address
 
 `remote` and `local` are each one address, one network or one span of addresses in either family,
-written the way networks are written everywhere else:
+written the way networks are written everywhere else. Either field may hold a comma-separated list
+of them instead, which is [Several addresses in one field](#several-addresses-in-one-field):
 
 | Written | Read as |
 |---|---|
@@ -114,6 +115,26 @@ have to be addresses of the same family and the first must not come after the se
 
 Because an IPv4 address can never match on an IPv6 layer and the other way round, an address also
 narrows the layers the rule is installed on, exactly as `direction` does.
+
+## Several addresses in one field
+
+Either field can hold a list instead of a single value: `10.0.0.5, 192.168.1.0/24,
+10.0.0.1-10.0.0.9`. A rule that holds a list matches a connection whose address is contained in
+**any** of its elements, and every element is written by the rules above, so each of them is read
+on its own. An empty element (`10.0.0.5,,10.0.0.9`) is refused rather than quietly read as any
+address, and so is an element that is not an address on its own.
+
+A list of one element is written back exactly as the single address was written before lists
+existed, so a rules file from an older version reads back and is written again byte for byte the
+same. The page hands the text of the field through unchanged, which means the editor accepts a list
+without doing anything of its own with it.
+
+Each element is installed as a filter of its own, exactly as an element of a port list is, so the
+list is capped at 32 elements: the store is shared with everything else on the machine. A list that
+names addresses of both families is installed in both stacks, one filter per element, while the
+layers of a family no element of the field belongs to get none. A rule whose `remote` and `local`
+have no family in common is installed on no layer at all, because no connection has ends of two
+families.
 
 A port is matched on the side of the connection it is about: the remote port on the way out, the
 local port on the way in. "Port 443" therefore means the same thing in both directions, which is

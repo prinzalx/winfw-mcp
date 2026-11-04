@@ -446,6 +446,121 @@ impl<'de> Deserialize<'de> for Remote {
     }
 }
 
+/// The address field of a rule: one address, network or span, or a comma-separated list of them
+/// such as `10.0.0.5, 192.168.1.0/24, 10.0.0.1-10.0.0.9`.
+///
+/// It holds at least one element; a field that names no address at all is absent rather than an
+/// empty list. The elements are written back joined by commas, so a single value stays exactly the
+/// single value it was before lists existed and a file written by an older version reads back
+/// unchanged. The list is capped at [`MAX_WILDCARD_MATCHES`] elements: each element is installed as
+/// a filter of its own per application per layer, and the store is shared with everything else on
+/// the machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Remotes(Vec<Remote>);
+
+impl Remotes {
+    /// The elements of the field, in the order they were written.
+    pub fn elements(&self) -> &[Remote] {
+        &self.0
+    }
+
+    /// Whether any of the elements is an address the rule speaks about.
+    pub fn contains(&self, addr: std::net::IpAddr) -> bool {
+        self.0.iter().any(|remote| remote.contains(addr))
+    }
+
+    /// The distinct families the elements are written in. A list that mixes v4 and v6 yields both,
+    /// which is what lets such a rule have filters in both stacks.
+    pub fn families(&self) -> Vec<Family> {
+        let mut families = Vec::new();
+
+        for remote in &self.0 {
+            let family = remote.family();
+
+            if !families.contains(&family) {
+                families.push(family);
+            }
+        }
+
+        families
+    }
+}
+
+/// The contents of an address field of a rule, split into validated elements.
+///
+/// An element is the text of a single address parsed on its own, so an element that would be
+/// refused as the whole field is refused here too. The list is capped at
+/// [`MAX_WILDCARD_MATCHES`] elements, which is the same bound a wildcard pattern is capped
+/// at, for the same reason: every element of the list can become a filter of its own.
+impl std::str::FromStr for Remotes {
+    type Err = ParseError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text.trim().is_empty() {
+            return Err(format!("address '{text}' is not an address"));
+        }
+
+        let mut elements = Vec::new();
+
+        // Splitting on commas is safe for every element form: neither a network nor a span
+        // contains a comma, and an IPv6 address never is written with one.
+        for part in text.split(',') {
+            let part = part.trim();
+
+            if part.is_empty() {
+                return Err(format!("address list '{text}' has an empty element"));
+            }
+
+            elements.push(
+                part.parse::<Remote>()
+                    .map_err(|err| format!("{part}: {err}"))?,
+            );
+        }
+
+        if elements.len() > MAX_WILDCARD_MATCHES {
+            return Err(format!(
+                "address list '{text}' names more than {MAX_WILDCARD_MATCHES} addresses"
+            ));
+        }
+
+        Ok(Self(elements))
+    }
+}
+
+impl std::fmt::Display for Remotes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let joined = self
+            .0
+            .iter()
+            .map(|element| element.to_string())
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        f.write_str(&joined)
+    }
+}
+
+impl Serialize for Remotes {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Remotes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// A list of one, which is what a single address is.
+impl From<Remote> for Remotes {
+    fn from(remote: Remote) -> Self {
+        Self(vec![remote])
+    }
+}
+
 /// The port field of a rule: one port, one inclusive range, or a comma-separated list of
 /// them such as `80, 443, 8080-8090`.
 ///
@@ -637,16 +752,16 @@ pub struct Rule {
     pub direction: Option<Direction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<Ports>,
-    /// The remote address the rule is about, written `192.168.1.0/24`, `10.0.0.5` or
-    /// `10.0.0.1-10.0.0.9`. Absent means any address, which is also what narrows the rule to the
-    /// application alone.
+    /// The remote address or addresses the rule is about, written `192.168.1.0/24`, `10.0.0.5` or
+    /// `10.0.0.1-10.0.0.9`, and a comma-separated list of them for more than one destination.
+    /// Absent means any address, which is also what narrows the rule to the application alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote: Option<Remote>,
-    /// The local address the rule is about, written `192.168.1.0/24`, `10.0.0.5` or
-    /// `10.0.0.1-10.0.0.9`. Absent means any address, which is also what leaves the rule about the
-    /// destination alone.
+    pub remote: Option<Remotes>,
+    /// The local address or addresses the rule is about, written `192.168.1.0/24`, `10.0.0.5` or
+    /// `10.0.0.1-10.0.0.9`, and a comma-separated list of them for more than one source.
+    /// Absent means any address, which is also what leaves the rule about the destination alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub local: Option<Remote>,
+    pub local: Option<Remotes>,
     /// Why the rule exists, in the words of the person who wrote it.
     ///
     /// It decides nothing: the field is for the reader of a list they did not write. It is skipped
@@ -820,7 +935,7 @@ pub fn reaches(rules: &RuleFile, path: &str, addr: std::net::IpAddr) -> bool {
         .rule
         .iter()
         .filter(|rule| rule.enabled && wildcard_match(&rule.pattern, path))
-        .any(|rule| match rule.remote {
+        .any(|rule| match rule.remote.as_ref() {
             Some(remote) => remote.contains(addr),
             None => true,
         })
@@ -1585,6 +1700,137 @@ mod tests {
         assert!(
             over_cap.parse::<Ports>().is_err(),
             "one element past the cap is refused: {over_cap}",
+        );
+    }
+
+    /// An address field keeps the elements it was written with, in order, and refuses what a
+    /// single address refuses: an empty element, an element that is not an address, and one
+    /// element past the cap a wildcard pattern is capped at.
+    #[test]
+    fn an_address_field_holds_its_elements_or_refuses_them() {
+        let list = "10.0.0.5, 192.168.1.0/24, 10.0.0.1-10.0.0.9"
+            .parse::<Remotes>()
+            .expect("parse a list of three");
+
+        assert_eq!(
+            list.elements()
+                .iter()
+                .map(|remote| remote.to_string())
+                .collect::<Vec<String>>(),
+            vec![
+                "10.0.0.5".to_owned(),
+                "192.168.1.0/24".to_owned(),
+                "10.0.0.1-10.0.0.9".to_owned(),
+            ],
+        );
+
+        // A field of one element is written back exactly as the single address was written
+        // before lists existed.
+        let one = "10.0.0.5".parse::<Remotes>().expect("parse a single");
+
+        assert_eq!(one.elements().len(), 1);
+        assert_eq!(one.to_string(), "10.0.0.5");
+
+        for text in [
+            "10.0.0.5,,10.0.0.9",
+            "10.0.0.5, ,",
+            "10.0.0.5, example.com",
+            "",
+            "  ",
+        ] {
+            assert!(text.parse::<Remotes>().is_err(), "refused: {text}");
+        }
+
+        let at_cap = (1..=MAX_WILDCARD_MATCHES)
+            .map(|octet| format!("10.0.{octet}.5"))
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        assert_eq!(
+            at_cap
+                .parse::<Remotes>()
+                .expect("a list at the cap")
+                .elements()
+                .len(),
+            MAX_WILDCARD_MATCHES,
+        );
+
+        let over_cap = format!("{at_cap}, 10.0.99.5");
+        assert!(
+            over_cap.parse::<Remotes>().is_err(),
+            "one element past the cap is refused: {over_cap}",
+        );
+    }
+
+    /// The list contains an address whenever any of its elements does, and the families it is
+    /// written in are the distinct families of its elements: one family for a normal list, two
+    /// only for a list that really names both stacks.
+    #[test]
+    fn an_address_field_contains_any_of_its_elements() {
+        let list = "10.0.0.0/24, 192.168.1.0/24"
+            .parse::<Remotes>()
+            .expect("parse a list of networks");
+
+        assert!(list.contains("10.0.0.7".parse().expect("parse an address")));
+        assert!(list.contains("192.168.1.7".parse().expect("parse an address")));
+        assert!(!list.contains("172.16.0.7".parse().expect("parse an address")));
+        assert_eq!(list.families(), vec![Family::V4]);
+
+        let mixed = "10.0.0.0/24, 2001:db8::/32"
+            .parse::<Remotes>()
+            .expect("parse a list of both families");
+
+        assert_eq!(mixed.families(), vec![Family::V4, Family::V6]);
+    }
+
+    /// A list survives a write and a read of the rules file, and a file written before lists
+    /// existed reads back as a list of one element, which is what keeps an old file unchanged
+    /// when the tool writes it again.
+    #[test]
+    fn an_address_field_survives_a_round_trip() {
+        let dir = crate::testutil::scratch_dir("address-round-trip");
+        let path = dir.join("rules.toml");
+
+        let written = RuleFile {
+            rule: vec![Rule {
+                remote: Some("10.0.0.5, 192.168.1.0/24".parse().expect("parse a list")),
+                local: Some("fe80::/10".parse().expect("parse a single")),
+                ..Rule::plain("address round trip", Action::Allow, "C:\\test\\tool1.exe")
+            }],
+        };
+
+        written.save(&path).expect("write the rules file");
+
+        let text = std::fs::read_to_string(&path).expect("read the rules file");
+
+        assert!(
+            text.contains("remote = \"10.0.0.5, 192.168.1.0/24\""),
+            "the list is written as the text it was read from: {text}",
+        );
+
+        let read = RuleFile::load_or_create(&path).expect("read the rules file back");
+
+        assert_eq!(read, written, "a list comes back as the same list");
+
+        // The single value of a file from before lists is the same one-element rule.
+        let old = text.replace(
+            "remote = \"10.0.0.5, 192.168.1.0/24\"",
+            "remote = \"10.0.0.5\"",
+        );
+
+        std::fs::write(&path, old).expect("write an old file");
+
+        let read = RuleFile::load_or_create(&path).expect("read the old file");
+
+        assert_eq!(
+            read.rule[0]
+                .remote
+                .as_ref()
+                .expect("the field is read")
+                .elements()
+                .len(),
+            1,
+            "a single address is a list of one",
         );
     }
 
