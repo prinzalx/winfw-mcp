@@ -60,23 +60,11 @@ linked. The release process, including how a patch on an ignored file is release
 
 ## Status
 
-The tool owns its data directory, reads its config and rules, reads the live WFP store, translates
-`rules.toml` into persistent WFP filters with deny ranked above allow, and serves a web UI that
-edits those rules. It follows live connections over SSE — only the ones that leave the machine —
-and learning mode collects every application no rule speaks about yet in a Detected list, where each
-entry can be allowed, denied or dismissed from the browser. In a release build it runs without a
-console window and lives as a tray icon. Any area can be copied into `export\` on demand, one rule
-travels as a Base64 string, and an MCP agent talks JSON-RPC to `POST /mcp`. Rules are organised
-into named profiles, and protection can be paused from the page or from the tray menu.
-
-A rule matches one application path or a list of them with `*` and `?`, a remote address, network,
-range or list, a
-local address, a port or list of ports, a protocol number, and a direction. `default_policy` is
-`deny`, so an application no ALLOW rule mentions does not connect.
+**1.0.0** — portable single executable, local web UI, tray icon, WFP enforcement, read-only MCP.
 
 The MCP endpoint reads only, on purpose: an agent that could write a rule could open its own gate,
 and that is the one thing a firewall in front of an agent should not allow.
 
-Every release since **0.1.0** is listed with what changed in the
-[changelog](CHANGELOG.md). What is known to be missing or fragile is kept in a working backlog that
-is not published here, because an open point in a firewall is a finding a reader could work with.
+Every release is listed with what changed in the [changelog](CHANGELOG.md). What is known to be
+missing or fragile is kept in a working backlog that is not published here, because an open point
+in a firewall is a finding a reader could work with.

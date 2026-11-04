@@ -34,32 +34,32 @@
          the system, which is the opposite of storing it. */
       @media (prefers-color-scheme: dark) {
         :root:not([data-theme="light"]) {
-          --bg: #14171a;
-          --fg: #e6eaef;
-          --muted: #9aa4af;
-          --line: #2c3238;
-          --field: #1a1e22;
-          --accent: #6ab0ff;
-          --ok: #4ec97e;
-          --warn: #e0b455;
-          --bad: #ff6b6b;
-          --band: #2a2115;
-          --band-line: #6b5326;
+          --bg: #242a31;
+          --fg: #eef2f6;
+          --muted: #a8b2bd;
+          --line: #454e58;
+          --field: #2d343c;
+          --accent: #7cc0ff;
+          --ok: #5fd98f;
+          --warn: #ecc35f;
+          --bad: #ff8080;
+          --band: #3a2e1c;
+          --band-line: #7d6230;
         }
       }
 
       :root[data-theme="dark"] {
-        --bg: #14171a;
-        --fg: #e6eaef;
-        --muted: #9aa4af;
-        --line: #2c3238;
-        --field: #1a1e22;
-        --accent: #6ab0ff;
-        --ok: #4ec97e;
-        --warn: #e0b455;
-        --bad: #ff6b6b;
-        --band: #2a2115;
-        --band-line: #6b5326;
+        --bg: #242a31;
+        --fg: #eef2f6;
+        --muted: #a8b2bd;
+        --line: #454e58;
+        --field: #2d343c;
+        --accent: #7cc0ff;
+        --ok: #5fd98f;
+        --warn: #ecc35f;
+        --bad: #ff8080;
+        --band: #3a2e1c;
+        --band-line: #7d6230;
       }
 
       * {
@@ -461,6 +461,20 @@
         font-family: ui-monospace, Consolas, monospace;
       }
 
+      /* Fixed column widths: with eleven columns and no widths, a fixed layout spends the same
+         room on "udp" as on a path, and every wide field is cut in half. */
+      table.rules th:nth-child(1) { width: 11%; }
+      table.rules th:nth-child(2) { width: 6%; }
+      table.rules th:nth-child(3) { width: 24%; }
+      table.rules th:nth-child(4) { width: 5%; }
+      table.rules th:nth-child(5) { width: 6%; }
+      table.rules th:nth-child(6) { width: 9%; }
+      table.rules th:nth-child(7) { width: 11%; }
+      table.rules th:nth-child(8) { width: 9%; }
+      table.rules th:nth-child(9) { width: 10%; }
+      table.rules th:nth-child(10) { width: 4%; }
+      table.rules th:nth-child(11) { width: 11%; }
+
       /* The truncation badge sits under the pattern, so it gets its own line rather than eating
          into the ellipsis the path is already fighting for. */
       table.rules td.mono .tag {
@@ -565,6 +579,19 @@
         color: var(--muted);
         flex: 0 0 6.5rem;
         font-size: 0.82rem;
+      }
+
+      /* The choices carry words ("any direction", "udp"), and a select that clips its own
+         selected text hides the very information the field is for. */
+      dialog .field select {
+        flex: 1;
+        min-width: 16ch;
+        width: auto;
+      }
+
+      dialog .field input[type="text"] {
+        flex: 1;
+        min-width: 0;
       }
 
       dialog .actions {
@@ -1080,10 +1107,19 @@
         el("rule-dialog").showModal();
       }
 
-      el("rule-cancel").addEventListener("click", () => el("rule-dialog").close());
+      el("rule-cancel").addEventListener("click", () => {
+        if (pendingAdd) {
+          pendingAdd = false;
+          rules.pop();
+          renderRules();
+        }
+        el("rule-dialog").close();
+      });
 
       el("rule-save").addEventListener("click", () => {
         const rule = rules[editingRule];
+
+        pendingAdd = false;
 
         if (!rule) {
           el("rule-dialog").close();
@@ -1238,11 +1274,7 @@
           edit.title = "name, action, program and the narrowing fields";
           edit.addEventListener("click", () => openRuleDialog(index));
 
-          // The Base64 form is for copy and paste, so it goes into the line under the table and
-          // into the clipboard, whichever of the two the user reaches for.
-          const share = element("button", "ghost", "share");
 
-          share.addEventListener("click", () => shareRule(index));
 
           const remove = element("button", "danger", "remove");
 
@@ -1251,7 +1283,6 @@
             save();
           });
           ops.appendChild(edit);
-          ops.appendChild(share);
           ops.appendChild(remove);
           row.appendChild(order);
           row.appendChild(ops);
@@ -1447,15 +1478,6 @@
         return at === -1 ? path : path.slice(at + 1);
       }
 
-      // An endpoint is shown as address:port. An event that names no address still has a port
-      // worth showing, and an event that names neither has nothing to say about that end.
-      function endpoint(addr, port) {
-        if (addr) {
-          return addr + ":" + port;
-        }
-
-        return port ? "port " + port : "";
-      }
 
       // The events carry the IP protocol number. Name the two that matter and fall back to the
       // number for everything else, which is what WFP handed us.
@@ -1972,11 +1994,17 @@
         }
       }
 
+      // Adding a rule opens the same dialog as editing one: the point of adding is to name the
+      // rule and its pattern, so the dialog is not bypassed with a prefilled row. Cancel takes
+      // the fresh row out again, which is what `pendingAdd` remembers.
+      let pendingAdd = false;
+
       el("add").addEventListener("click", () => {
+        pendingAdd = true;
         rules.push({
-          name: "new rule",
+          name: "",
           action: "allow",
-          pattern: "C:\\Program Files\\*",
+          pattern: "",
           enabled: true,
           protocol: null,
           direction: null,
@@ -1984,7 +2012,7 @@
           remote: null,
           local: null,
         });
-        save();
+        openRuleDialog(rules.length - 1);
       });
 
       el("apply").addEventListener("click", save);
@@ -2074,7 +2102,7 @@
       // section asks before running it. The other way out — stop and leave the rules in the
       // firewall — is `/api/shutdown`, and a script can still call it.
       el("quit").addEventListener("click", async () => {
-        if (!confirm("Stop winfw-mcp and take its filters out of the firewall?")) {
+        if (!confirm("Quit and drop the rules?\n\nwinfw-mcp stops and its filters leave the firewall with it, so every program may reach the network again until the tool starts next time.")) {
           return;
         }
 

@@ -1,6 +1,6 @@
 [package]
 name = "winfw-mcp"
-version = "0.78.0"
+version = "1.0.0"
 edition = "2024"
 description = "Portable, web-driven Windows Firewall (WFP) controller with an MCP interface"
 license = "MIT"

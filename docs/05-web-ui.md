@@ -67,9 +67,16 @@ top, one row per program:
   that decided the rest;
 - **Allow** and **Deny** on the right, which turn the program into a rule at once.
 
-A row expands to the destinations behind it: address and port, the local end, the protocol
-(`tcp`, `udp`, or the number WFP reported for anything else), the verdict with the rule it blamed,
-and the time, in a monospace table with aligned columns.
+A row expands to the destinations behind it, newest first, in a monospace table: the destination
+address and the port are editable fields prefilled from what the firewall saw, followed by the
+protocol (`tcp`, `udp`, or the number WFP reported for anything else), the verdict with the rule it
+blamed in red or green, the time, and a pair of **Allow**/**Deny** buttons of their own. A decision
+written from such a row names exactly that target on exactly that port — the least privilege a
+single connection allows — while **Allow**/**Deny** on the program row above still covers the whole
+program. The target field takes an address, a network or a span — the same values the Remote field of the
+rule dialog takes — and names a rule wants belong to the Destination field of the dialog, where a
+later edit can widen `93.184.216.34` to `*.example.com`. `*` in either field means any, which is
+the same thing as leaving the field out of the rule.
 
 The account is what the firewall reported for the connection, resolved from the security identifier
 of the event. It is read from the event rather than from the running process, so a program that has
