@@ -934,6 +934,9 @@ impl<'de> Deserialize<'de> for Ports {
 
 /// A port, or an inclusive range of them, written `443` or `1024-2048`.
 ///
+/// Zero is not a port. WFP reserves it for "no port", so a rule that named it would never match a
+/// connection; refusing it here is what keeps a typo out of the store.
+///
 /// It is a string in the file and in JSON rather than a number, because a range has no number form
 /// and because a port is read as text far more often than it is computed with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -979,6 +982,10 @@ impl std::str::FromStr for PortRange {
 
         if lo > hi {
             return Err(format!("port range '{text}' runs backwards"));
+        }
+
+        if lo == 0 || hi == 0 {
+            return Err(format!("port '{text}' is not a port"));
         }
 
         Ok(Self { lo, hi })
@@ -1885,6 +1892,18 @@ mod tests {
         );
         assert!("70000".parse::<PortRange>().is_err(), "past a u16");
         assert!("1024-".parse::<PortRange>().is_err(), "no upper end");
+        assert!(
+            "0".parse::<PortRange>().is_err(),
+            "zero is what WFP uses for no port"
+        );
+        assert!(
+            "0-80".parse::<PortRange>().is_err(),
+            "a range does not start at zero either"
+        );
+        assert!(
+            "80-0".parse::<PortRange>().is_err(),
+            "nor ends at it, whatever the order"
+        );
     }
 
     /// A prefix is read in both families, a bare address is one host, and the host bits of a
