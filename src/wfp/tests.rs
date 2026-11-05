@@ -709,7 +709,7 @@ fn a_default_handle_counts_as_invalid() {
 /// the engine that is decided by filter weight rather than by rule order.
 #[test]
 fn a_deny_rule_outranks_an_allow_rule() {
-    assert!(WEIGHT_DENY > WEIGHT_ALLOW);
+    const _: () = assert!(WEIGHT_DENY > WEIGHT_ALLOW);
 }
 
 /// The retry loop is the whole of the boot-time policy, so it is tested without an engine:

@@ -251,9 +251,7 @@ mod tests {
 
     #[test]
     fn a_wrong_protocol_version_is_refused() {
-        let error = parse(br#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#)
-            .err()
-            .expect("refused");
+        let error = parse(br#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#).expect_err("refused");
 
         assert_eq!(error.error.expect("error").code, INVALID_REQUEST);
         assert_eq!(error.id, Some(serde_json::json!(1)));

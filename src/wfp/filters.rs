@@ -433,21 +433,23 @@ impl Engine {
         let owner = wide(APP_NAME);
         let label = wide(name);
 
-        let mut filter = FWPM_FILTER0::default();
-        filter.filterKey = filter_key(key, &layer);
-        filter.displayData = FWPM_DISPLAY_DATA0 {
-            name: PWSTR(owner.as_ptr() as *mut _),
-            description: PWSTR(label.as_ptr() as *mut _),
+        let mut filter = FWPM_FILTER0 {
+            filterKey: filter_key(key, &layer),
+            displayData: FWPM_DISPLAY_DATA0 {
+                name: PWSTR(owner.as_ptr() as *mut _),
+                description: PWSTR(label.as_ptr() as *mut _),
+            },
+            flags,
+            providerKey: &mut provider_key,
+            layerKey: layer,
+            subLayerKey: SUBLAYER_KEY,
+            weight: FWP_VALUE0 {
+                r#type: FWP_UINT8,
+                Anonymous: FWP_VALUE0_0 { uint8: weight },
+            },
+            numFilterConditions: conditions.len() as u32,
+            ..Default::default()
         };
-        filter.flags = flags;
-        filter.providerKey = &mut provider_key;
-        filter.layerKey = layer;
-        filter.subLayerKey = SUBLAYER_KEY;
-        filter.weight = FWP_VALUE0 {
-            r#type: FWP_UINT8,
-            Anonymous: FWP_VALUE0_0 { uint8: weight },
-        };
-        filter.numFilterConditions = conditions.len() as u32;
 
         if !conditions.is_empty() {
             filter.filterCondition = conditions.as_ptr() as *mut FWPM_FILTER_CONDITION0;

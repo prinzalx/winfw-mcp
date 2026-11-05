@@ -29,7 +29,9 @@ pub fn reverse(ip: std::net::IpAddr) -> Option<String> {
 
     static CACHE: Mutex<Option<HashMap<std::net::IpAddr, Option<String>>>> = Mutex::new(None);
 
-    let mut guard = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let cache = guard.get_or_insert_with(HashMap::new);
 
     if let Some(name) = cache.get(&ip) {
@@ -47,8 +49,8 @@ pub fn reverse(ip: std::net::IpAddr) -> Option<String> {
 #[cfg(windows)]
 fn reverse_lookup(ip: std::net::IpAddr) -> Option<String> {
     use windows::Win32::Networking::WinSock::{
-        getnameinfo, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6, WSADATA, WSAStartup, AF_INET, AF_INET6,
-        IN6_ADDR, IN6_ADDR_0, IN_ADDR, IN_ADDR_0, NI_NAMEREQD, socklen_t,
+        AF_INET, AF_INET6, IN_ADDR, IN_ADDR_0, IN6_ADDR, IN6_ADDR_0, NI_NAMEREQD, SOCKADDR,
+        SOCKADDR_IN, SOCKADDR_IN6, WSADATA, WSAStartup, getnameinfo, socklen_t,
     };
 
     // Winsock wants to be introduced once per process; the WFP code does not need it, this does.
@@ -112,14 +114,13 @@ fn reverse_lookup(ip: std::net::IpAddr) -> Option<String> {
         return None;
     }
 
-    let end = buffer.iter().position(|byte| *byte == 0).unwrap_or(buffer.len());
+    let end = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
     let name = String::from_utf8_lossy(&buffer[..end]).into_owned();
 
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
+    if name.is_empty() { None } else { Some(name) }
 }
 
 /// Off Windows there is no winsock to ask, and the tool does not run anywhere else.
