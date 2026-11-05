@@ -44,6 +44,10 @@ permission: a tool that can write can hand itself a firewall rule, and a firewal
 out to the network. An agent that runs a program which reaches the internet could therefore open
 its own gate, which is not a question about the firewall but a change to it.
 
+Reinstating them is not on the backlog: a firewall whose agent can lift its own block is not
+sandboxed by the firewall, only advised by it, and the tool exists to stop an agent reaching the
+network in the first place.
+
 A client that calls one of the removed tools hears `-32601` (`METHOD_NOT_FOUND`), the same answer
 it would get for a name that never existed. What the endpoint cannot do is the protocol's business,
 not a policy decision, so it is not reported as a tool that ran and declined.
