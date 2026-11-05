@@ -1954,7 +1954,7 @@
       // its own, which the settings page already has.
       el("chip-protection").addEventListener("click", async () => {
         try {
-          apply(await request("POST", "/api/settings", { protection: !protection }));
+          apply(await request("POST", "/api/protection", {}));
         } catch (error) {
           status("could not change protection: " + error.message);
         }
@@ -1962,7 +1962,7 @@
 
       el("chip-learning").addEventListener("click", async () => {
         try {
-          apply(await request("POST", "/api/settings", { learning: !learnMode }));
+          apply(await request("POST", "/api/settings", { learn_mode: !learnMode }));
         } catch (error) {
           status("could not change learning: " + error.message);
         }
