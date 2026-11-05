@@ -1968,8 +1968,17 @@
         }
       });
 
-      el("chip-policy").addEventListener("click", () => {
-        showTab("settings");
+      // The chip is a toggle like its two neighbours, not a link into the settings: the
+      // sentence on the setting itself explains what a flip means, the click does the flip.
+      el("chip-policy").addEventListener("click", async () => {
+        const next = defaultPolicy === "deny" ? "allow" : "deny";
+
+        try {
+          apply(await request("POST", "/api/settings", { default_policy: next }));
+          status("default policy is " + next);
+        } catch (error) {
+          status("could not change the default policy: " + error.message);
+        }
       });
 
       // F5 loses the token that lives only in this page's memory, and with it the right to
