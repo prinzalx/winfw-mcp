@@ -63,7 +63,7 @@ linked. The release process, including how a patch on an ignored file is release
 
 ## Status
 
-**1.3.4** — portable single executable, local web UI, tray icon, WFP enforcement, read-only MCP.
+**1.3.5** — portable single executable, local web UI, tray icon, WFP enforcement, read-only MCP.
 
 The MCP endpoint reads only, on purpose: an agent that could write a rule could open its own gate,
 and that is the one thing a firewall in front of an agent should not allow.
