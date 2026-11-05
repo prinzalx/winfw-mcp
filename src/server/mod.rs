@@ -18,6 +18,7 @@
 //! | GET | `/favicon.ico` | the tab icon, from the same file the executable's resources use |
 //! | GET | `/api/state` | settings, rules, store summary, recent events |
 //! | GET | `/api/events` | the event log as a server-sent event stream |
+//! | GET | `/api/reverse?ip=<address>` | the name the reverse lookup answers for one address, cached for the life of the process |
 //! | GET | `/api/health` | liveness, no state involved |
 //! | GET | `/api/profiles` | the active profile and the names of the stored profiles |
 //! | POST | `/api/settings` | write learn mode, the default policy, the theme or the log level to `config.toml` |

@@ -644,7 +644,7 @@
         title="this tab has no session token, so it reads but does not write"
         hidden
       >
-        Read only &middot; open the page from the tray icon to make changes
+        Read only &middot; this tab lost its session token - a reload, a bookmark or a window from an earlier run - open the page from the tray icon to make changes
       </div>
 
       <div id="banner"></div>
@@ -1018,41 +1018,6 @@
         } else {
           delete document.documentElement.dataset.theme;
         }
-      }
-
-      /* What the rebuild at startup found, next to the store's own report. It is only said once per
-         load and only when the two counts differ: a first run had an empty store, and an unchanged
-         restart has nothing to report. */
-      function renderStartup(startup) {
-        if (!startup || !startup.measured || !startup.differs) {
-          return;
-        }
-
-        var text =
-          "At startup the store held " +
-          startup.removed +
-          " filters and the rules describe " +
-          startup.installed +
-          ".";
-
-        /* Names as far as the store can tell: a rule that only lost a port looks unchanged here.
-           The counts alone could not tell a restarted tool from a reconfigured one. */
-        var named = [];
-
-        if (startup.added && startup.added.length) {
-          named.push("added " + startup.added.join(", "));
-        }
-        if (startup.changed && startup.changed.length) {
-          named.push("changed " + startup.changed.join(", "));
-        }
-        if (startup.gone && startup.gone.length) {
-          named.push("removed " + startup.gone.join(", "));
-        }
-        if (named.length) {
-          text += " While it was closed: " + named.join("; ") + ".";
-        }
-
-        el("banner").appendChild(element("p", "sub", text));
       }
 
       /* `rules.toml` is not ours any more: someone edited it, restored a backup, or the tool did not
@@ -1756,6 +1721,51 @@
       // The target rows of one program, keyed by what never changes about a connection: the
       // peer, its port, the protocol and the moment the firewall saw it. New rows join in the
       // newest-first order, existing rows are only relocated, gone rows are dropped.
+      /* Reverse lookup names the address behind a target. It is display text under a value the
+         person already has, so it is asked once per address per tab and a late answer only fills
+         the spans that waited for it - the rows themselves are nobody's business but theirs. */
+      const reverseNames = new Map();
+      const reverseWaits = new Map();
+
+      function askReverse(ip, span) {
+        if (!ip) {
+          return;
+        }
+
+        const known = reverseNames.get(ip);
+
+        if (known !== undefined) {
+          span.textContent = known || "";
+          return;
+        }
+
+        let waits = reverseWaits.get(ip);
+
+        if (!waits) {
+          waits = [];
+          reverseWaits.set(ip, waits);
+
+          fetch("/api/reverse?ip=" + encodeURIComponent(ip))
+            .then((reply) => (reply.ok ? reply.json() : { name: null }))
+            .then((answer) => {
+              reverseNames.set(ip, answer.name || null);
+            })
+            .catch(() => {
+              reverseNames.set(ip, null);
+            })
+            .finally(() => {
+              const name = reverseNames.get(ip) || "";
+
+              waits.forEach((waiting) => {
+                waiting.textContent = name;
+              });
+              reverseWaits.delete(ip);
+            });
+        }
+
+        waits.push(span);
+      }
+
       function renderTargets(row, group) {
         const keys = group.targets.map((event) =>
           [event.remote_addr, event.remote_port, event.protocol, event.time_ms].join("|"),
@@ -1810,7 +1820,14 @@
 
         target.value = event.remote_addr || "*";
         target.title = "destination of the rule: address, *.domain or * for any";
-        tr.appendChild(element("td", null)).appendChild(target);
+
+        const targetCell = element("td");
+        const nameSpan = element("span", "sub");
+
+        targetCell.appendChild(target);
+        targetCell.appendChild(nameSpan);
+        askReverse(event.remote_addr, nameSpan);
+        tr.appendChild(targetCell);
 
         const port = element("input", null);
 
@@ -2016,7 +2033,6 @@
         renderRules();
         renderDetected();
         renderBanner(state.store);
-        renderStartup(state.startup);
         renderRulesChanged(state.rules_changed);
 
         // The state carries the newest events first, so the panel needs no second request.

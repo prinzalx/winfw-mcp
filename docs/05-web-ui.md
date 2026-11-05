@@ -42,14 +42,15 @@ The page is one column, at most about 1400 pixels wide and centred. Reading it t
     in the chip's tooltip: under `deny`, loopback and the IPv6 base functions stay reachable; under
     `allow`, programs without a rule go out and only appear in the Detected list.
   - **learning** says whether new applications are collected.
-- **Read only band**, shown only on a tab that has no session token: *Read only · open the page from
-  the tray icon to make changes*. It is a band rather than a word in the header because a person who
-  cannot click anything needs to see why before the first click, not after it.
-- **Banner**, only when there is something the store wants the person to know: a refused store, what
-  the rebuild at startup found, or a `rules.toml` that is not the file the tool itself wrote. While
-  the store answers, its report — providers, sublayers and filters counted — sits in the small print
-  of the footer instead, next to the note that a reload of the tab loses its write token. Details
-  under [Banners](#banners).
+- **Read only band**, shown only on a tab that has no session token. It names the ways a token goes
+  missing — a reload, a bookmark, a window left over from an earlier run — and says what to do:
+  open the page from the tray icon. It is a band rather than a word in the header because a person
+  who cannot click anything needs to see why before the first click, not after it.
+- **Banner**, only when there is something the store wants the person to know: a refused store or a
+  `rules.toml` that is not the file the tool itself wrote. What the rebuild at startup found is no
+  longer shown: the owner read it every day and it changed nothing, so since 1.3.1 it stays in the
+  log. While the store answers, its report — providers, sublayers and filters counted — sits in the
+  small print of the footer instead. Details under [Banners](#banners).
 - **Tabs**: Connections, Rules, Detected, Settings. The Detected tab carries a badge with the number
   of open entries. The state answer carries the whole list — as many entries as the Detected list
   can hold, which is 100 — so a question counted on the badge is never missing from the tab. The
@@ -185,13 +186,12 @@ gone, because the tooltips on the controls and this handbook say the same.
 ### Banners
 
 The banner is what the store reported. A refused store is shown with its reason rather than as an
-empty list. Under it, what the rebuild at startup found: a line naming the filters the store held and
-the filters the rules describe, followed by the rules the file gained, flipped or lost while the tool
-was closed, shown only when there is a difference to report. An unchanged restart says nothing, and a
-refused store needs no second notice because the banner above already names it. A third notice appears
-when `rules.toml` on disk is not the file the tool itself wrote: someone edited it, restored a backup
-over it, or deleted it, and the rules the page shows are the ones in memory rather than the ones in the
-file. Saving a rule makes the file ours again and the notice goes away.
+empty list. A notice appears when `rules.toml` on disk is not the file the tool itself wrote:
+someone edited it, restored a backup over it, or deleted it, and the rules the page shows are the
+ones in memory rather than the ones in the file. Saving a rule makes the file ours again and the
+notice goes away. What the rebuild at startup found — the filters the store held, the rules the file
+gained, flipped or lost while the tool was closed — is logged since 1.3.1 rather than shown, because
+the owner read the line every day and it changed nothing.
 
 ## Connections worth showing
 
@@ -216,6 +216,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 |---|---|
 | `GET /` | the page itself |
 | `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, how often the rules file has been written, whether the process is elevated, whether `rules.toml` changed outside the tool, and the rules whose wildcard pattern the cap cut |
+| `GET /api/reverse?ip=<address>` | the name the reverse lookup answers for one address, `null` when nothing answers; a read, so no token, and the answer is cached for the life of the process |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |
 | `POST /api/settings` | change `learn_mode`, `default_policy`, `theme` or `log_level` at runtime; all four take effect at once |
