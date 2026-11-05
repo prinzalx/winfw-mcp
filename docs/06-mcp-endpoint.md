@@ -9,6 +9,10 @@ tool name may be used as the method directly, which is the shortest form an agen
 Only the part of the protocol a client actually sends on a stateless HTTP transport is modelled. A
 client that asks for anything else is told so rather than silently ignored.
 
+An agent that lands here without the handbook gets the same message in one page: [SKILL.md](../SKILL.md)
+lists the reading tools, names what only the browser may write, and states what the HTTP guards
+expect - the chapter you are reading is the longer version of it.
+
 ## Tools
 
 Six tools, and every one of them reads.

@@ -51,8 +51,11 @@ The documentation is split into chapters, so that each question has one place to
 | [9. Development](docs/09-development.md) | source layout, tests, the release process |
 | [10. Security model](docs/10-security-model.md) | the session token, Host and Origin checks, what is protected, what an agent can see and what is not |
 
-Working documents next to this index: [CHANGELOG.md](CHANGELOG.md) is the release-by-release history
-and [SECURITY_REVIEW.md](SECURITY_REVIEW.md) the brief for an outside review of the request path.
+Working documents next to this index: [CHANGELOG.md](CHANGELOG.md) is the release-by-release history,
+[SECURITY_REVIEW.md](SECURITY_REVIEW.md) the brief for an outside review of the request path, and
+[SKILL.md](SKILL.md) the one-page introduction for an AI agent that meets this firewall for the
+first time - what the MCP endpoint may read, what only the browser may write, and what the
+HTTP guards expect from a request.
 The plan that started the tool, the diary of the release rounds that produced it and the list of
 open points are working files kept off this repository, so they are named in prose rather than
 linked. The release process, including how a patch on an ignored file is released, is in

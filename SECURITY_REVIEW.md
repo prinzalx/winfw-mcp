@@ -2,7 +2,7 @@
 
 A brief for a reviewer who has not seen the code. It describes the process, the request path and
 the questions; it does not describe the answer. Written in English, because the repository is
-English throughout. Current as of 0.77.8.
+English throughout. Current as of 1.3.1.
 
 ## What runs
 
@@ -100,6 +100,22 @@ file and line as evidence.
 7. Is anything the model relies on *not* in the guard? (The `deny`-outranks-`allow` rule is a WFP
    semantic, not a transport check; it is documented separately.)
 
+## Findings of the 1.3.1 pass
+
+Checked by reading the code and the request path, not by an attack exercise.
+
+- **No new way in.** The guard still sits between the socket and every route, and the reading
+  tools of `/mcp` are unchanged; nothing since 0.77.8 moved work in front of the guard.
+- **`GET /api/reverse` (1.3.1) is a reading route in the intended sense.** It passes the `Host`
+  check, needs no token, parses its `?ip=` strictly as an address, and answers from a cache;
+  it writes neither a file nor the store. A cold lookup calls `getnameinfo`, which can block -
+  on its own connection thread only, because every connection is served by a thread of its own,
+  so a slow reverse lookup cannot stall the server for anybody else. The cache holds one entry
+  per address asked over the life of the process; on this machine that grows with browsing,
+  not with traffic. Accepted.
+- **Question 3 is still open on purpose:** the `Host` check does not compare the port. A request
+  addressed to a different local port on the same socket answers anyway. No action taken.
+
 ## Evidence
 
 - `src/server/guard.rs` — the guard, the Host/Origin helpers, the token maker, eight tests.
@@ -108,5 +124,8 @@ file and line as evidence.
   write is reachable under `/mcp`.
 - `docs/10-security-model.md` — the chapter that mirrors this brief, including the limits of
   default deny.
+- `src/server/routes.rs` (`get_reverse`) and `src/dns.rs` — the reverse lookup of 1.3.1; a read,
+  cached per process, answered on the connection's own thread.
+- [SKILL.md](SKILL.md) — the one-page introduction an outside agent reads before this brief.
 - `CHANGELOG.md` rows 0.36.0, 0.37.0, 0.58.0 and 0.61.0 — the read-only endpoint, the dropped
   loopback traffic, the token out of the state body, and default deny as the default.
