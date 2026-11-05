@@ -18,6 +18,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # The style checks run first, because a formatting or lint complaint is the cheapest
+      # answer a push can get. -D warnings makes a new clippy warning fail the run instead of
+      # scrolling past in a green log; the code is clean under it, so nothing had to be silenced
+      # to get here.
+      - run: cargo fmt --check
+
+      - run: cargo clippy --all-targets -- -D warnings
+
       - run: cargo build --all-targets
 
       # --nocapture so the log shows whether the store was read or the run was skipped, and
