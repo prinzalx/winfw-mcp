@@ -71,3 +71,12 @@ and that is the one thing a firewall in front of an agent should not allow.
 Every release is listed with what changed in the [changelog](CHANGELOG.md). What is known to be
 missing or fragile is kept in a working backlog that is not published here, because an open point
 in a firewall is a finding a reader could work with.
+
+## License
+
+**AGPL-3.0-only** — the full text is in [LICENSE](LICENSE). Copyright (C) 2026 prinzalx.
+
+Everyone may use the tool. A firm may sell it, but not closed: anything distributed that is built
+on this source carries the whole source with it under the same license, the notices of this
+original stay in, and every improvement a fork makes is open to everyone the same way. A company
+cannot turn it into a proprietary product and nothing else.

@@ -3,7 +3,8 @@ name = "winfw-mcp"
 version = "1.3.4"
 edition = "2024"
 description = "Portable, web-driven Windows Firewall (WFP) controller with an MCP interface"
-license = "MIT"
+license = "AGPL-3.0-only"
+authors = ["prinzalx"]
 publish = false
 rust-version = "1.88"
 
