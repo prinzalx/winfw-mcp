@@ -1287,3 +1287,36 @@ fn a_file_without_a_checksum_is_read_and_reported() {
         "a missing checksum is reported, not passed over: {checksum:?}"
     );
 }
+
+/// The service field reads one name and a list, and writes itself back in the shape the file
+/// taught the other list fields.
+#[test]
+fn services_read_one_name_and_a_list() {
+    let one: Services = "Dnscache".parse().expect("one name");
+
+    assert_eq!(one.names(), ["Dnscache"]);
+
+    let list: Services = "Dnscache, Dhcp".parse().expect("a list");
+
+    assert_eq!(list.names(), ["Dnscache", "Dhcp"]);
+    assert_eq!(list.to_string(), "Dnscache, Dhcp");
+}
+
+#[test]
+fn services_refuse_an_empty_field_and_a_name_that_cannot_be_one() {
+    let empty = "  ".parse::<Services>().expect_err("blanks are no service");
+
+    assert_eq!(empty, "a rule needs a service");
+
+    let element = "Dnscache,"
+        .parse::<Services>()
+        .expect_err("a dangling comma");
+
+    assert!(element.contains("empty element"), "{element}");
+
+    let chars = "Dnscac he"
+        .parse::<Services>()
+        .expect_err("a space is not a name");
+
+    assert!(chars.contains("is not a service name"), "{chars}");
+}

@@ -271,6 +271,7 @@ fn one(item: &Item, import: &mut Import) {
                 Action::Allow
             },
             pattern: app.into(),
+            service: None,
             enabled: is_true(&item.is_enabled),
             temporary: false,
             protocol,

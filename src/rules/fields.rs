@@ -1,8 +1,8 @@
 //! The list fields of a rule, read as one shape.
 //!
-//! Four fields of a rule hold a list of strings that name something outside the program itself:
-//! `Remotes`, `Dests`, `Patterns` and `Ports`. They are read by one code path on purpose, so the
-//! bounds of a list cannot be checked in one place and forgotten in another.
+//! Five fields of a rule hold a list of strings that name something outside the program itself:
+//! `Remotes`, `Dests`, `Patterns`, `Ports` and `Services`. They are read by one code path on
+//! purpose, so the bounds of a list cannot be checked in one place and forgotten in another.
 
 use serde::{Deserialize, Serialize};
 
@@ -72,8 +72,8 @@ impl From<Remote> for Remotes {
     }
 }
 
-/// The shared parts of the four list fields a rule carries: `remote`, `dest`, `pattern` and
-/// `port`.
+/// The shared parts of the five list fields a rule carries: `remote`, `dest`, `pattern`,
+/// `port` and `service`.
 ///
 /// Every one of them is a comma-separated field that is written back joined by `", "`, refuses an
 /// empty element, and is capped at [`MAX_WILDCARD_MATCHES`] elements because each element can
@@ -88,6 +88,7 @@ impl From<Remote> for Remotes {
 /// | `dest` | `name` | `names` | — (an empty element refuses it first) |
 /// | `pattern` | `pattern` | `applications` | `a rule needs a pattern` |
 /// | `port` | `port` | `ports` | `port '{text}' is not a port` |
+/// | `service` | `service` | `services` | `a rule needs a service` |
 ///
 /// The words one list field writes its refusals with.
 struct FieldWords {
@@ -341,6 +342,62 @@ impl PartialEq<&str> for Patterns {
     }
 }
 
+/// The service field of a rule: one service name, or a comma-separated list of them such as
+/// `Dnscache, Dhcp`.
+///
+/// A service is not a program but a person: every service owns a per-service SID, and the
+/// connection of a hosted service reports that SID in its token to WFP. A rule for
+/// `svchost.exe` that names `Dnscache` therefore means the DNS queries, not the dozen services
+/// that live in the same program. Absent means the whole program, as rules did before the
+/// field existed.
+///
+/// Names are kept as written: the service control manager reads them without regard to case,
+/// and the file is a document a person wrote rather than a lookup table. The list is capped at
+/// [`MAX_WILDCARD_MATCHES`] elements like its siblings, although the filters this field costs
+/// are not per element: every element joins the one security descriptor the rule's filters
+/// carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Services(Vec<String>);
+
+impl Services {
+    /// The service names of the field, in the order they were written.
+    pub fn names(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// Whether the text is a service name: letters, digits and `.`, `-`, `_`, `$`, at most 256
+/// characters, and no wildcard — a name names, it does not ask.
+fn is_service_name(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 256
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '$'))
+}
+
+impl std::str::FromStr for Services {
+    type Err = ParseError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Ok(Self(read_field(
+            text,
+            &FieldWords {
+                list: "service",
+                unit: "services",
+            },
+            Some("a rule needs a service"),
+            |part| {
+                if !is_service_name(part) {
+                    return Err(format!("'{part}' is not a service name"));
+                }
+
+                Ok(part.to_owned())
+            },
+        )?))
+    }
+}
+
 /// The port field of a rule: one port, one inclusive range, or a comma-separated list of
 /// them such as `80, 443, 8080-8090`.
 ///
@@ -415,6 +472,7 @@ list_field!(Remotes);
 list_field!(Dests);
 list_field!(Patterns);
 list_field!(Ports);
+list_field!(Services);
 
 /// A port, or an inclusive range of them, written `443` or `1024-2048`.
 ///

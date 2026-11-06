@@ -21,10 +21,13 @@ struct FilterValues<'a> {
     remote_ranges: Vec<Option<FWP_RANGE0>>,
     local_values: Vec<AddrValue>,
     local_ranges: Vec<Option<FWP_RANGE0>>,
+    /// The descriptor of the service field, which the user condition of every filter of the
+    /// rule points into. `None` is a rule that names no service.
+    service_sd: Option<crate::services::ServiceSd>,
 }
 
 impl<'a> FilterValues<'a> {
-    fn new(rule: &'a Rule) -> Self {
+    fn new(rule: &'a Rule) -> anyhow::Result<Self> {
         let ports = rule.port.as_ref().map_or(&[][..], Ports::elements);
         let port_ranges: Vec<FWP_RANGE0> = ports
             .iter()
@@ -43,15 +46,20 @@ impl<'a> FilterValues<'a> {
         let remote_ranges = span_ranges(&remote_values);
         let local_values = addr_values(rule.local.as_ref());
         let local_ranges = span_ranges(&local_values);
+        let service_sd = match &rule.service {
+            Some(service) => crate::services::security_descriptor(service.names())?,
+            None => None,
+        };
 
-        Self {
+        Ok(Self {
             ports,
             port_ranges,
             remote_values,
             remote_ranges,
             local_values,
             local_ranges,
-        }
+            service_sd,
+        })
     }
 }
 
@@ -63,6 +71,7 @@ fn condition_list(
     values: &FilterValues<'_>,
     layer: GUID,
     app: &AppId,
+    service: PSECURITY_DESCRIPTOR,
     protocol: Option<FWPM_FILTER_CONDITION0>,
     port: Option<&PortRange>,
     port_index: usize,
@@ -109,6 +118,24 @@ fn condition_list(
                     },
                 },
             }
+        });
+    }
+
+    // A service-narrowed rule is matched against the identity of the connection, not only the
+    // path of the program: the descriptor grants access to the per-service SID of every named
+    // service, so a filter of `svchost.exe` can mean one hosted service rather than all of
+    // them. The value points into the owned descriptor, which lives as long as the rule's
+    // filters are added.
+    if !service.0.is_null() {
+        conditions.push(FWPM_FILTER_CONDITION0 {
+            fieldKey: FWPM_CONDITION_ALE_USER_ID,
+            matchType: FWP_MATCH_EQUAL,
+            conditionValue: FWP_CONDITION_VALUE0 {
+                r#type: FWP_SECURITY_DESCRIPTOR_TYPE,
+                Anonymous: FWP_CONDITION_VALUE0_0 {
+                    sd: service.0.cast(),
+                },
+            },
         });
     }
 
@@ -191,7 +218,7 @@ impl Engine {
 
         // Everything a condition of this rule's filters points into, owned for as long as the
         // filters are being added.
-        let values = FilterValues::new(rule);
+        let values = FilterValues::new(rule)?;
 
         // Each element of the port field is installed as a filter of its own. A rule that
         // names no port gets the single empty variant it always had, so a rule from before
@@ -232,6 +259,10 @@ impl Engine {
                                 &values,
                                 layer,
                                 app,
+                                values.service_sd.as_ref().map_or(
+                                    windows::Win32::Security::PSECURITY_DESCRIPTOR::default(),
+                                    |owned| owned.psd,
+                                ),
                                 protocol,
                                 *port,
                                 port_index,

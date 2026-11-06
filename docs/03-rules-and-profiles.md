@@ -176,6 +176,23 @@ the numbers behind it; nothing is dropped quietly.
 Names apply to the remote end only. There is no name field for `local`, because the address this
 machine holds on a connection is known without asking anyone.
 
+## Narrowing a program to its services
+
+Since 1.4.4 a rule can name the services it is about in a `service` field: one name such as
+`Dnscache`, or a comma-separated list such as `Dnscache, Dhcp`. The field answers the oldest
+complaint about `default_policy = "deny"`: a permit for `svchost.exe` lets *every* hosted service
+connect, because WFP knows applications by path and one `svchost.exe` looks like another.
+
+The narrowing is real, not a filter on the page. Every installed service owns a per-service
+SID, and the connection of a hosted service reports that SID in its token; a rule naming
+`Dnscache` therefore matches the DNS queries of that one service rather than the dozen programs
+living in the same executable. The name is checked when the rule is written — a service the
+machine does not have is refused out loud, the same way a typo in a pattern is — and it is kept
+exactly as written, because the file is a document rather than a lookup table.
+
+Like the other list fields the field takes at most 32 names, and like them it is skipped when
+absent, so a rules file that never uses it reads exactly as it did before the field existed.
+
 ## Order, and why deny still wins
 
 The order in `rules.toml` is exactly the order WFP evaluates, because applying is a full rebuild:

@@ -111,6 +111,8 @@ unique local address. See [Connections worth showing](#connections-worth-showing
 A table with fixed column widths: Name, Action, Program, Protocol, Direction, Port, Destination, Comment,
 Order, and the remove button. The Program column names the file (`waterfox.exe`), not the path: the
 full pattern is one hover away and one edit away, which keeps the column readable at a glance.
+A rule narrowed to services carries a chip with their names beside the program, so the row says
+aloud that it speaks about those hosted services rather than the whole program.
 Action is a badge, Order is a pair of arrows, and a pattern the cap cut
 carries a small warning badge — *pattern has 42 matches, only 32 installed* — so the cut is visible
 where the rule is read rather than only in the log. The Destination column shows the addresses of
@@ -122,17 +124,21 @@ single *any* chip.
 
 A rule is edited in a dialog, not in ten fields that stay on screen: **Add rule** above the table
 appends a rule and opens it, and a click on a row opens that one. The dialog holds name, action,
-program, protocol, direction, port, destination, local address, comment and the enabled flag. The
+program, service, protocol, direction, port, destination, local address, comment and the enabled
+flag. The
 destination box takes addresses, networks, spans and names in one comma-separated list; the page
 sorts each element into the address part or the name part of the stored rule by whether it reads as
 an address. Names take no wildcards yet. The box is left empty when the rule should reach wherever
 its addresses are.
 Protocol is a text box rather than a list because a rule may name a protocol number such as `47`;
 the program box takes a comma-separated list of paths such as
-`C:\test\tool1.exe, C:\test\tool2.exe`, the port box takes a comma-separated list of single ports and ranges such as
+`C:\test\tool1.exe, C:\test\tool2.exe`, the service box takes a comma-separated list of service
+names such as `Dnscache, Dhcp` and narrows the rule to the connections of exactly those services
+(see [the rules chapter](03-rules-and-profiles.md#narrowing-a-program-to-its-services)), the port
+box takes a comma-separated list of single ports and ranges such as
 `443, 8443, 1024-2048` and either address box `10.0.0.5`, `192.168.1.0/24` or a span such as
 `10.0.0.1-10.0.0.9`, all left empty for anything goes. The comma separator is spelled out in the hint
-the program, port and address boxes show when the cursor rests on them, and an element the page cannot
+the program, service, port and address boxes show when the cursor rests on them, and an element the page cannot
 read is reported with
 the dialog left open. A value the server cannot read bounces back as an error and the row is redrawn
 from what the server has.
@@ -143,7 +149,8 @@ blocked until it appears in the Detected list.
 ### Detected
 
 One card per application no rule speaks about yet: the file name in large type with the path under it,
-the destination it reached, how often it was seen, and four buttons. **Allow** and **Deny** are the two
+the destination it reached, how often it was seen, the account that ran it since 1.4.4 as
+`DOMAIN\name` — the account of the entry's newest event — and four buttons. **Allow** and **Deny** are the two
 primary ones and are the widest on the card; **Edit** and **Dismiss** are secondary.
 
 The cards are ordered by the newest activity, and the tab lists every open entry: the answer carries

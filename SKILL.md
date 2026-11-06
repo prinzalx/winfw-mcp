@@ -56,7 +56,8 @@ cannot write: it never saw the token, and the state body deliberately does not c
 - `default_policy = "deny"`: while protection is on, a program with no ALLOW rule cannot connect,
   outgoing and incoming. Exceptions stay reachable: loopback and the IPv6 base functions.
 - Programs are recognised by their image path alone. DNS, DHCP and time sync live inside
-  `svchost.exe`; permitting it permits every hosted service (coarse, documented).
+  `svchost.exe`; since 1.4.4 a rule's `service` field narrows it to named hosted services,
+  and a rule without one speaks about the whole program.
 - Wildcards `*` and `?` work in application patterns; a pattern beyond the cap (32 installed
   filters) is cut and says so.
 - Every rule change is written to `rules.toml` and pushed to the WFP store immediately.

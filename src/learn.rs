@@ -60,6 +60,12 @@ pub struct Detected {
     /// Whether the last connection was allowed. Distinguishes "never seen" from "blocked right
     /// now", which are different problems.
     pub allowed: bool,
+    /// The account the newest event for the entry was reported under, written `DOMAIN\name`.
+    /// It is what tells the two `svchost.exe` groups apart: a service reports its own account,
+    /// and a rule that names the service is narrowed by that identity instead of the path
+    /// alone. `#[serde(default)]` keeps a `learn.json` written before the field existed readable.
+    #[serde(default)]
+    pub user: Option<String>,
 }
 
 /// The file on disk. A wrapper struct keeps the format extensible without a rename later.
@@ -108,6 +114,7 @@ fn merge_entries(entries: &mut Vec<Detected>) {
                 if entry.seen_ms > existing.seen_ms {
                     existing.seen_ms = entry.seen_ms;
                     existing.allowed = entry.allowed;
+                    existing.user = entry.user;
                 } else {
                     existing.app = entry.app;
                     existing.display = entry.display;
@@ -284,6 +291,12 @@ impl Detector {
             existing.hits += 1;
             existing.allowed = event.allowed;
 
+            // The account rides on the event, so the newest event names it; an event that
+            // carries none leaves the one already shown alone rather than losing it.
+            if event.user.is_some() {
+                existing.user = event.user.clone();
+            }
+
             return false;
         }
 
@@ -296,6 +309,7 @@ impl Detector {
                 seen_ms: event.time_ms,
                 hits: 1,
                 allowed: event.allowed,
+                user: event.user.clone(),
             },
         );
         entries.truncate(DETECTED_CAP);
@@ -448,6 +462,47 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].hits, 2);
         assert_eq!(snapshot[0].seen_ms, 20);
+    }
+
+    /// The account belongs to the newest event that names one: it is what tells two
+    /// `svchost.exe` groups apart on this screen, and an event carrying none must not erase
+    /// the account already shown.
+    #[test]
+    fn a_detected_entry_carries_the_account_of_its_newest_event() {
+        let detector = detector("detect-user");
+        let mut first = event("\\device\\harddiskvolume3\\a.exe", 10);
+
+        first.user = Some("NT AUTHORITY\\LOCAL SERVICE".to_owned());
+
+        assert!(detector.observe(
+            &first,
+            &RuleFile::default(),
+            &crate::dns::Answers::default()
+        ));
+
+        let mut second = event("\\device\\harddiskvolume3\\a.exe", 20);
+
+        second.user = Some("NT AUTHORITY\\NETWORK SERVICE".to_owned());
+
+        assert!(!detector.observe(
+            &second,
+            &RuleFile::default(),
+            &crate::dns::Answers::default()
+        ));
+        assert!(!detector.observe(
+            &event("\\device\\harddiskvolume3\\a.exe", 30),
+            &RuleFile::default(),
+            &crate::dns::Answers::default()
+        ));
+
+        let snapshot = detector.snapshot();
+
+        assert_eq!(snapshot[0].seen_ms, 30, "the entry followed the events");
+        assert_eq!(
+            snapshot[0].user.as_deref(),
+            Some("NT AUTHORITY\\NETWORK SERVICE"),
+            "the newest named account wins, and the blank event after it lost nothing",
+        );
     }
 
     #[test]

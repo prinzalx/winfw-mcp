@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::rules::Action;
 use crate::rules::Direction;
 use crate::rules::disk::RuleFile;
-use crate::rules::fields::{Dests, Patterns, Ports, Remotes};
+use crate::rules::fields::{Dests, Patterns, Ports, Remotes, Services};
 use crate::rules::protocol::Protocol;
 
 /// A single user rule.
@@ -25,6 +25,13 @@ pub struct Rule {
     pub name: String,
     pub action: Action,
     pub pattern: Patterns,
+    /// The services the rule is about, written `Dnscache` and a comma-separated list of them
+    /// for more than one. It narrows the rule to the connections a service made, which is what
+    /// lets a permit for `svchost.exe` name its services instead of letting every hosted
+    /// service through. Absent means the whole program, which is what every rule was before
+    /// the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<Services>,
     #[serde(default = "always_enabled")]
     pub enabled: bool,
     /// A rule meant for one run of one program: it leaves the firewall again as soon as no process
@@ -91,6 +98,7 @@ impl Rule {
             name: name.into(),
             action,
             pattern: pattern.into(),
+            service: None,
             enabled: true,
             temporary: false,
             protocol: None,

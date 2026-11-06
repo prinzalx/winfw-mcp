@@ -802,6 +802,14 @@
         />
       </div>
       <div class="field">
+        <span>Service</span><input
+          type="text"
+          id="rule-service"
+          placeholder="whole program — or a comma-separated list such as Dnscache, Dhcp"
+          title="the services whose connections this rule is about; a rule naming services narrows a program like svchost.exe to the services it names"
+        />
+      </div>
+      <div class="field">
         <span>Protocol</span><input type="text" id="rule-protocol" placeholder="any" title="tcp, udp, or a protocol number such as 47" />
       </div>
       <div class="field"><span>Direction</span><select id="rule-direction"></select></div>
@@ -1066,6 +1074,7 @@
         el("rule-name").value = rule.name;
         select_choices("rule-action", ["allow", "deny"], rule.action);
         el("rule-pattern").value = rule.pattern;
+        el("rule-service").value = rule.service ?? "";
         el("rule-protocol").value = rule.protocol ?? "";
         select_choices("rule-direction", ["", "out", "in"], rule.direction);
         el("rule-port").value = rule.port ?? "";
@@ -1128,6 +1137,7 @@
         }
         const local = el("rule-local").value.trim();
         const comment = el("rule-comment").value.trim();
+        const service = el("rule-service").value.trim();
 
         if (splitPorts(port) === null) {
           status("the port field takes ports and ranges such as “80, 443, 8080-8090”");
@@ -1140,6 +1150,7 @@
         rule.dest = names.length ? names.join(", ") : null;
         rule.local = local === "" ? null : local;
         rule.comment = comment === "" ? null : comment;
+        rule.service = service === "" ? null : service;
         rule.enabled = el("rule-enabled").checked;
         rule.temporary = el("rule-temporary").checked;
         el("rule-dialog").close();
@@ -1301,6 +1312,15 @@
             program.appendChild(origin);
           }
 
+          // The services a rule names are half of what it decides, so they belong in the list
+          // rather than only one edit away.
+          if (rule.service) {
+            const chip = element("span", "chip", rule.service);
+
+            chip.title = "only the connections of these services";
+            program.appendChild(chip);
+          }
+
           row.appendChild(program);
 
           row.appendChild(element("td", null, rule.protocol ?? "any"));
@@ -1449,7 +1469,10 @@
               " hits · " +
               new Date(entry.seen_ms).toLocaleTimeString() +
               " · " +
-              (entry.allowed ? "allowed" : "blocked"),
+              (entry.allowed ? "allowed" : "blocked") +
+              // The account tells the svchost groups apart: a service reports its own, and a
+              // rule can be narrowed to it by name.
+              (entry.user ? " · " + entry.user : ""),
           );
 
           row.appendChild(meta);

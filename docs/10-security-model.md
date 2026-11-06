@@ -129,11 +129,13 @@ Since 0.61.0 the tool starts with `default_policy = "deny"`, which is what makes
 than a logger: an application no ALLOW rule mentions cannot connect. Three limits of that belong
 here, because each of them has surprised someone.
 
-- **Applications are matched by path alone.** There is no service match and no package match, so
-  everything hosted by `svchost.exe` is one application to the firewall. DNS, DHCP and time sync run
-  there, and without a permit for `svchost.exe` no name resolves at all: the connection a blocked
-  client reports is a timeout, not a refusal. The price of the permit is the other direction: with
-  `svchost.exe` allowed, every service may use it.
+- **Applications are matched by path.** A rule names a program, and everything running inside
+  that program is one application to the firewall. DNS, DHCP and time sync run in `svchost.exe`,
+  and without a permit for it no name resolves at all: the connection a blocked client reports is
+  a timeout, not a refusal. The price of the permit is the other direction: with `svchost.exe`
+  allowed, every service may use it. Since 1.4.4 a rule can narrow that with a `service` name
+  (see the rules chapter), so a permit can mean one hosted service rather than all of them; a
+  rule without one still speaks about the whole program.
 - **An interpreter is one application.** A rule for `python.exe`, `node.exe` or `powershell.exe`
   permits every script that runs through it, whatever the script reaches for. The manual recommends
   narrowing such a rule with a remote address or a port.

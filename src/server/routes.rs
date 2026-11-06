@@ -139,6 +139,22 @@ fn post_rules(state: &AppState, worker: &WfpWorker, request: &Request) -> Result
         }
     }
 
+    // A service name the service control manager does not know is refused here rather than
+    // installed as a filter that matches nothing: a typo in a name is an error, not a rule
+    // that quietly means the whole program.
+    for rule in &incoming.rule {
+        if let Some(service) = &rule.service {
+            for name in service.names() {
+                if crate::services::resolve(name).is_none() {
+                    bail!(
+                        "rule '{}' names service '{name}', which is not installed",
+                        rule.name
+                    );
+                }
+            }
+        }
+    }
+
     if stale_generation(state, incoming.generation) {
         return generation_conflict(state, worker);
     }
@@ -394,6 +410,17 @@ fn post_rules_import(state: &AppState, worker: &WfpWorker, request: &Request) ->
         validate_comment(comment)?;
     }
 
+    if let Some(service) = &incoming.service {
+        for name in service.names() {
+            if crate::services::resolve(name).is_none() {
+                bail!(
+                    "rule '{}' names service '{name}', which is not installed",
+                    incoming.name
+                );
+            }
+        }
+    }
+
     let applied = {
         let mut current = state.rules.lock().expect("rules lock poisoned");
 
@@ -431,6 +458,16 @@ fn post_rules_replace(state: &AppState, worker: &WfpWorker, request: &Request) -
     for rule in &incoming.rule {
         if let Some(comment) = &rule.comment {
             validate_comment(comment)?;
+        }
+        if let Some(service) = &rule.service {
+            for name in service.names() {
+                if crate::services::resolve(name).is_none() {
+                    bail!(
+                        "rule '{}' names service '{name}', which is not installed",
+                        rule.name
+                    );
+                }
+            }
         }
     }
 
@@ -1883,6 +1920,56 @@ pattern = "C:\\Windows\\two.exe"
             written.contains(r#"protocol = "tcp""#),
             "the narrowing has to survive a restart: {written}",
         );
+    }
+
+    /// A rule naming an installed service is written and echoed back, which is what lets the
+    /// page and the file keep the name the person typed.
+    #[test]
+    fn the_rules_endpoint_writes_a_service_name() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"host","action":"allow","pattern":"C:\\Windows\\System32\\svchost.exe","enabled":true,"service":"Dnscache"}]}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(body.contains(r#""service":"Dnscache""#), "{body}");
+
+        let written = std::fs::read_to_string(server_state.rules_path()).expect("read the rules");
+
+        assert!(
+            written.contains(r#"service = "Dnscache""#),
+            "the service has to survive a restart: {written}",
+        );
+    }
+
+    /// A service the machine does not have is refused at the write, because the same name would
+    /// later refuse the whole store rebuild — a typo found here never reaches the firewall.
+    #[test]
+    fn the_rules_endpoint_refuses_a_service_that_is_not_installed() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        let refused = Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"host","action":"allow","pattern":"C:\\Windows\\System32\\svchost.exe","enabled":true,"service":"NoServiceHere99"}]}"#.to_vec(),
+            ),
+        );
+
+        assert!(refused.is_err(), "an unknown service is not a write");
     }
 
     /// A remote address the server cannot read is refused rather than read as any address, and a
