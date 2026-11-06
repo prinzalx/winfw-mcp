@@ -272,6 +272,7 @@ fn one(item: &Item, import: &mut Import) {
             },
             pattern: app.into(),
             enabled: is_true(&item.is_enabled),
+            temporary: false,
             protocol,
             direction,
             // The port field holds a list, which is not `Copy` as a single value once was, and

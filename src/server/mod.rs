@@ -60,6 +60,7 @@ mod profiles;
 mod routes;
 mod settings;
 mod state;
+mod temporary;
 mod worker;
 
 pub use guard::session_token;
@@ -77,7 +78,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use tracing::{debug, info, warn};
@@ -107,6 +108,13 @@ const SHUTDOWN_GRACE: Duration = Duration::from_millis(250);
 /// How often an SSE connection looks at the event log. A poll, not a wake-up: the callbacks come
 /// from RPC threads and the log is the only shared state, which keeps the locking trivial.
 const EVENT_POLL: Duration = Duration::from_millis(500);
+
+/// How long the sweep of the temporary rules waits between two looks at the running programs.
+///
+/// The question a temporary rule asks is "is its program still running?", and a process that quit
+/// does not announce itself to us. A poll is enough: the rule goes out within this interval of the
+/// program leaving, and a poll costs nothing when there is no temporary rule at all.
+const SWEEP_POLL: Duration = Duration::from_secs(5);
 
 /// How many recent events `/api/state` carries, enough for the panel to render without a second
 /// request.
@@ -196,6 +204,12 @@ impl Server {
     pub fn serve(&self) -> Result<()> {
         info!(addr = %self.addr, "listening");
 
+        // The temporary rules are retired on a poll, taken here because this loop is what the
+        // process does while it is idle. A connection that arrives during a sweep waits out the
+        // sweep rather than the other way round: one is milliseconds, the other is a page that
+        // asked for a firewall change.
+        let mut next_sweep = Instant::now() + SWEEP_POLL;
+
         while self.state.running.load(Ordering::SeqCst) {
             match self.listener.accept() {
                 Ok((stream, peer)) => {
@@ -212,6 +226,17 @@ impl Server {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(ACCEPT_POLL);
+
+                    if Instant::now() >= next_sweep {
+                        next_sweep += SWEEP_POLL;
+
+                        if let Err(error) = temporary::sweep(&self.state, &self.worker) {
+                            warn!(
+                                reason = %format!("{error:#}"),
+                                "could not retire the temporary rules",
+                            );
+                        }
+                    }
                 }
                 Err(error) => return Err(error).context("accept failed"),
             }
@@ -645,6 +670,25 @@ mod tests {
                 "{name}() assembles rows but never hands one to its container"
             );
         }
+    }
+
+    /// A temporary rule has to be marked in the dialog, written back by the save, and shown in
+    /// the table: a rule that quietly disappears when its program quits is only honest if the page
+    /// said it was one.
+    #[test]
+    fn the_page_marks_temporary_rules() {
+        assert!(
+            INDEX_HTML.contains("id=\"rule-temporary\""),
+            "the rule dialog has to offer the mark",
+        );
+        assert!(
+            INDEX_HTML.contains("rule.temporary = el(\"rule-temporary\").checked"),
+            "and the save has to write it back",
+        );
+        assert!(
+            INDEX_HTML.contains("if (rule.temporary)"),
+            "and the table has to show it",
+        );
     }
 
     /// The element ids the page's script asks for by name.

@@ -27,6 +27,14 @@ pub struct Rule {
     pub pattern: Patterns,
     #[serde(default = "always_enabled")]
     pub enabled: bool,
+    /// A rule meant for one run of one program: it leaves the firewall again as soon as no process
+    /// of its program is running.
+    ///
+    /// It decides nothing about how a connection is judged, only how long the rule is worth
+    /// keeping. Skipped when written out, so a rules file that never uses it is written exactly as
+    /// it was before the field existed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub temporary: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol: Option<Protocol>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -66,6 +74,14 @@ const fn always_enabled() -> bool {
     true
 }
 
+/// Whether a bool field is the value that is never written out.
+///
+/// `temporary` is the only one, and the rule is the same as for the optional fields: a file that
+/// does not use the feature holds exactly the text it held before it existed.
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 impl Rule {
     /// A rule that narrows nothing: an enabled rule about an application, with no protocol,
     /// direction, port, remote address or local address. This is what a detected application and an
@@ -76,6 +92,7 @@ impl Rule {
             action,
             pattern: pattern.into(),
             enabled: true,
+            temporary: false,
             protocol: None,
             direction: None,
             port: None,
@@ -230,4 +247,36 @@ pub fn reaches(
         .iter()
         .filter(|rule| rule.enabled && rule.pattern.matches(path))
         .any(|rule| rule.reaches(addr, answers))
+}
+
+/// The temporary rules whose program is no longer running.
+///
+/// `running` holds the image paths of the processes that are running right now, in the drive form
+/// a rule is typed in. A temporary rule is one the person meant for a single run of one program,
+/// so it is worth exactly as long as a process of that program is there; a wildcard program is
+/// still there when any running process matches it.
+pub fn expired_temporary(rules: &RuleFile, running: &[String]) -> Vec<String> {
+    rules
+        .rule
+        .iter()
+        .filter(|rule| rule.temporary)
+        .filter(|rule| !running.iter().any(|path| rule.pattern.matches(path)))
+        .map(|rule| rule.name.clone())
+        .collect()
+}
+
+/// Take the temporary rules whose program is no longer running out of the list, and name them.
+///
+/// A permanent rule that happens to share a name with an expired one is kept: only rules marked
+/// temporary are ever retired this way.
+pub fn prune_temporary(rules: &mut RuleFile, running: &[String]) -> Vec<String> {
+    let expired = expired_temporary(rules, running);
+
+    if !expired.is_empty() {
+        rules
+            .rule
+            .retain(|rule| !rule.temporary || !expired.contains(&rule.name));
+    }
+
+    expired
 }

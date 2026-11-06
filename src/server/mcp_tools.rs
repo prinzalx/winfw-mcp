@@ -110,7 +110,7 @@ fn tool_list() -> Vec<serde_json::Value> {
         ),
         (
             "rules.list",
-            "every rule, in the order the firewall reads it",
+            "every rule, in the order the firewall reads it; a temporary rule carries `temporary`",
             no_arguments(),
         ),
         (

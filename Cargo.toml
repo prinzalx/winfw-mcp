@@ -1,6 +1,6 @@
 [package]
 name = "winfw-mcp"
-version = "1.3.5"
+version = "1.4.0"
 edition = "2024"
 description = "Portable, web-driven Windows Firewall (WFP) controller with an MCP interface"
 license = "AGPL-3.0-only"
@@ -38,6 +38,8 @@ windows = { version = "0.62", features = [
     "Win32_Security_Authorization",
     # QueryDosDeviceW and GetLogicalDrives, for the drive-to-device path mapping.
     "Win32_Storage_FileSystem",
+    # CreateToolhelp32Snapshot, for the program list the temporary rules are checked against.
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Rpc",
     # GetCurrentThreadId, for the message posted to the tray thread when it is asked to stop, and
     # GetModuleHandleW for the window class.

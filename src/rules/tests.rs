@@ -252,6 +252,92 @@ fn an_empty_rule_file_round_trips() {
 }
 
 #[test]
+fn a_temporary_rule_survives_a_round_trip_through_the_file() {
+    let path = crate::testutil::scratch_dir("temporary").join("rules.toml");
+    let mut temp = Rule::plain("temp", Action::Allow, "C:\\test\\tool1.exe");
+    temp.temporary = true;
+
+    let rules = RuleFile {
+        rule: vec![
+            temp,
+            Rule::plain("kept", Action::Deny, "C:\\test\\tool2.exe"),
+        ],
+    };
+
+    rules.save(&path).expect("save");
+
+    assert_eq!(RuleFile::load_or_create(&path).expect("load"), rules);
+
+    let text = std::fs::read_to_string(&path).expect("read back");
+
+    assert_eq!(
+        text.matches("temporary").count(),
+        1,
+        "only the rule that uses the field is written with it:\n{text}",
+    );
+}
+
+#[test]
+fn a_rule_written_before_the_field_existed_reads_as_not_temporary() {
+    let text = r#"version = 1
+checksum = "0000000000000000"
+
+[[rule]]
+name = "old"
+action = "allow"
+pattern = 'C:\\test\\tool1.exe'
+enabled = true
+"#;
+
+    let (rules, _checksum) = parse_rule_file(text.as_bytes()).expect("an older file reads");
+
+    assert!(!rules.rule[0].temporary);
+}
+
+#[test]
+fn a_temporary_rule_is_pruned_when_its_program_is_not_running() {
+    let mut temp = Rule::plain("gone", Action::Allow, "C:\\test\\tool1.exe");
+    temp.temporary = true;
+
+    let mut rules = RuleFile {
+        rule: vec![
+            temp,
+            Rule::plain("keeper", Action::Deny, "C:\\test\\tool2.exe"),
+        ],
+    };
+
+    assert_eq!(prune_temporary(&mut rules, &[]), ["gone".to_owned()]);
+    assert_eq!(rules.rule.len(), 1);
+}
+
+#[test]
+fn a_temporary_rule_with_a_running_program_is_kept() {
+    let mut temp = Rule::plain("here", Action::Allow, "C:\\test\\tool?.exe");
+    temp.temporary = true;
+
+    let rules = RuleFile { rule: vec![temp] };
+
+    assert!(
+        expired_temporary(&rules, &["C:\\test\\tool1.exe".to_owned()]).is_empty(),
+        "a wildcard program is still there when a process matches it",
+    );
+}
+
+#[test]
+fn a_permanent_rule_sharing_a_name_with_an_expired_one_is_not_pruned() {
+    let mut temp = Rule::plain("same", Action::Allow, "C:\\test\\a.exe");
+    temp.temporary = true;
+
+    let mut rules = RuleFile {
+        rule: vec![temp, Rule::plain("same", Action::Deny, "C:\\test\\b.exe")],
+    };
+
+    assert_eq!(prune_temporary(&mut rules, &[]), ["same".to_owned()]);
+    assert_eq!(rules.rule.len(), 1);
+    assert_eq!(rules.rule[0].action, Action::Deny);
+}
+
+#[test]
 fn a_profile_name_is_a_single_component() {
     assert!(is_valid_profile_name("work"));
     assert!(is_valid_profile_name("home.v2"));

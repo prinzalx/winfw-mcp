@@ -835,6 +835,15 @@
       <div class="field">
         <span>Enabled</span><input type="checkbox" id="rule-enabled" style="width: auto" />
       </div>
+      <div class="field">
+        <span>Temporary</span>
+        <input
+          type="checkbox"
+          id="rule-temporary"
+          style="width: auto"
+          title="removed from the firewall as soon as no process of this program is running"
+        />
+      </div>
       <div class="actions">
         <button id="rule-cancel" type="button">Cancel</button>
         <button id="rule-save" class="primary ok" type="button">Save</button>
@@ -1059,6 +1068,7 @@
         el("rule-local").value = rule.local ?? "";
         el("rule-comment").value = rule.comment ?? "";
         el("rule-enabled").checked = rule.enabled;
+        el("rule-temporary").checked = !!rule.temporary;
         el("rule-dialog").showModal();
       }
 
@@ -1126,6 +1136,7 @@
         rule.local = local === "" ? null : local;
         rule.comment = comment === "" ? null : comment;
         rule.enabled = el("rule-enabled").checked;
+        rule.temporary = el("rule-temporary").checked;
         el("rule-dialog").close();
         save();
       });
@@ -1209,6 +1220,16 @@
           } else if (rule.action === "deny") {
             name.classList.add("deny");
           }
+
+          // A temporary rule is one the person meant for a single run, so the table says so:
+          // what reads as a permanent permit here is gone when the program is.
+          if (rule.temporary) {
+            const mark = element("span", "chip off", "temp");
+
+            mark.title = "removed as soon as no process of this program is running";
+            name.appendChild(mark);
+          }
+
           row.appendChild(name);
 
           row.appendChild(element("td", null)).appendChild(

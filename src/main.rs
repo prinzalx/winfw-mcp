@@ -13,6 +13,7 @@ mod log;
 mod mcp;
 mod monitor;
 mod paths;
+mod processes;
 mod profile_xml;
 mod rules;
 mod server;

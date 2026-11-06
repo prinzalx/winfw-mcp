@@ -293,6 +293,35 @@ Two hundred characters is the limit, and a control character is refused. Both ar
 than cuts on purpose. The reference truncates at its buffer size, and a rule that quietly lost the
 end of its reason is harder to trust than one refused at the moment it was written.
 
+## Temporary rules
+
+`temporary` decides nothing about a connection either. It decides how long the rule is worth
+keeping: a rule marked temporary is one the person meant for a single run of one program, and it
+leaves the firewall again as soon as no process of that program is running.
+
+```toml
+[[rule]]
+name = "game"
+action = "allow"
+pattern = "C:\\Games\\play.exe"
+enabled = true
+temporary = true
+```
+
+Nothing announces a process leaving — the firewall's own event stream speaks about connections, not
+about programs — so the tool looks at the running processes every five seconds, and a rule whose
+program is gone is taken out of the file, the store and the list. The same look covers a program
+that left while the tool was stopped: a temporary rule whose program never came back is gone within
+five seconds of the next start, which is what keeps "for now" from surviving a restart by accident.
+
+The program is matched in the drive form the page shows (`C:\...`), and a wildcard program counts
+as still running when any running process matches it. Like `comment`, the field is skipped when it
+is written out, so a rules file that never uses it holds exactly the text it held before it existed.
+
+Two things follow from removing a rule on a poll rather than on an event. A temporary rule can
+outlive its program by up to five seconds, and the page shows it until it next reads the state,
+because it is the server that notices, not the browser.
+
 ## Sharing a rule
 
 One rule can be turned into a Base64 string (`POST /api/rules/share`) and pasted anywhere;
