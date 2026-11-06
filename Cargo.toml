@@ -1,6 +1,6 @@
 [package]
 name = "winfw-mcp"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2024"
 description = "Portable, web-driven Windows Firewall (WFP) controller with an MCP interface"
 license = "AGPL-3.0-only"
@@ -40,6 +40,15 @@ windows = { version = "0.62", features = [
     "Win32_Storage_FileSystem",
     # CreateToolhelp32Snapshot, for the program list the temporary rules are checked against.
     "Win32_System_Diagnostics_ToolHelp",
+    # CoCreateInstance, IDispatch and the apartment calls, for the WMI read behind the DNS
+    # client cache.
+    "Win32_System_Com",
+    # VARIANT and VariantClear, the values the dispatch read hands back; the struct itself
+    # lives in the Variant module but is gated behind Ole.
+    "Win32_System_Variant",
+    "Win32_System_Ole",
+    # ISWbemLocator, for MSFT_DNSClientCache.
+    "Win32_System_Wmi",
     "Win32_System_Rpc",
     # GetCurrentThreadId, for the message posted to the tray thread when it is asked to stop, and
     # GetModuleHandleW for the window class.

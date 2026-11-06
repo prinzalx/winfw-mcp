@@ -20,9 +20,10 @@ use tracing::warn;
 
 use crate::rules::{Remote, Remotes, Rule};
 
-/// The name an address resolves back to, or `None` when it has none. The answer is kept for
-/// the life of the process, refusals included: the page asks once per address on every repaint
-/// of the connection list, and an address without a name should cost no second query.
+/// The name an address was queried as, or the name it resolves back to, or `None` when it has
+/// neither. The answer is kept for the life of the process, refusals included: the page asks
+/// once per address on every repaint of the connection list, and an address without a name
+/// should cost no second query.
 pub fn reverse(ip: std::net::IpAddr) -> Option<String> {
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -38,7 +39,7 @@ pub fn reverse(ip: std::net::IpAddr) -> Option<String> {
         return name.clone();
     }
 
-    let name = reverse_lookup(ip);
+    let name = client_cache_name(ip).or_else(|| reverse_lookup(ip));
 
     cache.insert(ip, name.clone());
     name
@@ -126,6 +127,165 @@ fn reverse_lookup(ip: std::net::IpAddr) -> Option<String> {
 /// Off Windows there is no winsock to ask, and the tool does not run anywhere else.
 #[cfg(not(windows))]
 fn reverse_lookup(ip: std::net::IpAddr) -> Option<String> {
+    let _ = ip;
+
+    None
+}
+
+/// The forward name the DNS client cache holds for the address, which is the name the machine
+/// actually asked for — the name a PTR record cannot recover behind a CNAME chain, and the one
+/// that fills the gaps where no pointer record exists at all.
+///
+/// This is the technique the competitor does better than us, and it reads the same resolver
+/// cache the competitor reads through `MSFT_DNSClientCache`. WMI is reached through the
+/// dispatch locator because the plain `DnsGetCacheDataTable` of dnsapi answers null to a
+/// non-elevated process, and the property read goes through `IDispatch` because the
+/// `windows` crate metadata has no method for it. A machine whose WMI service does not answer
+/// is not a failure: the caller still has [`reverse_lookup`].
+#[cfg(windows)]
+fn client_cache_name(ip: std::net::IpAddr) -> Option<String> {
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+        CoUninitialize, DISPATCH_PROPERTYGET, DISPPARAMS, IDispatch,
+    };
+    use windows::Win32::System::Variant::{VARIANT, VT_BSTR, VariantClear};
+    use windows::Win32::System::Wmi::ISWbemLocator;
+    use windows::core::{BSTR, GUID, Interface, PCWSTR};
+
+    // The locator coclass as machines register it under WbemScripting.SWbemLocator; the C++
+    // CLSID_WbemLocator of the SDK headers is not registered (CLASSNOTREG), and the windows
+    // crate names no constant for either.
+    const WBEM_LOCATOR: GUID = GUID::from_u128(0x76a64158_cb41_11d1_8b02_00600806d9b6);
+
+    // The crate metadata has no ISWbemObject::Get, and this object answers neither that name
+    // nor a `Get_` method. It exposes every WQL-selected property as a dynamic dispatch
+    // property instead: the name resolves on its own and one property get hands the value
+    // back as a VARIANT holding the text as a BSTR.
+    unsafe fn read_property(object: &IDispatch, what: &str) -> Option<String> {
+        unsafe {
+            let property_name = BSTR::from(what);
+            let names = [PCWSTR(property_name.as_ptr())];
+            let mut dispid = 0i32;
+
+            if object
+                .GetIDsOfNames(&GUID::zeroed(), names.as_ptr(), 1, 0x409, &mut dispid)
+                .is_err()
+            {
+                return None;
+            }
+
+            let mut value = VARIANT::default();
+
+            let called = object.Invoke(
+                dispid,
+                &GUID::zeroed(),
+                0x409,
+                DISPATCH_PROPERTYGET,
+                &DISPPARAMS {
+                    rgvarg: std::ptr::null_mut(),
+                    rgdispidNamedArgs: std::ptr::null_mut(),
+                    cArgs: 0,
+                    cNamedArgs: 0,
+                },
+                Some(&raw mut value),
+                None,
+                None,
+            );
+
+            if called.is_err() {
+                return None;
+            }
+
+            let text = if value.Anonymous.Anonymous.vt == VT_BSTR {
+                value.Anonymous.Anonymous.Anonymous.bstrVal.to_string()
+            } else {
+                String::new()
+            };
+
+            let _ = VariantClear(&mut value);
+
+            if text.is_empty() { None } else { Some(text) }
+        }
+    }
+
+    // The request threads are not COM apartments yet. A thread some other part of the process
+    // already initialized in another mode is used as it is, so only a thread that really
+    // opened an apartment closes it again.
+    let apartment = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+
+    let found = unsafe {
+        let locator: ISWbemLocator =
+            CoCreateInstance(&WBEM_LOCATOR, None, CLSCTX_INPROC_SERVER).ok()?;
+        let services = locator
+            .ConnectServer(
+                // The DNS client cache class lives in StandardCimv2; a query against root\CIMV2
+                // answers with WBEM_E_INVALID_CLASS on a machine where WMI itself is fine.
+                &BSTR::new(),
+                &BSTR::from("root\\StandardCimv2"),
+                &BSTR::new(),
+                &BSTR::new(),
+                &BSTR::new(),
+                &BSTR::new(),
+                0,
+                None,
+            )
+            .ok()?;
+
+        // ExecQuery, Count and ItemIndex are plain members of these dispatch interfaces. The
+        // query carries no WHERE clause on purpose: the legacy dispatcher hands the filter to
+        // the provider, and this provider answers a filtered query with no rows at all, so
+        // the address comparison runs here over the full enumeration.
+        let rows = services
+            .ExecQuery(
+                &BSTR::from("SELECT Name,Data FROM MSFT_DNSClientCache"),
+                &BSTR::from("WQL"),
+                0,
+                None,
+            )
+            .ok()?;
+
+        let wanted = ip.to_string();
+        let mut name = None;
+
+        let total = rows.Count().unwrap_or(0);
+
+        if cfg!(debug_assertions) {
+            eprintln!("probe: total={total} wanted={wanted}");
+        }
+
+        for row in 0..total {
+            let Ok(object) = rows.ItemIndex(row) else {
+                continue;
+            };
+            let Ok(dispatch) = object.cast::<IDispatch>() else {
+                continue;
+            };
+
+            let data = read_property(&dispatch, "Data");
+
+            if cfg!(debug_assertions) && row < 40 {
+                eprintln!("probe row {row}: data={data:?}");
+            }
+
+            if data.as_deref() == Some(wanted.as_str()) {
+                name = read_property(&dispatch, "Name");
+                break;
+            }
+        }
+
+        name
+    };
+
+    if apartment.is_ok() {
+        unsafe { CoUninitialize() };
+    }
+
+    found
+}
+
+/// Off Windows there is no DNS client cache to read, and the tool does not run anywhere else.
+#[cfg(not(windows))]
+fn client_cache_name(ip: std::net::IpAddr) -> Option<String> {
     let _ = ip;
 
     None
@@ -558,6 +718,51 @@ mod tests {
         std::fs::write(dir.join("broken.json"), "not json").expect("write");
 
         assert!(Answers::load(&dir.join("broken.json")).is_empty());
+    }
+
+    /// The client cache read runs against the live WMI service, which needs no elevation and
+    /// no network. A reserved address no name ever resolved to must come back as none without
+    /// panicking, which is the whole promise an offline test may make about a live query.
+    #[cfg(windows)]
+    #[test]
+    fn the_client_cache_says_none_for_an_address_it_never_held() {
+        let never = std::net::IpAddr::V4(std::net::Ipv4Addr::new(240, 0, 0, 1));
+
+        assert_eq!(client_cache_name(never), None);
+    }
+
+    /// A name resolved by this process lands in the DNS client cache, so reading the cache by
+    /// the address it answered with must name it back — which is exactly what the reverse page
+    /// asks for and PTR cannot always answer. The row is not always there yet when the first
+    /// answer arrives, and a resolver that rotates its cache can evict it again between two
+    /// looks, so each attempt asks the resolver anew and reads right after it. Offline there
+    /// is nothing to assert.
+    #[cfg(windows)]
+    #[test]
+    fn the_client_cache_names_an_address_the_machine_resolved() {
+        let mut found = None;
+        let mut resolved = None;
+
+        for _ in 0..20 {
+            let addresses = lookup("github.com");
+
+            if let Some(address) = addresses.first() {
+                resolved = Some(*address);
+                found = client_cache_name(*address);
+
+                if found.is_some() {
+                    break;
+                }
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        let Some(address) = resolved else {
+            return;
+        };
+
+        assert!(found.is_some(), "the cache should name {address}");
     }
 
     /// Names come from the `dest` field only, once each, and only from enabled rules.
