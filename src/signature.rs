@@ -32,6 +32,26 @@ impl Origin {
     }
 }
 
+/// The programs that run whatever they are handed: owned by Microsoft, reachable by any script,
+/// and therefore trusted by nobody by default. A Windows component that interprets is the
+/// downloader's trick — `certutil` fetches, `mshta` executes — so the origin answer names the
+/// interpreter rather than letting the Windows side of the file vouch for the script inside it.
+pub fn interpreter(path: &str) -> bool {
+    let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
+
+    matches!(
+        leaf.to_lowercase().as_str(),
+        "powershell.exe"
+            | "cmd.exe"
+            | "curl.exe"
+            | "certutil.exe"
+            | "mshta.exe"
+            | "wscript.exe"
+            | "cscript.exe"
+            | "rundll32.exe"
+    )
+}
+
 /// The origin of one file, or `None` when nothing can be said about it — a missing file mostly,
 /// since a file that is merely unsigned is answered, not refused.
 #[cfg(windows)]
@@ -380,7 +400,7 @@ fn utf16_from_buffer(buffer: &[u16]) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Origin, of};
+    use super::{Origin, interpreter, of};
 
     /// The service host is installed by the operating system, so it has to answer Windows. This
     /// is the file the backlog's blanket permit is all about, so its answer matters twice.
@@ -407,5 +427,18 @@ mod tests {
     #[test]
     fn a_missing_file_has_no_origin() {
         assert_eq!(of("Q:\\never\\installed\\nowhere.exe"), None);
+    }
+
+    /// The downloader's crowd is named despite its Windows ownership, and only that crowd:
+    /// a service host runs services, not scripts.
+    #[test]
+    fn the_interpreters_are_the_blocklisted_names() {
+        assert!(interpreter(
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        ));
+        assert!(interpreter("C:\\Windows\\System32\\cmd.exe"));
+        assert!(interpreter("C:\\Windows\\System32\\certutil.exe"));
+        assert!(interpreter("C:\\tools\\Curl\\CURL.EXE"));
+        assert!(!interpreter("C:\\Windows\\System32\\svchost.exe"));
     }
 }

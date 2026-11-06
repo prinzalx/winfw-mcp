@@ -765,9 +765,18 @@ impl StateJson {
         ) {
             let key = path.to_lowercase();
 
-            origins
-                .entry(key)
-                .or_insert_with(|| crate::signature::of(path).map(|origin| origin.label()));
+            origins.entry(key).or_insert_with(|| {
+                let answer = crate::signature::of(path)?;
+
+                // The blocklist outranks the classification: a Windows-owned interpreter is
+                // answered as the interpreter it is, because a script can reach the network
+                // through it whatever the file itself earned.
+                if crate::signature::interpreter(path) {
+                    return Some("interpreter");
+                }
+
+                Some(answer.label())
+            });
         }
 
         Self {
@@ -1290,7 +1299,7 @@ mod tests {
             &Request::new(
                 "POST",
                 "/api/rules",
-                br#"{"rule":[{"name":"host","action":"allow","pattern":"C:\\Windows\\System32\\svchost.exe","enabled":true}]}"#.to_vec(),
+                br#"{"rule":[{"name":"host","action":"allow","pattern":"C:\\Windows\\System32\\svchost.exe, C:\\Windows\\System32\\cmd.exe","enabled":true}]}"#.to_vec(),
             ),
         )
         .expect("route");
@@ -1307,6 +1316,12 @@ mod tests {
         assert!(
             body.contains(r#""c:\\windows\\system32\\svchost.exe":"windows""#),
             "the rule's path is answered with its origin: {body}",
+        );
+
+        // The blocklist outranks the Windows classification: cmd is trusted by nobody.
+        assert!(
+            body.contains(r#""c:\\windows\\system32\\cmd.exe":"interpreter""#),
+            "the interpreter is named despite its Windows ownership: {body}",
         );
     }
 

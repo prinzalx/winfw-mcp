@@ -877,6 +877,11 @@
       // list alone: a queue of forty would be announced as twenty. The server answers the whole
       // count beside the truncated list.
       let detectedTotal = 0;
+
+      // Who owns each program path the state showed, keyed by the lowercased path: "windows",
+      // "third_party", "unsigned" or "interpreter". The server answers once per path and caches
+      // there, so this is a copy of an answer that is already paid for.
+      let origins = new Map();
       // The newest events first, so a reload of the state and the stream feed the same list.
       let events = [];
 
@@ -1190,6 +1195,41 @@
         return box;
       }
 
+      const ORIGIN_TITLES = {
+        windows: "Windows component: signed to Windows standards and owned by the system installer",
+        third_party: "signed, but somebody else installed it",
+        unsigned: "no signature vouches for this file",
+        interpreter:
+          "interpreter on the blocklist: a script reaches the network through it, whatever the file owns",
+      };
+
+      // The origin tag of a program, asked of whichever of its path forms the server answered.
+      // A path the state never listed carries no tag rather than a guess.
+      function originTag(paths) {
+        let label = null;
+
+        for (const path of paths) {
+          const hit = origins.get(String(path || "").toLowerCase());
+
+          if (hit) {
+            label = hit;
+            break;
+          }
+        }
+
+        if (!label) {
+          return null;
+        }
+
+        const kind =
+          label === "windows" ? "allow" : label === "interpreter" ? "deny" : "cut";
+        const tag = element("span", "tag " + kind, label);
+
+        tag.title = ORIGIN_TITLES[label] || label;
+
+        return tag;
+      }
+
       function renderRules() {
         const body = el("rules");
 
@@ -1252,6 +1292,15 @@
           );
 
           program.title = rule.pattern;
+
+          // The origin of the first named program, so a Windows component and a downloader can
+          // be told apart in the list rather than only by reading the path.
+          const origin = originTag([firstPart]);
+
+          if (origin) {
+            program.appendChild(origin);
+          }
+
           row.appendChild(program);
 
           row.appendChild(element("td", null, rule.protocol ?? "any"));
@@ -1404,6 +1453,14 @@
           );
 
           row.appendChild(meta);
+
+          // Before a decision is offered, the entry says what it is: a Windows component,
+          // something somebody installed, nothing signed, or an interpreter on the blocklist.
+          const origin = originTag([entry.app, entry.display]);
+
+          if (origin) {
+            meta.appendChild(origin);
+          }
 
           const ops = element("div", "ops");
 
@@ -1636,6 +1693,18 @@
             row.who.appendChild(row.user);
           }
 
+          // Refilled on every render: a state poll may know an origin this row did not have
+          // when it was built, and a row is never rebuilt to ask again.
+          const origin = originTag([group.app, group.display]);
+
+          row.origin.hidden = origin === null;
+
+          if (origin) {
+            row.origin.textContent = origin.textContent;
+            row.origin.className = origin.className;
+            row.origin.title = origin.title;
+          }
+
           renderTargets(row, group);
 
           // Into place by moving, never by rebuilding: appendChild relocates an existing node.
@@ -1674,9 +1743,16 @@
         // behind a permission from the same program.
         const verdict = element("span", "tag", "");
 
+        // The origin tag is built empty and filled by the reconcile loop, because the origins
+        // arrive with the state while this row is built from the event feed.
+        const origin = element("span", "tag", "");
+
+        origin.hidden = true;
+
         line.appendChild(who);
         line.appendChild(count);
         line.appendChild(verdict);
+        line.appendChild(origin);
 
         const ops = element("div", "ops");
         const row = {
@@ -1685,6 +1761,7 @@
           user: null,
           count: count,
           verdict: verdict,
+          origin: origin,
           targets: null,
           tbody: null,
           caret: null,
@@ -2045,6 +2122,7 @@
         elevated = state.elevated;
         detected = state.detected;
         detectedTotal = state.detected_total || detected.length;
+        origins = new Map(Object.entries(state.origins || {}));
         learnMode = state.learn_mode;
         protection = state.protection;
         el("addr").textContent = location.host;
