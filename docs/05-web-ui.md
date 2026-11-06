@@ -215,7 +215,7 @@ still installed, which is what keeps the tool reachable while it blocks everythi
 | Route | Purpose |
 |---|---|
 | `GET /` | the page itself |
-| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, how often the rules file has been written, whether the process is elevated, whether `rules.toml` changed outside the tool, and the rules whose wildcard pattern the cap cut |
+| `GET /api/state` | settings, rules, what the store reported, the state of the event feed, what the rebuild at startup found, how often the rules file has been written, whether the process is elevated, whether `rules.toml` changed outside the tool, the rules whose wildcard pattern the cap cut, and the origin of every program path shown (`windows`, `third_party`, `unsigned`, or `null`) |
 | `GET /api/reverse?ip=<address>` | the name the DNS client cache or the reverse lookup answers for one address, `null` when nothing answers; a read, so no token, and the answer is cached for the life of the process |
 | `POST /api/rules` | replace the rule list: write the file, then rebuild the filters |
 | `POST /api/detected` | turn one detected application (or destination, when the entry carries a `remote`) into a rule and rebuild the store |

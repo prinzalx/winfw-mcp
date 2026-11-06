@@ -17,6 +17,7 @@ mod processes;
 mod profile_xml;
 mod rules;
 mod server;
+mod signature;
 mod store;
 mod tray;
 mod user;

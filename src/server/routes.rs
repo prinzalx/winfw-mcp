@@ -624,6 +624,12 @@ struct StateJson {
     ///
     /// Rules within the cap are left out entirely; an empty list means nothing was cut.
     pattern_truncations: Vec<PatternTruncation>,
+    /// Who owns each program file the response names: `windows`, `third_party`, `unsigned`, or
+    /// `null` when nothing can be said (a missing file, or a pattern rather than one path).
+    ///
+    /// Keyed by the lowercased path, holding every detected application and every rule pattern,
+    /// which is what lets a page label a program without asking per file.
+    origins: std::collections::BTreeMap<String, Option<&'static str>>,
     /// How far the names in the `dest` field of the enabled rules reached the last time the
     /// filters were built, so the page can mark a name that did not answer and a name the cap
     /// held down instead of letting both look like a rule that simply matches little.
@@ -745,6 +751,25 @@ impl StateJson {
             .collect();
         drop(answers);
 
+        // The identity behind every path the response names. The lookup is cached in the
+        // module, so answering here costs file work once per path for the life of the
+        // process rather than once per page refresh.
+        let mut origins = std::collections::BTreeMap::new();
+
+        for path in detected.iter().map(|entry| entry.app.as_str()).chain(
+            rules
+                .rule
+                .iter()
+                .flat_map(|rule| rule.pattern.elements())
+                .map(String::as_str),
+        ) {
+            let key = path.to_lowercase();
+
+            origins
+                .entry(key)
+                .or_insert_with(|| crate::signature::of(path).map(|origin| origin.label()));
+        }
+
         Self {
             port: state.settings.port,
             learn_mode: state.learn_mode(),
@@ -765,6 +790,7 @@ impl StateJson {
             generation: state.rules_generation(),
             elevated: crate::elevated::is_elevated(),
             pattern_truncations,
+            origins,
             dest_notes,
         }
     }
@@ -1248,6 +1274,39 @@ mod tests {
         assert!(
             body.contains(r#""rules_changed":false"#),
             "the file on disk is our own work: {body}",
+        );
+    }
+
+    /// The state names the origin of every path it shows, so a page can tell a Windows
+    /// component from a third-party program without asking per file.
+    #[test]
+    fn the_state_names_the_origin_of_the_paths_it_shows() {
+        let server_state = state();
+        let worker = WfpWorker::start_enforcing();
+
+        Server::route(
+            &server_state,
+            &worker,
+            &Request::new(
+                "POST",
+                "/api/rules",
+                br#"{"rule":[{"name":"host","action":"allow","pattern":"C:\\Windows\\System32\\svchost.exe","enabled":true}]}"#.to_vec(),
+            ),
+        )
+        .expect("route");
+
+        let response = Server::route(
+            &server_state,
+            &worker,
+            &Request::new("GET", "/api/state", vec![]),
+        )
+        .expect("route");
+
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+
+        assert!(
+            body.contains(r#""c:\\windows\\system32\\svchost.exe":"windows""#),
+            "the rule's path is answered with its origin: {body}",
         );
     }
 
