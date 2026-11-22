@@ -24,9 +24,11 @@ Everything WFP can express is reachable, including the security-descriptor
 conditions behind the service narrowing. The marshalling traps are ours to
 know: pointer conditions must point at the value, a
 `FWP_SECURITY_DESCRIPTOR_TYPE` condition needs its `FWP_BYTE_BLOB` framing,
-and an unelevated write answers `FWPM_E_ACCESS_DENIED_ELEVATED_USER`
-(`0x80320009`). Live-store tests are the only honest verification, so they
-run serially and elevation is a run-time fact.
+and an unelevated write answers `0x80320009` — the code the `windows`
+crate names `FWP_E_ALREADY_EXISTS`, so an elevation rejection shares its
+code with a duplicate add and is only recognisable when no filter was
+added. Live-store tests are the only honest verification, so they run
+serially and elevation is a run-time fact.
 
 ## Alternatives
 

@@ -3,7 +3,7 @@
 ## Status
 
 Accepted (retroactively recorded 2026-11-22; shipped with 1.3.5).
-Copyright-holder name in §C is open (D1, see `docs/PROGRESS.md`).
+Copyright-holder name in the license section is open (D1, see `docs/PROGRESS.md`).
 
 ## Context
 

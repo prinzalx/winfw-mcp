@@ -18,8 +18,10 @@ into the executable with `include_str!`.
 
 The portable binary carries its UI; editing the page is editing one file, and
 the running instance is rebuilt with the tool itself. The price: no bundler
-catches a JavaScript syntax error, so a parse gate (`node target\parsecheck.js`
-during development, a bracket scan in CI) stands in for one. Every page change
+catches a JavaScript syntax error, so a parse gate stands in for one: a
+bracket scan in CI (a cargo test), plus `node target\parsecheck.js` during
+development — a local scratch file under the gitignored `target/`, not in
+the repository. Every page change
 needs a rebuild and a server restart before the browser sees it.
 
 ## Alternatives

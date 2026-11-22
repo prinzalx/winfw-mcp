@@ -1,0 +1,27 @@
+# Public allowlist for this project.
+
+# A tracked file is private unless a pattern in this file includes it.
+# One pattern per line. Blank lines and lines that start with # are ignored.
+#
+# Patterns work on paths from the project root, with forward slashes.
+#   README.md      matches that file only
+#   docs/          matches everything under docs/
+#   src/**         matches any depth under src/
+#   *.md           matches Markdown files at the root
+
+# End-user files. Edit this list when the project changes.
+README.md
+LICENSE
+CHANGELOG.md
+SKILL.md
+SECURITY_REVIEW.md
+docs/
+src/
+web/
+Cargo.toml
+Cargo.lock
+build.rs
+assets/
+release/release.py
+release/include.txt
+release/winfw-mcp.exe

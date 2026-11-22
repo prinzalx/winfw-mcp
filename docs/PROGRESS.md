@@ -19,8 +19,8 @@ Phase 8 of 8: release readiness. **1.4.5 is released** (2026-11-07, tag
 
 ## In progress
 
-- Public snapshot: the clean public repo `winfw-mcp` waits for the first
-  `release/release.py publish` (allowlist in `release/include.txt`).
+- Nothing open: the public snapshot is published (2026-11-22, public commit
+  `a0434b1`, 78 allowlisted files on `main`).
 
 ## Open questions
 
@@ -29,8 +29,8 @@ Phase 8 of 8: release readiness. **1.4.5 is released** (2026-11-07, tag
 
 ## Next
 
-- Publish the public snapshot once the owner gives the word.
-- Any new release starts from a new owner request.
+- Any new release starts from a new owner request; each `/release` ends with
+  `release/release.py publish` so the public repo stays current.
 
 ## Log
 
@@ -38,5 +38,5 @@ Newest line first. One line per phase end.
 
 | Date | Phase | Result |
 |---|---|---|
-| 2026-11-22 | retrofit | TEMPLATE_00 overlay landed additively; dev repo `winfw-mcp-dev` private; public snapshot pending publish |
+| 2026-11-22 | retrofit | TEMPLATE_00 overlay landed additively; dev repo `winfw-mcp-dev` private; public repo `winfw-mcp` published (78 files, `a0434b1`) |
 | 2026-11-07 | 8 | 1.4.5 released: 340 tests serially green, fmt/clippy clean, CI green |
