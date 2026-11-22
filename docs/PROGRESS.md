@@ -20,7 +20,8 @@ Phase 8 of 8: release readiness. **1.4.5 is released** (2026-11-07, tag
 ## In progress
 
 - Nothing open: the public snapshot is published (2026-11-22, public commit
-  `a0434b1`, 78 allowlisted files on `main`).
+  `de2099d`, 82 allowlisted files on `main` — carries the review fixes and the
+  `assets/` + `release/` allowlist entries).
 
 ## Open questions
 
@@ -38,5 +39,6 @@ Newest line first. One line per phase end.
 
 | Date | Phase | Result |
 |---|---|---|
+| 2026-11-22 | review | `/review` (medium) on `0e20a3f`: 14 findings (4 Critical), verdict Request changes; all 14 fixed (`release.py`, `include.txt`, docs) and verified (`py_compile`, probes, `check` PASS); snapshot republished (`de2099d`) |
 | 2026-11-22 | retrofit | TEMPLATE_00 overlay landed additively; dev repo `winfw-mcp-dev` private; public repo `winfw-mcp` published (78 files, `a0434b1`) |
 | 2026-11-07 | 8 | 1.4.5 released: 340 tests serially green, fmt/clippy clean, CI green |
