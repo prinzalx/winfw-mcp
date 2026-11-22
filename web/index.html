@@ -1,0 +1,3048 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>winfw-mcp</title>
+    <style>
+      /* Design tokens. Everything the page paints comes from here, so a colour scheme is a list of
+         values rather than a hunt through the rules. */
+      :root {
+        --bg: #ffffff;
+        --fg: #1b1f24;
+        --muted: #5b6570;
+        --line: #d7dee6;
+        --field: #f6f8fa;
+        --accent: #0b62d0;
+        --ok: #1b7a3d;
+        --warn: #8a6100;
+        --bad: #a11111;
+        --band: #fff4e5;
+        --band-line: #e2b877;
+
+        --sp-1: 0.25rem;
+        --sp-2: 0.5rem;
+        --sp-3: 0.75rem;
+        --sp-4: 1rem;
+        --sp-5: 1.5rem;
+        --radius: 6px;
+      }
+
+      /* The dark values appear twice on purpose: once for an operating system that asks for dark
+         while the setting leaves the choice alone, and once for a setting that says dark on a
+         machine that asks for light. Without the second block the setting could only ever follow
+         the system, which is the opposite of storing it. */
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #242a31;
+          --fg: #eef2f6;
+          --muted: #a8b2bd;
+          --line: #454e58;
+          --field: #2d343c;
+          --accent: #7cc0ff;
+          --ok: #5fd98f;
+          --warn: #ecc35f;
+          --bad: #ff8080;
+          --band: #3a2e1c;
+          --band-line: #7d6230;
+        }
+      }
+
+      :root[data-theme="dark"] {
+        --bg: #242a31;
+        --fg: #eef2f6;
+        --muted: #a8b2bd;
+        --line: #454e58;
+        --field: #2d343c;
+        --accent: #7cc0ff;
+        --ok: #5fd98f;
+        --warn: #ecc35f;
+        --bad: #ff8080;
+        --band: #3a2e1c;
+        --band-line: #7d6230;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.45 system-ui, "Segoe UI", sans-serif;
+        margin: 0;
+        padding: var(--sp-4);
+      }
+
+      .wrap {
+        margin: 0 auto;
+        max-width: 1400px;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      /* 1. Header: one row, the name on the left, the state of the machine on the right. */
+      .topbar {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-3);
+        justify-content: space-between;
+      }
+
+      h1 {
+        font-size: 1.2rem;
+        letter-spacing: 0.01em;
+        margin: 0;
+      }
+
+      .brand {
+        display: flex;
+        flex-direction: column;
+        gap: 0.1rem;
+      }
+
+      .version {
+        color: var(--muted);
+        font-size: 0.75rem;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-2);
+      }
+
+      .chip {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 0.8rem;
+        padding: 0.15rem 0.6rem;
+        white-space: nowrap;
+      }
+
+      /* The three header chips are buttons now, so they must not look like one. */
+      button.chip {
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .chip.ok {
+        border-color: var(--ok);
+        color: var(--ok);
+      }
+
+      .chip.bad {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+
+      .chip.warn {
+        border-color: var(--warn);
+        color: var(--warn);
+      }
+
+      .chip.off {
+        color: var(--muted);
+      }
+
+      /* A rule can name several ports; the table shows them as compact chips. */
+      .portlist {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.2rem 0.3rem;
+      }
+
+      .portlist .chip {
+        font-size: 0.72rem;
+        padding: 0.05rem 0.45rem;
+      }
+
+      /* The read-only hint is a band across the page rather than a clause at the end of a line: a
+         tab that cannot write has to say so before the first click, not after it. */
+      .band {
+        background: var(--band);
+        border: 1px solid var(--band-line);
+        border-radius: var(--radius);
+        font-size: 0.9rem;
+        margin: var(--sp-3) 0;
+        padding: var(--sp-2) var(--sp-3);
+      }
+
+      .banner {
+        background: var(--band);
+        border: 1px solid var(--band-line);
+        border-radius: var(--radius);
+        margin: var(--sp-3) 0 0;
+        padding: var(--sp-2) var(--sp-3);
+      }
+
+      .banner p {
+        margin: var(--sp-1) 0;
+      }
+
+      .statusline {
+        align-items: baseline;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-3);
+        justify-content: space-between;
+        margin-top: var(--sp-3);
+        min-height: 1.2rem;
+      }
+
+      .status {
+        color: var(--accent);
+        font-size: 0.85rem;
+      }
+
+      .sub {
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      /* The name a target address answers with, shown above the editable address of a
+         connection row: the number stays editable, the name is what gets read. */
+      table.targets .fqdn {
+        color: var(--accent);
+        font-size: 0.82rem;
+        line-height: 1.2;
+        min-height: 0;
+      }
+
+      /* The marks beside a shown address: small, quiet, and the only way this page
+         reaches out to a service. */
+      .ipinfo,
+      .why {
+        color: var(--muted);
+        font-size: 0.75rem;
+        margin-left: 0.25rem;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+
+      .ipinfo:hover,
+      .why:hover {
+        color: var(--accent);
+        text-decoration: underline;
+      }
+
+      /* A value with its marks is one line: an icon that wrapped below the value it
+         belongs to read as belonging to nothing. */
+      .line {
+        align-items: center;
+        display: flex;
+        flex-wrap: nowrap;
+        white-space: nowrap;
+      }
+
+      /* The same rule in a Detected row, where the address and its marks sit inline in
+         the meta text and must not break apart either. */
+      .count .where {
+        white-space: nowrap;
+      }
+
+      /* 2. Tabs. */
+      .tabs {
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        gap: var(--sp-1);
+        margin-top: var(--sp-4);
+      }
+
+      .tab {
+        background: transparent;
+        border: 1px solid transparent;
+        border-bottom: none;
+        border-radius: var(--radius) var(--radius) 0 0;
+        color: var(--muted);
+        cursor: pointer;
+        font: inherit;
+        padding: var(--sp-2) var(--sp-3);
+        position: relative;
+        top: 1px;
+      }
+
+      .tab.active {
+        border-color: var(--line);
+        color: var(--fg);
+        font-weight: 600;
+      }
+
+      .badge {
+        background: var(--field);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 0.75rem;
+        padding: 0 0.4rem;
+      }
+
+      .panel {
+        padding-top: var(--sp-3);
+      }
+
+      .panel h2 {
+        font-size: 1rem;
+        margin: 0;
+      }
+
+      .panel h3 {
+        color: var(--muted);
+        font-size: 0.78rem;
+        letter-spacing: 0.05em;
+        margin: var(--sp-5) 0 var(--sp-2);
+        text-transform: uppercase;
+      }
+
+      .panel-head {
+        align-items: baseline;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-3);
+        justify-content: space-between;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-2);
+      }
+
+      .actions + .actions {
+        margin-top: var(--sp-2);
+      }
+
+      button {
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.85rem;
+        padding: 0.3rem 0.7rem;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      button:disabled {
+        color: var(--muted);
+        cursor: default;
+        opacity: 0.55;
+      }
+
+      button.primary.ok {
+        border-color: var(--ok);
+        color: var(--ok);
+      }
+
+      button.primary.bad {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+
+      button.ghost {
+        border-color: transparent;
+        color: var(--muted);
+      }
+
+      button.danger {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+
+      input[type="text"],
+      input[type="search"],
+      select {
+        background: var(--field);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        color: inherit;
+        font: inherit;
+        font-size: 0.9rem;
+        padding: 0.3rem 0.4rem;
+        width: 100%;
+      }
+
+      input[type="text"]:focus,
+      input[type="search"]:focus,
+      select:focus {
+        border-color: var(--accent);
+        outline: none;
+      }
+
+      .empty {
+        color: var(--muted);
+        list-style: none;
+        padding: var(--sp-5) 0;
+        text-align: center;
+      }
+
+      /* The line between the default block and the custom rules of the table. */
+      tr.section td {
+        color: var(--muted);
+        font-size: 0.8em;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        padding: var(--sp-4) 0 var(--sp-1);
+        border-bottom: 1px solid color-mix(in srgb, var(--muted) 30%, transparent);
+      }
+
+      /* The clipboard mark beside a shown value. Quiet until hovered, so dense tables stay dense. */
+      button.copy {
+        border: none;
+        background: none;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 0.75em;
+        padding: 0 2px;
+        margin-left: 3px;
+        opacity: 0.4;
+      }
+
+      button.copy:hover {
+        opacity: 1;
+      }
+
+      /* 3. Connections: one card per program, its targets in a monospace table below. */
+      ul.cards {
+        list-style: none;
+        margin: var(--sp-3) 0 0;
+        padding: 0;
+      }
+
+      ul.cards > li {
+        border-bottom: 1px solid var(--line);
+        padding: var(--sp-3) 0;
+      }
+
+      .rowline {
+        align-items: flex-start;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-3);
+      }
+
+      .who {
+        flex: 1 1 16rem;
+        min-width: 0;
+      }
+
+      /* The name and its copy mark share one line; the name gives way before the mark
+         does, so the mark never wraps below. */
+      .who .line .name {
+        min-width: 0;
+      }
+
+      .who .name {
+        display: block;
+        font-size: 1rem;
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .who .path,
+      .who .user {
+        color: var(--muted);
+        display: block;
+        font-size: 0.75rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .count {
+        color: var(--muted);
+        font-size: 0.82rem;
+        white-space: nowrap;
+      }
+
+      .ops {
+        display: flex;
+        gap: var(--sp-1);
+        margin-left: auto;
+      }
+
+      table.targets {
+        border-collapse: collapse;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 0.78rem;
+        margin-top: var(--sp-2);
+        width: 100%;
+      }
+
+      table.targets th {
+        color: var(--muted);
+        font-weight: 500;
+        text-align: left;
+      }
+
+      table.targets th,
+      table.targets td {
+        padding: 0.1rem 0.6rem 0.1rem 0;
+        white-space: nowrap;
+      }
+
+      /* One target per row was unreadable at a glance when the rows had no separator: every
+         row gets a line across the table, as the owner asked. */
+      table.targets tr {
+        border-top: 1px solid var(--line);
+      }
+
+      /* The target and port of a connection are the two parts of a narrower rule, so they are
+         editable right here; the rest of the row is evidence, not input. */
+      table.targets input {
+        background: transparent;
+        border: 1px solid transparent;
+        border-bottom: 1px solid var(--line);
+        border-radius: 3px 3px 0 0;
+        color: inherit;
+        font: inherit;
+        padding: 0 0.2rem;
+        width: 14ch;
+      }
+
+      table.targets input:focus {
+        border-color: var(--accent);
+        outline: none;
+      }
+
+      table.targets td.verdict.deny {
+        color: var(--bad);
+      }
+
+      table.targets td.verdict.allow {
+        color: var(--ok);
+      }
+
+      .caret {
+        border-color: transparent;
+        color: var(--muted);
+        padding: 0 var(--sp-1);
+      }
+
+      /* 4. Rules: fixed columns, so a row reads at the same place every time. */
+      table.rules {
+        border-collapse: collapse;
+        margin-top: var(--sp-3);
+        table-layout: fixed;
+        width: 100%;
+      }
+
+      table.rules th {
+        color: var(--muted);
+        font-size: 0.72rem;
+        letter-spacing: 0.04em;
+        text-align: left;
+        text-transform: uppercase;
+      }
+
+      table.rules td,
+      table.rules th {
+        border-bottom: 1px solid var(--line);
+        font-size: 0.85rem;
+        overflow: hidden;
+        padding: var(--sp-2);
+        text-overflow: ellipsis;
+        vertical-align: top;
+      }
+
+      table.rules td.mono {
+        font-family: ui-monospace, Consolas, monospace;
+      }
+
+      /* Fixed column widths: with eleven columns and no widths, a fixed layout spends the same
+         room on "udp" as on a path, and every wide field is cut in half. */
+      table.rules th:nth-child(1) { width: 11%; }
+      table.rules th:nth-child(2) { width: 6%; }
+      table.rules th:nth-child(3) { width: 24%; }
+      table.rules th:nth-child(4) { width: 5%; }
+      table.rules th:nth-child(5) { width: 6%; }
+      table.rules th:nth-child(6) { width: 9%; }
+      table.rules th:nth-child(7) { width: 11%; }
+      table.rules th:nth-child(8) { width: 9%; }
+      table.rules th:nth-child(9) { width: 10%; }
+      table.rules th:nth-child(10) { width: 4%; }
+      table.rules th:nth-child(11) { width: 11%; }
+
+      /* The truncation badge sits under the pattern, so it gets its own line rather than eating
+         into the ellipsis the path is already fighting for. */
+      table.rules td.mono .tag {
+        display: inline-block;
+        margin-top: 0.2rem;
+      }
+
+      .tag {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 0.75rem;
+        padding: 0 0.45rem;
+        white-space: nowrap;
+      }
+
+      .tag.allow {
+        border-color: var(--ok);
+        color: var(--ok);
+      }
+
+      .tag.deny {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+
+      .tag.cut {
+        border-color: var(--warn);
+        color: var(--warn);
+      }
+
+      /* 5. Settings: one row per value, the explanation next to it rather than under the page. */
+      .rows {
+        margin-top: var(--sp-3);
+      }
+
+      .setting {
+        align-items: baseline;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-3);
+        padding: var(--sp-3) 0;
+      }
+
+      .setting .label {
+        flex: 0 0 10rem;
+        font-weight: 600;
+      }
+
+      /* A switch is a span rather than a button, so it has no disabled state of its own; see the
+         aria-disabled rule. Keeping it a span is what lets the word itself be the control. */
+      .switch {
+        border-bottom: 1px dotted var(--muted);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .switch[aria-disabled="true"] {
+        cursor: default;
+        opacity: 0.5;
+        pointer-events: none;
+      }
+
+      .foot {
+        margin-top: var(--sp-4);
+        padding-top: var(--sp-2);
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.75rem;
+        text-align: center;
+      }
+
+      .foot span + span::before {
+        content: " \00b7 ";
+      }
+
+      dialog {
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        color: inherit;
+        padding: var(--sp-4);
+        width: min(30rem, 90vw);
+      }
+
+      dialog::backdrop {
+        background: rgba(0, 0, 0, 0.45);
+      }
+
+      dialog h2 {
+        font-size: 1rem;
+        margin: 0 0 var(--sp-3);
+      }
+
+      dialog .field {
+        align-items: center;
+        display: flex;
+        gap: var(--sp-3);
+        margin-bottom: var(--sp-2);
+      }
+
+      dialog .field span {
+        color: var(--muted);
+        flex: 0 0 6.5rem;
+        font-size: 0.82rem;
+      }
+
+      /* The choices carry words ("any direction", "udp"), and a select that clips its own
+         selected text hides the very information the field is for. */
+      dialog .field select {
+        flex: 1;
+        min-width: 16ch;
+        width: auto;
+      }
+
+      dialog .field input[type="text"] {
+        flex: 1;
+        min-width: 0;
+      }
+
+      dialog .actions {
+        justify-content: flex-end;
+        margin-top: var(--sp-4);
+      }
+
+      @media (max-width: 700px) {
+        table.rules td:nth-child(4),
+        table.rules th:nth-child(4),
+        table.rules td:nth-child(7),
+        table.rules th:nth-child(7) {
+          display: none;
+        }
+
+        .ops {
+          margin-left: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="topbar">
+        <div class="brand">
+          <h1>winfw-mcp</h1>
+          <span class="version" id="version"></span>
+        </div>
+        <div class="chips">
+          <button type="button" class="chip" id="chip-protection"
+            title="whether our filters are in the firewall store right now — click to pause protection or bring the filters back">protection</button>
+          <button type="button" class="chip" id="chip-policy"
+            title="what happens to a program no rule speaks about — click to reach the setting">policy</button>
+        </div>
+      </header>
+
+      <div
+        class="band"
+        id="read-only"
+        title="this tab has no session token, so it reads but does not write"
+        hidden
+      >
+        Read only &middot; this tab lost its session token due to a reload, a bookmark or a window from an earlier run - open the page from the tray icon to make changes
+      </div>
+
+      <div id="banner"></div>
+
+      <div class="statusline">
+        <span class="status" id="status"></span>
+        <span class="sub" id="addr"></span>
+      </div>
+
+      <nav class="tabs">
+        <button class="tab active" data-tab="connections" type="button">Connections</button>
+        <button class="tab" data-tab="rules" type="button">Rules</button>
+        <button class="tab" data-tab="detected" type="button">
+          Detected <span class="badge" id="detected-count" hidden>0</span>
+        </button>
+        <button class="tab" data-tab="settings" type="button">Settings</button>
+      </nav>
+
+      <section class="panel" id="tab-connections">
+        <div class="panel-head">
+          <h2>Connections <span class="sub" id="monitor"></span></h2>
+          <label
+            class="sub"
+            title="ON: show local network connections - hidden is not allowed: without a rule these connections are still blocked"
+          >
+            <input type="checkbox" id="show-lan" />
+            local network
+          </label>
+          <label
+            class="sub"
+            title="ON: show allowed connections"
+          >
+            <input type="checkbox" id="show-allowed" />
+            allowed
+          </label>
+        </div>
+        <ul class="cards" id="events"></ul>
+      </section>
+
+      <section class="panel" id="tab-rules" hidden>
+        <div class="panel-head">
+          <h2>Rules</h2>
+          <input
+            id="rules-filter"
+            type="search"
+            placeholder="filter"
+            title="hide rows that do not contain this text - the order of the file is untouched"
+          />
+          <div class="actions">
+            <button id="add" title="Append a rule and edit it">Add rule</button>
+          </div>
+        </div>
+        <table class="rules">
+          <colgroup>
+            <col style="width: 9rem" />
+            <col style="width: 4.5rem" />
+            <col />
+            <col style="width: 5rem" />
+            <col style="width: 5rem" />
+            <col style="width: 4.5rem" />
+            <col style="width: 7rem" />
+            <col style="width: 7rem" />
+            <col style="width: 8rem" />
+            <col style="width: 4rem" />
+            <col style="width: 8rem" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Action</th>
+              <th>Program</th>
+              <th>Protocol</th>
+              <th>Direction</th>
+              <th>Port</th>
+              <th>Destination</th>
+              <th>Local</th>
+              <th>Comment</th>
+              <th>Order</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="rules"></tbody>
+        </table>
+        <p class="sub" id="share"></p>
+      </section>
+
+      <section class="panel" id="tab-detected" hidden>
+        <div class="panel-head">
+          <h2>Detected</h2>
+          <input
+            id="detected-filter"
+            type="search"
+            placeholder="filter"
+            title="hide rows that do not contain this text"
+          />
+          <span class="sub">last 100 Applications no rule speaks about yet.</span>
+          <button
+            id="detected-clear"
+            class="ghost"
+            title="drop every entry without deciding any of it - an application that keeps connecting is asked about again"
+          >
+            Clear list
+          </button>
+        </div>
+        <ul class="cards" id="detected"></ul>
+      </section>
+
+      <section class="panel" id="tab-settings" hidden>
+        <h2>Settings</h2>
+        <div class="rows">
+          <div class="setting">
+            <span class="label">Default policy</span>
+            <span class="switch" id="default-policy" title="click to toggle the default policy">deny</span>
+            <span class="sub" id="policy-note"></span>
+          </div>
+          <div class="setting">
+            <span class="label">Protection</span>
+            <span class="switch" id="protection" title="click to pause or resume the firewall">on</span>
+            <span class="sub">Paused takes our filters out of the store.</span>
+          </div>
+          <div class="setting">
+            <span class="label">Theme</span>
+            <span class="switch" id="theme" title="click to cycle light, dark and auto">auto</span>
+          </div>
+          <div class="setting">
+            <span class="label">Log level</span>
+            <span class="switch" id="log-level" title="click to cycle the verbosity of the log">info</span>
+            <span class="sub">Takes effect at once and is written to config.toml.</span>
+          </div>
+        </div>
+
+        <h3>Profile</h3>
+        <div class="actions">
+          <select id="profile" title="Named rule set" style="width: 14rem"></select>
+          <button id="profile-new" title="Copy the live rules into a new profile and switch to it">New</button>
+          <button id="profile-rename" title="Give the live profile another name">Rename</button>
+          <button id="profile-delete" title="Remove the live profile and fall back to rules.toml">Delete</button>
+        </div>
+
+        <h3>Tools</h3>
+        <div class="actions">
+          <button id="export" title="Write a backup copy of the settings and rules">Export</button>
+          <button id="import" title="Add one rule from a share string">Import</button>
+          <button id="restore" title="Replace the rules with an exported file">Restore</button>
+          <input type="file" id="restore-file" accept=".toml,text/plain" hidden />
+        </div>
+        <div class="actions">
+          <button id="apply" title="Write rules.toml and rebuild the filters">Apply to WFP</button>
+          <button id="clear" title="Take our filters out of the store">Clear our filters</button>
+        </div>
+        <div class="actions">
+          <button id="quit" class="danger" title="Stop this tool; the rules stay in the firewall">Quit</button>
+        </div>
+
+</section>
+      <footer class="foot">
+        <span id="foot-store"></span>
+        <span id="foot-token"
+          >a reload of this tab loses its write token &middot; open the page from the tray icon
+          again</span
+        >
+      </footer>
+    </div>
+
+    <dialog id="rule-dialog">
+      <h2>Rule</h2>
+      <div class="field"><span>Name</span><input type="text" id="rule-name" /></div>
+      <div class="field"><span>Action</span><select id="rule-action"></select></div>
+      <div class="field">
+        <span>Program</span><input
+          type="text"
+          id="rule-pattern"
+          spellcheck="false"
+          placeholder="C:\path\to\app.exe — or a comma-separated list of paths"
+          title="one path, a path with the wildcards * and ?, or a comma-separated list of them"
+        />
+      </div>
+      <div class="field">
+        <span>Service</span><input
+          type="text"
+          id="rule-service"
+          placeholder="whole program — or a comma-separated list such as Dnscache, Dhcp"
+          title="the services whose connections this rule is about; a rule naming services narrows a program like svchost.exe to the services it names"
+        />
+      </div>
+      <div class="field">
+        <span>Protocol</span><input type="text" id="rule-protocol" placeholder="any" title="tcp, udp, or a protocol number such as 47" />
+      </div>
+      <div class="field"><span>Direction</span><select id="rule-direction"></select></div>
+      <div class="field">
+        <span>Port</span><input
+          type="text"
+          id="rule-port"
+          placeholder="any — or a comma-separated list such as 80, 443, 8080-8090"
+          title="a port such as 443, a range such as 1024-2048, or a comma-separated list of them"
+        />
+      </div>
+      <div class="field">
+        <span>Destination</span>
+        <input
+          type="text"
+          id="rule-remote"
+          placeholder="any — addresses and names, comma-separated, such as 10.0.0.5, 192.168.1.0/24, www.example.com"
+          title="an address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9, and a name such as www.example.com, mixed in one comma-separated list; names are resolved when the filters are built, and a name takes no wildcard"
+        />
+      </div>
+      <div class="field">
+        <span>Local</span>
+        <input
+          type="text"
+          id="rule-local"
+          placeholder="any — or a comma-separated list such as 10.0.0.5, 192.168.1.0/24"
+          title="a local address, network or span such as 10.0.0.5, 192.168.1.0/24 or 10.0.0.1-10.0.0.9, or a comma-separated list of them"
+        />
+      </div>
+      <div class="field"><span>Comment</span><input type="text" id="rule-comment" placeholder="why" spellcheck="false" /></div>
+      <div class="field">
+        <span>Enabled</span><input type="checkbox" id="rule-enabled" style="width: auto" />
+      </div>
+      <div class="field">
+        <span>Temporary</span>
+        <input
+          type="checkbox"
+          id="rule-temporary"
+          style="width: auto"
+          title="removed from the firewall as soon as no process of this program is running"
+        />
+      </div>
+      <div class="actions">
+        <button id="rule-cancel" type="button">Cancel</button>
+        <button id="rule-save" class="primary ok" type="button">Save</button>
+      </div>
+    </dialog>
+
+    <dialog id="detected-dialog">
+      <h2>Decide</h2>
+      <div class="field"><span>Pattern</span><input type="text" id="detected-pattern" spellcheck="false" /></div>
+      <div class="field"><span>Action</span><select id="detected-action"></select></div>
+      <div class="field"><span>Remote</span><input type="text" id="detected-remote" spellcheck="false" /></div>
+      <div class="field"><span>Port</span><input type="text" id="detected-port" spellcheck="false" /></div>
+      <p class="sub">
+        The pattern is what the new rule will match, not what the firewall reported. Remote and
+        port carry the destination the entry was about, so the rule can be narrowed to it.
+      </p>
+      <div class="actions">
+        <button id="detected-cancel" type="button">Cancel</button>
+        <button id="detected-save" class="primary ok" type="button">Save</button>
+      </div>
+    </dialog>
+
+    <script>
+      "use strict";
+
+      let rules = [];
+      // The rules whose wildcard pattern matched more applications than the cap allows, keyed by
+      // name and pattern, which together identify a rule the way the table shows it.
+      let truncations = new Map();
+      // The reach of the names a rule holds, keyed by rule name, mirroring `dest_notes`.
+      let destNotes = new Map();
+      let detected = [];
+
+      // The state answer carries at most twenty entries, so the badge cannot be built from the
+      // list alone: a queue of forty would be announced as twenty. The server answers the whole
+      // count beside the truncated list.
+      let detectedTotal = 0;
+
+      // Who owns each program path the state showed, keyed by the lowercased path: "windows",
+      // "third_party", "unsigned" or "interpreter". The server answers once per path and caches
+      // there, so this is a copy of an answer that is already paid for.
+      let origins = new Map();
+      // The newest events first, so a reload of the state and the stream feed the same list.
+      let events = [];
+
+      /* The connection rows are built once and updated in place afterwards, so an open group,
+         its scroll position, its place in the list and the prefilled fields survive every event.
+         `appOrder` fixes the place a program was first given; `rowNodes` holds the rows of the
+         programs currently listed, keyed by the application path. */
+      const appOrder = [];
+      const rowNodes = new Map();
+      let protection = true;
+      // `allow` or `deny`, which the header spells out in a sentence because a firewall whose
+      // default is not obvious is a firewall that surprises its user.
+      let defaultPolicy = "deny";
+      let source = null;
+      let detectedTimer = null;
+      let detectedStamp = "";
+
+      const el = (id) => document.getElementById(id);
+      const MAX_EVENTS = 50;
+      const status = (message, hint) => {
+        el("status").textContent = message;
+        el("status").title = hint || "";
+      };
+
+      function element(tag, className, text) {
+        const node = document.createElement(tag);
+
+        if (className) {
+          node.className = className;
+        }
+        if (text !== undefined) {
+          node.textContent = text;
+        }
+        // Covers the buttons the lists and the banner build at render time: a tab without a token
+        // offers no write at all, `token` included, which is settled before the first render.
+        if (tag === "button" && token === "") {
+          node.disabled = true;
+        }
+
+        return node;
+      }
+
+      // The clipboard mark beside a shown value: a number a person reads is a number they may
+      // want to paste somewhere else. It stays alive without a session token, because copying
+      // writes to nobody but the clipboard, and it answers with a check for a moment.
+      function copyButton(getText) {
+        const button = element("button", "copy", "\u2398");
+
+        button.disabled = false;
+        button.title = "copy to clipboard";
+        button.addEventListener("click", () => {
+          navigator.clipboard.writeText(getText()).then(() => {
+            button.textContent = "\u2713";
+            window.setTimeout(() => {
+              button.textContent = "\u2398";
+            }, 800);
+          });
+        });
+
+        return button;
+      }
+
+      // A dropdown of the choices an optional rule field allows. The empty choice is shown as
+      // "any" and sent as null, because the server reads a field it is not told about as absent
+      // rather than as the word "any".
+      function select_choices(id, choices, current, on_change) {
+        const select = el(id);
+
+        select.replaceChildren();
+
+        for (const choice of choices) {
+          const option = element("option", null, choice === "" ? "any" : choice);
+
+          option.value = choice;
+          option.selected = (current ?? "") === choice;
+          select.appendChild(option);
+        }
+        if (on_change) {
+          select.addEventListener("change", () => on_change(select.value || null));
+        }
+
+        return select;
+      }
+
+      // Which of the four panels is on screen. Only the tab buttons and the sections carry the
+      // names, so showing one panel is hiding the other three.
+      function showTab(name) {
+        document.querySelectorAll(".tab").forEach((tab) => {
+          tab.classList.toggle("active", tab.dataset.tab === name);
+        });
+        document.querySelectorAll(".panel").forEach((panel) => {
+          panel.hidden = panel.id !== "tab-" + name;
+        });
+      }
+
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.addEventListener("click", () => showTab(tab.dataset.tab));
+      });
+
+      // The panel is only opened once per load: once the user has picked a tab themselves, a
+      // refresh of the state must not pull them back to another one.
+      let startTabSettled = false;
+
+      function renderBanner(store) {
+        const banner = el("banner");
+
+        banner.replaceChildren();
+
+        // The button is the action behind the prose: an unelevated process can ask the shell for
+        // an elevated start. Once granted, this page's server stops and the new one opens its own
+        // tab, so the page only has to say what it did.
+        const relaunch = () => {
+          request("POST", "/api/relaunch", {})
+            .then(() => status("relaunching elevated"))
+            .catch((error) => status("could not relaunch: " + error.message));
+        };
+
+        if (store.ok) {
+          const read = [];
+
+          if (store.inventory.providers !== null) {
+            read.push(store.inventory.providers + " providers");
+          }
+          if (store.inventory.sublayers !== null) {
+            read.push(store.inventory.sublayers + " sublayers");
+          }
+          if (store.inventory.filters !== null) {
+            read.push(store.inventory.filters + " filters");
+          }
+
+          el("foot-store").textContent = "store readable · " + read.join(", ");
+          banner.replaceChildren();
+
+          return;
+        }
+
+        const note = element("div", "banner");
+
+        el("foot-store").textContent = "";
+        note.appendChild(
+          element(
+            "strong",
+            null,
+            "The store refused us: " + (store.reason || "unknown reason") + ".",
+          ),
+        );
+        note.appendChild(
+          element(
+            "span",
+            "sub",
+            " Start this tool as administrator to read or change the live firewall.",
+          ),
+        );
+        if (!elevated) {
+          const button = element("button", null, "Relaunch elevated");
+
+          button.addEventListener("click", relaunch);
+          note.appendChild(button);
+        }
+        banner.appendChild(note);
+      }
+
+      /* Which scheme the style sheet should use. Only the two names it knows get the attribute;
+         `auto` removes it, which is what leaves the decision to the media query. */
+      function renderTheme(theme) {
+        if (theme === "light" || theme === "dark") {
+          document.documentElement.dataset.theme = theme;
+        } else {
+          delete document.documentElement.dataset.theme;
+        }
+      }
+
+      /* `rules.toml` is not ours any more: someone edited it, restored a backup, or the tool did not
+         write it. Saying so beats showing the rules from memory as if they were the file. */
+      function renderRulesChanged(changed) {
+        if (!changed) {
+          return;
+        }
+
+        el("banner").appendChild(
+          element(
+            "p",
+            "sub",
+            "rules.toml changed outside this tool. The rules shown are the ones in memory; save a rule to make the file ours again.",
+          ),
+        );
+      }
+
+      // Key of a rule for the truncation lookup, mirroring `pattern_truncations` from the server.
+      function ruleKey(rule) {
+        return rule.name + "\u0000" + rule.pattern;
+      }
+
+      // The dialog holds whichever rule the last click named, and a rule appended by "Add rule"
+      // takes its slot the same way.
+      let editingRule = -1;
+
+      function openRuleDialog(index) {
+        const rule = rules[index];
+
+        editingRule = index;
+        el("rule-name").value = rule.name;
+        select_choices("rule-action", ["allow", "deny"], rule.action);
+        el("rule-pattern").value = rule.pattern;
+        el("rule-service").value = rule.service ?? "";
+        el("rule-protocol").value = rule.protocol ?? "";
+        select_choices("rule-direction", ["", "out", "in"], rule.direction);
+        el("rule-port").value = rule.port ?? "";
+        el("rule-remote").value = [rule.remote, rule.dest].filter(Boolean).join(", ");
+        el("rule-local").value = rule.local ?? "";
+        el("rule-comment").value = rule.comment ?? "";
+        el("rule-enabled").checked = rule.enabled;
+        el("rule-temporary").checked = !!rule.temporary;
+        el("rule-dialog").showModal();
+      }
+
+      el("rule-cancel").addEventListener("click", () => {
+        if (pendingAdd) {
+          pendingAdd = false;
+          rules.pop();
+          renderRules();
+        }
+        el("rule-dialog").close();
+      });
+
+      el("rule-save").addEventListener("click", () => {
+        const rule = rules[editingRule];
+
+        pendingAdd = false;
+
+        if (!rule) {
+          el("rule-dialog").close();
+          return;
+        }
+
+        rule.name = el("rule-name").value;
+        rule.action = el("rule-action").value;
+        rule.pattern = el("rule-pattern").value;
+
+        // The five narrowing fields are optional on a rule, which the server reads as null, so an
+        // empty choice is sent as absent rather than as the word "any".
+        const protocol = el("rule-protocol").value.trim();
+        const port = el("rule-port").value.trim();
+        // One field on the page, two in the file: an element that reads as an address belongs
+        // to `remote`, anything else is a name and belongs to `dest`. They differ at build
+        // time - an address is final, a name is resolved when the filters are built - so the
+        // file keeps the split the page has given up.
+        const destination = el("rule-remote").value.trim();
+        const addresses = [];
+        const names = [];
+
+        if (destination !== "") {
+          for (const part of destination.split(",")) {
+            const s = part.trim();
+
+            if (s === "") {
+              continue;
+            }
+            if (isAddressLike(s)) {
+              addresses.push(s);
+            } else {
+              names.push(s);
+            }
+          }
+        }
+        const local = el("rule-local").value.trim();
+        const comment = el("rule-comment").value.trim();
+        const service = el("rule-service").value.trim();
+
+        if (splitPorts(port) === null) {
+          status("the port field takes ports and ranges such as “80, 443, 8080-8090”");
+          return;
+        }
+        rule.protocol = protocol === "" ? null : protocol;
+        rule.direction = el("rule-direction").value || null;
+        rule.port = port === "" ? null : port;
+        rule.remote = addresses.length ? addresses.join(", ") : null;
+        rule.dest = names.length ? names.join(", ") : null;
+        rule.local = local === "" ? null : local;
+        rule.comment = comment === "" ? null : comment;
+        rule.service = service === "" ? null : service;
+        rule.enabled = el("rule-enabled").checked;
+        rule.temporary = el("rule-temporary").checked;
+        el("rule-dialog").close();
+        save();
+      });
+
+      // Whether an element of the destination field reads as an address rather than as a name:
+      // anything with a colon is IPv6, and anything that starts with a digit and holds only
+      // digits, dots, slashes and dashes is IPv4 in some form. The server decides for certain;
+      // this only chooses which field a word belongs in.
+      function isAddressLike(text) {
+        return text.includes(":") || (/^\d/.test(text) && /^[0-9./-]+$/.test(text));
+      }
+
+      // The port field takes a comma-separated list of single ports and ranges. Returns null
+      // when an element is malformed; the server refuses such a rule too, but a message here
+      // keeps the dialog open with what the person typed.
+      function splitPorts(text) {
+        const t = (text || "").trim();
+
+        if (t === "") {
+          return [];
+        }
+        const parts = t.split(",");
+        const out = [];
+
+        for (const part of parts) {
+          const s = part.trim();
+
+          if (!/^\d+(-\d+)?$/.test(s)) {
+            return null;
+          }
+          out.push(s);
+        }
+        return out;
+      }
+
+      function portCells(port) {
+        const box = element("div", "portlist", null);
+        const list = port == null ? [] : port.split(",");
+
+        if (list.length === 0) {
+          box.appendChild(element("span", "chip off", "any"));
+          return box;
+        }
+        list.forEach((p) => {
+          const s = p.trim();
+
+          if (s !== "") {
+            box.appendChild(element("span", "chip ok", s));
+          }
+        });
+        return box;
+      }
+
+      const ORIGIN_TITLES = {
+        windows: "Windows component: signed to Windows standards and owned by the system installer",
+        third_party: "signed, but somebody else installed it",
+        unsigned: "no signature vouches for this file",
+        interpreter:
+          "interpreter on the blocklist: a script reaches the network through it, whatever the file owns",
+      };
+
+      // The origin tag of a program, asked of whichever of its path forms the server answered.
+      // A path the state never listed carries no tag rather than a guess.
+      function originTag(paths) {
+        let label = null;
+
+        for (const path of paths) {
+          const hit = origins.get(String(path || "").toLowerCase());
+
+          if (hit) {
+            label = hit;
+            break;
+          }
+        }
+
+        if (!label) {
+          return null;
+        }
+
+        const kind =
+          label === "windows" ? "allow" : label === "interpreter" ? "deny" : "cut";
+        const tag = element("span", "tag " + kind, label);
+
+        tag.title = ORIGIN_TITLES[label] || label;
+
+        return tag;
+      }
+
+      function renderRules() {
+        const body = el("rules");
+
+        body.replaceChildren();
+
+        if (rules.length === 0) {
+          const row = element("tr");
+          const cell = element("td", "empty", null);
+
+          cell.colSpan = 11;
+          cell.textContent =
+            defaultPolicy === "deny"
+              ? "No rules yet. Unknown programs are blocked; allow them from the Detected list."
+              : "No rules yet. Use “Add rule”.";
+          row.appendChild(cell);
+          body.appendChild(row);
+
+          return;
+        }
+
+        rules.forEach((rule, index) => {
+          // The rules the machine needs stand above the ones the person wrote, and one line
+          // between the blocks names what follows it: the implicit set the tool needs, and the
+          // custom rules the person earned from it.
+          if (index === 0 && rule.default) {
+            const line = element("tr", "section");
+            const cell = element("td", null, "implicit");
+
+            cell.colSpan = 11;
+            line.appendChild(cell);
+            body.appendChild(line);
+          }
+
+          if (index > 0 && !rule.default && rules[index - 1].default) {
+            const line = element("tr", "section");
+            const cell = element("td", null, "custom");
+
+            cell.colSpan = 11;
+            line.appendChild(cell);
+            body.appendChild(line);
+          }
+
+          const row = element("tr");
+
+          const name = element("td", null, rule.name);
+
+          if (!rule.enabled) {
+            name.classList.add("sub");
+          } else if (rule.action === "deny") {
+            name.classList.add("deny");
+          }
+
+          // A temporary rule is one the person meant for a single run, so the table says so:
+          // what reads as a permanent permit here is gone when the program is.
+          if (rule.temporary) {
+            const mark = element("span", "chip off", "temp");
+
+            mark.title = "removed as soon as no process of this program is running";
+            name.appendChild(mark);
+          }
+
+          row.appendChild(name);
+
+          row.appendChild(element("td", null)).appendChild(
+            element("span", "tag " + rule.action, rule.action),
+          );
+
+          // The list names programs, not paths: the file name reads, the full path is one hover
+          // or one edit away.
+          const firstPart = rule.pattern.split(",")[0].trim();
+          let shown = fileName(firstPart);
+
+          if (shown === "" || /^[*?]+$/.test(shown)) {
+            shown = firstPart;
+          }
+
+          const program = element(
+            "td",
+            null,
+            shown + (rule.pattern.includes(",") ? " \u2026" : ""),
+          );
+
+          program.title = rule.pattern;
+
+          // The origin of the first named program, so a Windows component and a downloader can
+          // be told apart in the list rather than only by reading the path. It starts on its own
+          // line: the program name is what the eye reads first.
+          const origin = originTag([firstPart]);
+
+          if (origin) {
+            program.appendChild(element("br"));
+            program.appendChild(origin);
+          }
+
+          // The services a rule names are half of what it decides, so they belong in the list
+          // rather than only one edit away.
+          if (rule.service) {
+            const chip = element("span", "chip", rule.service);
+
+            chip.title = "only the connections of these services";
+            program.appendChild(chip);
+          }
+
+          // No copy mark on the program or the port: the owner asked for the list without
+          // them; only the address list keeps its copy.
+          row.appendChild(program);
+
+          row.appendChild(element("td", null, rule.protocol ?? "any"));
+          row.appendChild(element("td", null, rule.direction ?? "any"));
+
+          const portCell = element("td");
+
+          portCell.appendChild(portCells(rule.port));
+          row.appendChild(portCell);
+
+          // The destination of a rule is the union of its addresses and its resolved names.
+          // Every address stands on its own so the name behind it can answer on the hover -
+          // nobody reads a bare number.
+          const destination = addressCell(rule.remote || rule.dest, rule.pattern);
+
+          if (rule.remote && rule.dest) {
+            destination.appendChild(document.createTextNode(" + " + rule.dest));
+          }
+          row.appendChild(destination);
+          row.appendChild(addressCell(rule.local, rule.pattern));
+          row.appendChild(element("td", null, rule.comment ?? ""));
+
+          // Order is not cosmetic: the file's order decides which rule wins, so the table offers
+          // a step in each direction and the server does the move on its own list.
+          const order = element("td", null);
+          const up = element("button", "ghost", "\u2191");
+
+          up.disabled = index === 0;
+          up.title = "move this rule one step up";
+          up.addEventListener("click", () => moveRule(index, index - 1));
+
+          const down = element("button", "ghost", "\u2193");
+
+          down.disabled = index === rules.length - 1;
+          down.title = "move this rule one step down";
+          down.addEventListener("click", () => moveRule(index, index + 1));
+          order.appendChild(up);
+          order.appendChild(down);
+
+          const ops = element("td", null);
+          const edit = element("button", "ghost", "edit");
+
+          edit.title = "name, action, program and the narrowing fields";
+          edit.addEventListener("click", () => openRuleDialog(index));
+
+
+
+          const remove = element("button", "danger", "remove");
+
+          remove.addEventListener("click", () => {
+            rules.splice(index, 1);
+            save();
+          });
+          ops.appendChild(edit);
+          ops.appendChild(remove);
+          row.appendChild(order);
+          row.appendChild(ops);
+
+          // The cap is worth a word: a pattern that matched more applications than were installed
+          // is a rule that quietly does less than it reads.
+          const cut = truncations.get(ruleKey(rule));
+
+          if (cut) {
+            program.title =
+              "pattern has " + cut.matches + " matches, only " + cut.installed + " installed";
+            program.appendChild(element("span", "tag cut", cut.matches + "\u2192" + cut.installed));
+          }
+          const note = destNotes.get(rule.name);
+
+          if (note) {
+            const dead = note.names.filter((n) => n.installed === 0);
+            const short = note.names.filter((n) => n.total > n.installed);
+            const tag = element(
+              "span",
+              "tag" + (dead.length || short.length ? " cut" : " allow"),
+              dead.length ? dead.length + " unresolved" : "resolved " + note.names.map((n) => n.installed).join("+"),
+            );
+
+            tag.title = note.names
+              .map((n) =>
+                n.installed === 0
+                  ? n.name + ": unresolved"
+                  : n.total > n.installed
+                    ? n.name + ": " + n.total + " found, only " + n.installed + " installed"
+                    : n.name + ": " + n.installed + " addresses",
+              )
+              .join("\n");
+            program.appendChild(tag);
+          }
+          // Everything the filter can match on this row, lowercased once so typing stays
+          // instant: a person with hundreds of rules searches, and the file's order — the
+          // priority nobody should have to think about — stays untouched by the view.
+          row.searchText = [
+            rule.name,
+            rule.pattern,
+            rule.service,
+            rule.protocol,
+            rule.direction,
+            rule.port,
+            rule.remote,
+            rule.dest,
+            rule.local,
+            rule.comment,
+            rule.action,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          body.appendChild(row);
+        });
+
+        applyRuleFilter();
+      }
+
+      // Hide every rule row whose text does not contain what was typed. Only the view
+      // changes: the rules themselves, and their order, stay exactly as the file has them.
+      function applyRuleFilter() {
+        const text = el("rules-filter").value.trim().toLowerCase();
+
+        for (const node of el("rules").children) {
+          if (node.classList.contains("section")) {
+            // The implicit/custom divider lines speak about whole blocks; with a filter on
+            // they would label rows that are mostly hidden.
+            node.hidden = text !== "";
+            continue;
+          }
+          node.hidden = text !== "" && !(node.searchText || "").includes(text);
+        }
+      }
+
+      el("rules-filter").addEventListener("input", applyRuleFilter);
+
+      let editingDetected = null;
+
+      // Allow, Deny and Edit all land here: a dialog opens before any Add writes, and the
+      // buttons only prefill it. The pattern is editable on purpose — widening it to a wildcard
+      // before deciding is the usual wish — and remote and port arrive prefilled from the
+      // entry, because narrowing the rule to the destination the entry was about is the point
+      // of an entry that names one. The port is `to_port`, the port of the newest event.
+      function openDetectedDialog(entry, action) {
+        editingDetected = entry;
+        el("detected-pattern").value = entry.display;
+        select_choices("detected-action", ["allow", "deny"], action);
+        el("detected-remote").value = entry.remote ?? "";
+        el("detected-port").value = entry.to_port ?? "";
+        el("detected-dialog").showModal();
+      }
+
+      el("detected-cancel").addEventListener("click", () => el("detected-dialog").close());
+
+      el("detected-save").addEventListener("click", async () => {
+        const entry = editingDetected;
+
+        if (!entry) {
+          el("detected-dialog").close();
+          return;
+        }
+
+        const port = el("detected-port").value.trim();
+
+        if (port !== "" && splitPorts(port) === null) {
+          status("the port field takes ports and ranges such as “80, 443, 8080-8090”");
+          return;
+        }
+
+        const action = el("detected-action").value;
+
+        try {
+          apply(await request("POST", "/api/detected", {
+            app: entry.app,
+            pattern: el("detected-pattern").value,
+            remote: el("detected-remote").value.trim() || null,
+            port: port === "" ? null : port,
+            action,
+          }));
+          // The server takes the entry out of the list when it accepted the rule, so the view
+          // drops it the same way; a rejection leaves it waiting.
+          detected = detected.filter(
+            (other) =>
+              other.app !== entry.app || (other.remote ?? null) !== (entry.remote ?? null),
+          );
+          renderDetected();
+          status(action + " written to the rules");
+        } catch (error) {
+          status("could not decide: " + error.message);
+        }
+        el("detected-dialog").close();
+      });
+
+      function renderDetected() {
+        const body = el("detected");
+
+        body.replaceChildren();
+
+        el("detected-count").textContent =
+          detectedTotal > detected.length ? detectedTotal + "+" : String(detectedTotal);
+        el("detected-count").hidden = detectedTotal === 0;
+
+        if (detected.length === 0) {
+          body.appendChild(element("li", "empty", "Nothing waiting for a decision."));
+
+          return;
+        }
+
+        detected.forEach((entry) => {
+          const row = element("li");
+          const who = element("div", "who");
+
+          // The copy mark belongs to the app name and rides on its line; the muted path
+          // stays below.
+          const whoLine = element("div", "line");
+
+          whoLine.appendChild(element("span", "name", fileName(entry.display)));
+          whoLine.appendChild(copyButton(() => entry.display));
+          who.appendChild(whoLine);
+          who.appendChild(element("span", "path", entry.display));
+          row.appendChild(who);
+
+          // Where it went comes first, address and port: an entry about a destination exists
+          // because of that address, and an entry about an application is much easier to place
+          // when it names what the program reached for last. The name behind the address lands
+          // on the hover, because the number is what has to stay readable.
+          const dest = entry.to_addr || entry.remote;
+          const meta = element(
+            "span",
+            "count",
+            entry.hits +
+              " hits · " +
+              new Date(entry.seen_ms).toLocaleTimeString() +
+              " · " +
+              (entry.allowed ? "allowed" : "blocked") +
+              // The account tells the svchost groups apart: a service reports its own, and a
+              // rule can be narrowed to it by name.
+              (entry.user ? " · " + entry.user : ""),
+          );
+
+          if (dest) {
+            // The marks belong to the address and the separator follows them: an earlier
+            // version wrote "to <ip> · " first, which left the marks glued to the hit count
+            // and let a narrow row drop the copy icon below the line.
+            const where = element("span", "where");
+
+            where.appendChild(
+              document.createTextNode("to " + dest + (entry.to_port ? ":" + entry.to_port : "") + " "),
+            );
+            meta.insertBefore(where, meta.firstChild);
+            hoverReverse(dest, where);
+            where.appendChild(copyButton(() => dest + (entry.to_port ? ":" + entry.to_port : "")));
+            where.appendChild(ipinfoLink(dest));
+            where.appendChild(whyLink(entry.app || entry.display, dest));
+            where.appendChild(document.createTextNode(" · "));
+          }
+
+          row.appendChild(meta);
+
+          // Before a decision is offered, the entry says what it is: a Windows component,
+          // something somebody installed, nothing signed, or an interpreter on the blocklist.
+          const origin = originTag([entry.app, entry.display]);
+
+          if (origin) {
+            meta.appendChild(origin);
+          }
+
+          const ops = element("div", "ops");
+
+          for (const [label, className, action] of [
+            ["Allow", "primary ok", "allow"],
+            ["Deny", "primary bad", "deny"],
+            ["Edit", "ghost", null],
+            ["Dismiss", "ghost", null],
+          ]) {
+            const button = element("button", className, label);
+
+            button.addEventListener("click", () => {
+              if (label === "Dismiss") {
+                decide(entry);
+
+                return;
+              }
+              // A decision that writes a rule is confirmed in the dialog first, whichever
+              // button opened it; Edit starts from the friendly default.
+              openDetectedDialog(entry, action || "allow");
+            });
+            ops.appendChild(button);
+          }
+          row.appendChild(ops);
+          row.searchText = [
+            entry.display,
+            entry.app,
+            dest,
+            entry.to_port,
+            entry.user,
+            entry.allowed ? "allowed" : "blocked",
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          body.appendChild(row);
+        });
+
+        applyDetectedFilter();
+      }
+
+      // The same live filter as in the Rules list: typing hides rows, nothing is rebuilt
+      // and the list keeps its order.
+      function applyDetectedFilter() {
+        const text = el("detected-filter").value.trim().toLowerCase();
+
+        for (const node of el("detected").children) {
+          node.hidden = text !== "" && !(node.searchText || "").includes(text);
+        }
+      }
+
+      el("detected-filter").addEventListener("input", applyDetectedFilter);
+
+      // Dismissal is the only decision that bypasses the dialog: it writes no rule, so there
+      // is nothing to confirm before it happens.
+      async function decide(entry) {
+        try {
+          await request("POST", "/api/detected/dismiss", {
+            app: entry.app,
+            remote: entry.remote ?? null,
+          });
+
+          detected = detected.filter(
+            (other) =>
+              other.app !== entry.app || (other.remote ?? null) !== (entry.remote ?? null),
+          );
+          renderDetected();
+          status("dismissed");
+        } catch (error) {
+          status("could not dismiss: " + error.message);
+        }
+      }
+
+      // A new application should show up in the Detected list without a reload, but reusing
+      // `/api/state` for it would also redraw the rules table and throw away what the user is
+      // typing there. So the stream only refreshes this one list, and at most once a second.
+      function scheduleDetectedRefresh() {
+        if (detectedTimer !== null) {
+          return;
+        }
+
+        detectedTimer = setTimeout(async () => {
+          detectedTimer = null;
+
+          if (document.hidden) {
+            return;
+          }
+
+          try {
+            const state = await request("GET", "/api/state");
+            const next = JSON.stringify([state.detected, state.detected_total]);
+
+            // The same answer as last time has nothing to paint; the last view stays.
+            if (next !== detectedStamp) {
+              detectedStamp = next;
+              detected = state.detected;
+              detectedTotal = state.detected_total || detected.length;
+              renderDetected();
+            }
+          } catch (error) {
+            status("could not refresh the detected list: " + error.message);
+          }
+        }, 1000);
+      }
+
+      // The last part of a Windows path, which is the name the list shows above the path itself.
+      function fileName(path) {
+        const at = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+
+        return at === -1 ? path : path.slice(at + 1);
+      }
+
+
+      // The events carry the IP protocol number. Name the two that matter and fall back to the
+      // number for everything else, which is what WFP handed us.
+      function protocolName(protocol) {
+        if (protocol === 6) {
+          return "tcp";
+        }
+
+        return protocol === 17 ? "udp" : String(protocol);
+      }
+
+      /* The feed grouped by program. The events arrive newest first, so the first event of a
+         program decides where its card sits: newest activity on top.
+
+         A connection that stayed on this machine never reaches the feed at all, so everything here
+         left it. What did not leave the local segment is marked, and left out while the filter is
+         on. */
+      // The Allow and Deny buttons of a program card append a rule the same way "Add rule"
+      // does, but every field the connection proved is already filled: program, protocol,
+      // direction, remote address and remote port. Cancel takes the fresh row out again,
+      // exactly like cancelling "Add rule".
+      function addRuleFromEvent(action, event) {
+        pendingAdd = true;
+        // The name is the better answer when there is one: a rule that names
+        // `sync.heylogin.app` survives the next IP, and the person reading the dialog
+        // recognises the target. Only where no name was answered stands the number alone.
+        const name = reverseNames.get(event.remote_addr) || null;
+
+        rules.push({
+          name: "",
+          action: action,
+          pattern: event.display || event.app,
+          enabled: true,
+          protocol: event.protocol ? protocolName(event.protocol) : null,
+          direction: "out",
+          port: event.remote_port ? String(event.remote_port) : null,
+          remote: name ? null : event.remote_addr || null,
+          dest: name,
+          local: null,
+          comment: null,
+        });
+        openRuleDialog(rules.length - 1);
+      }
+
+      function renderConnections() {
+        const list = el("events");
+        const showLan = el("show-lan").checked;
+        const showAllowed = el("show-allowed").checked;
+        const groups = new Map();
+
+        events.forEach((event) => {
+          if (event.local_network && !showLan) {
+            return;
+          }
+          // A connection a rule already allowed decided itself; the list is for the ones
+          // that are still asking. Off by default, so a permitted browser does not spend
+          // the short life it has in the window in front of the blocked ones.
+          if (event.allowed && !showAllowed) {
+            return;
+          }
+
+          const key = event.app || "(no application)";
+          let group = groups.get(key);
+
+          if (!group) {
+            group = {
+              app: event.app || "",
+              display: event.display || "",
+              hits: 0,
+              blocked: 0,
+              rule: null,
+              lan: 0,
+              user: null,
+              targets: [],
+            };
+            groups.set(key, group);
+          }
+
+          group.hits += 1;
+          if (event.allowed) {
+            group.blocked += 0;
+          } else {
+            group.blocked += 1;
+          }
+          if (event.local_network) {
+            group.lan += 1;
+          }
+          // The last rule named wins: it is the one the newest verdict blamed, which is the
+          // sentence the row has room for.
+          if (event.rule) {
+            group.rule = event.rule;
+          }
+          // The newest account wins, which is the same rule the blame column follows. A program
+          // run by two users is two rows worth of information we cannot show in one line.
+          if (event.user) {
+            group.user = event.user;
+          }
+          group.targets.push(event);
+        });
+
+        if (groups.size === 0) {
+          rowNodes.clear();
+          list.replaceChildren(
+            element(
+              "li",
+              "empty",
+              showAllowed
+                ? "No connection has left this machine since the page opened."
+                : "No connection has been blocked since the page opened.",
+            ),
+          );
+
+          return;
+        }
+
+        if (rowNodes.size === 0) {
+          list.replaceChildren();
+        }
+
+        /* A program keeps the place it was given the first time it was seen: a later event adds
+           to its row but never slides it past the pointer, and a new program joins at the top. */
+        groups.forEach((group) => {
+          if (!appOrder.includes(group.app)) {
+            appOrder.unshift(group.app);
+          }
+        });
+
+        const order = appOrder.filter((key) => groups.has(key));
+
+        order.forEach((key, index) => {
+          const group = groups.get(key);
+          const row = rowNodes.get(key) || buildConnectionRow(group);
+
+          rowNodes.set(key, row);
+
+          // Only the moving numbers and the blamed rule are rewritten; the elements stay.
+          row.group = group;
+          row.count.textContent =
+            group.hits + (group.lan > 0 ? " connections \u00b7 " + group.lan + " local net" : "");
+          row.verdict.textContent =
+            group.blocked > 0 ? "blocked" : group.rule ? "by rule " + group.rule : "allowed";
+          row.verdict.className = "tag " + (group.blocked > 0 ? "deny" : "allow");
+          row.caret.textContent =
+            group.targets.length + (group.targets.length === 1 ? " target" : " targets");
+
+          if (group.user && !row.user) {
+            row.user = element("span", "user", group.user);
+            row.who.appendChild(row.user);
+          }
+
+          // Refilled on every render: a state poll may know an origin this row did not have
+          // when it was built, and a row is never rebuilt to ask again.
+          const origin = originTag([group.app, group.display]);
+
+          row.origin.hidden = origin === null;
+
+          if (origin) {
+            row.origin.textContent = origin.textContent;
+            row.origin.className = origin.className;
+            row.origin.title = origin.title;
+          }
+
+          renderTargets(row, group);
+
+          // Into place by moving, never by rebuilding: appendChild relocates an existing node.
+          const at = list.children[index];
+
+          if (at !== row.li) {
+            list.insertBefore(row.li, at || null);
+          }
+        });
+
+        // Programs whose events all aged out of the ring leave the list with them.
+        rowNodes.forEach((row, key) => {
+          if (!groups.has(key)) {
+            row.li.remove();
+            rowNodes.delete(key);
+          }
+        });
+      }
+
+      // A program row is built once and kept: the open group, the caret text and the two
+      // prefilled fields of its target rows are state of the person using the page, and a
+      // refresh may not touch them.
+      function buildConnectionRow(group) {
+        const li = element("li");
+        const line = element("div", "rowline");
+        const who = element("div", "who");
+
+        // The copy mark belongs to the app name and rides on its line; the muted path
+        // stays below.
+        const whoLine = element("div", "line");
+
+        whoLine.appendChild(
+          element("span", "name", group.app === "" ? "(no application)" : fileName(group.app)),
+        );
+        whoLine.appendChild(copyButton(() => group.display || group.app));
+        who.appendChild(whoLine);
+        who.appendChild(element("span", "path", group.display || group.app));
+
+        const count = element("span", "count", "");
+
+        // A blocked connection is the one worth colouring: green over red would hide a refusal
+        // behind a permission from the same program.
+        const verdict = element("span", "tag", "");
+
+        // The origin tag is built empty and filled by the reconcile loop, because the origins
+        // arrive with the state while this row is built from the event feed.
+        const origin = element("span", "tag", "");
+
+        origin.hidden = true;
+
+        line.appendChild(who);
+        line.appendChild(count);
+        line.appendChild(verdict);
+        line.appendChild(origin);
+
+        const ops = element("div", "ops");
+        const row = {
+          li: li,
+          who: who,
+          user: null,
+          count: count,
+          verdict: verdict,
+          origin: origin,
+          targets: null,
+          tbody: null,
+          caret: null,
+          targetRows: new Map(),
+          targetKeys: "",
+          group: group,
+        };
+
+        for (const [label, className, action] of [
+          ["Allow", "primary ok", "allow"],
+          ["Deny", "primary bad", "deny"],
+        ]) {
+          const button = element("button", className, label);
+
+          // Least privilege: the dialog opens prefilled with the newest connection of this
+          // program - target and port included - so widening it to "*" stays a deliberate edit.
+          // `row.group` is the newest grouping, refreshed on every render.
+          button.addEventListener("click", () => addRuleFromEvent(action, row.group.targets[0]));
+          ops.appendChild(button);
+        }
+        line.appendChild(ops);
+        li.appendChild(line);
+
+        const targets = element("table", "targets");
+
+        targets.hidden = true;
+
+        const tbody = element("tbody");
+
+        targets.appendChild(tbody);
+
+        const head = element("tr");
+
+        for (const label of ["target", "port", "proto", "verdict", "time", ""]) {
+          head.appendChild(element("th", null, label));
+        }
+        tbody.appendChild(head);
+        li.appendChild(targets);
+
+        const caret = element("button", "caret", "");
+
+        caret.title = "show or hide the connections of this program";
+        caret.addEventListener("click", () => {
+          targets.hidden = !targets.hidden;
+        });
+        ops.appendChild(caret);
+
+        row.targets = targets;
+        row.tbody = tbody;
+        row.caret = caret;
+
+        return row;
+      }
+
+      // The target rows of one program, keyed by what never changes about a connection: the
+      // peer, its port, the protocol and the moment the firewall saw it. New rows join in the
+      // newest-first order, existing rows are only relocated, gone rows are dropped.
+      /* Reverse lookup names the address behind a target. It is display text under a value the
+         person already has, so it is asked once per address per tab and a late answer only fills
+         the spans that waited for it - the rows themselves are nobody's business but theirs. */
+      const reverseNames = new Map();
+      const reverseWaits = new Map();
+
+      function askReverse(ip, span) {
+        if (!ip) {
+          return;
+        }
+
+        const known = reverseNames.get(ip);
+
+        if (known !== undefined) {
+          span.textContent = known || "";
+          return;
+        }
+
+        let waits = reverseWaits.get(ip);
+
+        if (!waits) {
+          waits = [];
+          reverseWaits.set(ip, waits);
+
+          fetch("/api/reverse?ip=" + encodeURIComponent(ip))
+            .then((reply) => (reply.ok ? reply.json() : { name: null }))
+            .then((answer) => {
+              reverseNames.set(ip, answer.name || null);
+            })
+            .catch(() => {
+              // A failed read is not an answer: leave the address unasked so a later render
+              // tries again, instead of caching one outage as "this address has no name".
+            })
+            .finally(() => {
+              const name = reverseNames.get(ip) || "";
+
+              waits.forEach((waiting) => {
+                waiting.textContent = name;
+              });
+              reverseWaits.delete(ip);
+            });
+        }
+
+        waits.push(span);
+      }
+
+      // The same answer as a hover over text that already shows the address: askReverse names
+      // the peer in a span of its own, this one keeps the number and answers in the title.
+      // Joining askReverse's wait list is free - an address asked about twice is fetched once.
+      function hoverReverse(ip, node) {
+        const known = reverseNames.get(ip);
+
+        if (known !== undefined) {
+          node.title = known ? ip + " is " + known : ip;
+
+          return;
+        }
+
+        askReverse(ip, {
+          set textContent(name) {
+            node.title = name ? ip + " is " + name : ip;
+          },
+        });
+      }
+
+      // Who owns an address is a question for ipinfo.io, and only for the person who asks:
+      // the page itself never queries the service, it only opens the page of it in a new tab.
+      function ipinfoLink(ip) {
+        const link = element("a", "ipinfo");
+
+        link.href = "https://ipinfo.io/" + ip;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.title = "ipinfo.io for " + ip;
+        link.textContent = "\u2197";
+
+        return link;
+      }
+
+      // A blocked or surprising connection raises the question of why the program wanted it
+      // at all, and the closest answer is a search: the mark opens the question in a new tab,
+      // so the page stays as local as the ipinfo mark and asks only whoever clicks. The owner
+      // reads the question with the full path, extension included — it names the program
+      // exactly, where a bare file name can belong to several programs.
+      function whyLink(program, ip) {
+        const who = program || "this app";
+        const link = element("a", "why");
+
+        link.href =
+          "https://www.google.com/search?q=" +
+          encodeURIComponent("why does " + who + " contact " + ip);
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.title = "Google: why does " + who + " contact " + ip;
+        link.textContent = "?";
+
+        return link;
+      }
+
+      // One address list of a rule as a table cell: every element on its own so the name behind
+      // an address can answer on its hover. A name or a wildcard does not match the address
+      // shapes and is left alone; an empty list is what the rule leaves open, so it says any.
+      // The program is the one the rule speaks for, which is what the search mark asks about.
+      function addressCell(text, program) {
+        const cell = element("td", null);
+
+        if (!text) {
+          cell.textContent = "any";
+
+          return cell;
+        }
+
+        text.split(",").forEach((part, index) => {
+          const piece = part.trim();
+
+          if (index) {
+            cell.appendChild(document.createTextNode(", "));
+          }
+
+          const span = element("span", null, piece);
+
+          cell.appendChild(span);
+
+          if (/^\d+\.\d+\.\d+\.\d+$/.test(piece) || piece.includes(":")) {
+            hoverReverse(piece, span);
+            cell.appendChild(ipinfoLink(piece));
+
+            if (program) {
+              cell.appendChild(whyLink(program, piece));
+            }
+          }
+        });
+
+        cell.appendChild(copyButton(() => text));
+
+        return cell;
+      }
+
+      function renderTargets(row, group) {
+        // The same peer, port and protocol seen again at another second is not another
+        // target: rows are unique per triple and say how often they were seen, because
+        // five rows differing only in their time taught nobody anything. The newest event
+        // of a triple is its first occurrence, which is the one the row shows.
+        const seen = new Map();
+        const order = [];
+
+        group.targets.forEach((event) => {
+          const key = [event.remote_addr, event.remote_port, event.protocol].join("|");
+          const hit = seen.get(key);
+
+          if (hit) {
+            hit.hits += 1;
+          } else {
+            seen.set(key, { event, hits: 1 });
+            order.push(key);
+          }
+        });
+
+        const keys = order.map((key) => key + ":" + seen.get(key).hits).join(",");
+
+        if (keys === row.targetKeys) {
+          return;
+        }
+
+        row.targetKeys = keys;
+
+        const next = new Map();
+
+        order.forEach((key, index) => {
+          const hit = seen.get(key);
+          let tr = row.targetRows.get(key);
+
+          if (!tr) {
+            tr = buildTargetRow(group, hit.event);
+          }
+          tr.shownHits.textContent = hit.hits > 1 ? " \u00d7" + hit.hits : "";
+          next.set(key, tr);
+
+          // One past the header row.
+          const at = row.tbody.children[index + 1];
+
+          if (at !== tr) {
+            row.tbody.insertBefore(tr, at || null);
+          }
+        });
+
+        row.targetRows.forEach((tr, key) => {
+          if (!next.has(key)) {
+            tr.remove();
+          }
+        });
+        row.targetRows = next;
+      }
+
+      function buildTargetRow(group, event) {
+        const tr = element("tr");
+
+        // Name the rule the firewall blamed for this verdict. "other" means a filter we
+        // did not install (another firewall) that a later rebuild will not account for.
+        const blame = event.rule
+          ? " by " + event.rule
+          : event.filter_id
+            ? " by other"
+            : "";
+
+        // The two fields a narrower rule is made of, prefilled once from this connection:
+        // they belong to the person typing, and no later refresh writes over them.
+        const target = element("input", null);
+
+        target.value = event.remote_addr || "*";
+        target.title = "destination of the rule: address, *.domain or * for any";
+
+        const targetCell = element("td");
+        const nameLine = element("div", "fqdn");
+
+        targetCell.appendChild(nameLine);
+        // The address and its marks form one line that never wraps: a copy mark that
+        // fell below the value it copies read as belonging to nothing.
+        const targetLine = element("div", "line");
+
+        targetLine.appendChild(target);
+        targetLine.appendChild(copyButton(() => target.value.trim()));
+        targetLine.appendChild(ipinfoLink(event.remote_addr));
+        targetLine.appendChild(whyLink(group.app, event.remote_addr));
+        targetCell.appendChild(targetLine);
+        // The name is what a person reads a target by — nobody knows an address by its number —
+        // so it stands on a line of its own above the address, not under a hover.
+        askReverse(event.remote_addr, nameLine);
+        hoverReverse(event.remote_addr, target);
+        tr.appendChild(targetCell);
+
+        const port = element("input", null);
+
+        port.value = event.remote_port ? String(event.remote_port) : "*";
+        port.title = "port or range of the rule, * for any";
+
+        const portCell = element("td");
+        const portLine = element("div", "line");
+
+        portLine.appendChild(port);
+        portLine.appendChild(copyButton(() => port.value.trim()));
+        portCell.appendChild(portLine);
+        tr.appendChild(portCell);
+
+        tr.appendChild(element("td", null, protocolName(event.protocol)));
+        const verdictCell = element("td", "verdict " + (event.allowed ? "allow" : "deny"), event.kind + blame);
+
+        // How often this exact triple was seen rides behind the verdict; renderTargets
+        // rewrites it on every refresh.
+        tr.shownHits = element("span", null, "");
+        verdictCell.appendChild(tr.shownHits);
+        tr.appendChild(verdictCell);
+        tr.appendChild(element("td", null, new Date(event.time_ms).toLocaleTimeString()));
+
+        const ops = element("td", "ops");
+
+        // Same path as the program row's buttons: the dialog opens prefilled and the person
+        // confirms - an earlier version wrote the rule silently and nothing said so. The row
+        // fields win over the event, because they belong to the person typing.
+        for (const [label, className, action] of [
+          ["Allow", "primary ok", "allow"],
+          ["Deny", "primary bad", "deny"],
+        ]) {
+          const button = element("button", className, label);
+
+          button.addEventListener("click", () =>
+            addRuleFromEvent(action, {
+              app: group.app,
+              display: group.display || null,
+              protocol: event.protocol,
+              remote_addr: target.value.trim() === "" || target.value.trim() === "*"
+                ? null
+                : target.value.trim(),
+              remote_port: port.value.trim() === "" || port.value.trim() === "*"
+                ? null
+                : port.value.trim(),
+            }),
+          );
+          ops.appendChild(button);
+        }
+        tr.appendChild(ops);
+
+        return tr;
+      }
+
+      function renderEvent(event) {
+        events.unshift(event);
+
+        while (events.length > MAX_EVENTS) {
+          events.pop();
+        }
+
+        // A hidden tab only collects. The list is rebuilt when the tab is seen again.
+        if (!document.hidden) {
+          renderConnections();
+        }
+      }
+
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          renderConnections();
+          scheduleDetectedRefresh();
+        }
+      });
+
+      function watchEvents() {
+        if (source !== null || typeof EventSource === "undefined") {
+          return;
+        }
+
+        source = new EventSource("/api/events");
+        source.onmessage = (message) => {
+          renderEvent(JSON.parse(message.data));
+          scheduleDetectedRefresh();
+        };
+        source.onerror = () =>
+          status(
+            "event stream interrupted",
+            "the feed breaks when the tool's instance stops or restarts (an update, a tray quit) " +
+              "or the machine slept - the browser reconnects on its own, and a restarted " +
+              "instance needs the tab reopened from the tray for its new token",
+          );
+      }
+
+      async function shareRule(index) {
+        try {
+          const text = await request("POST", "/api/rules/share", { index });
+
+          el("share").textContent = "Share: " + text;
+
+          // The clipboard needs a secure context; over plain http on a loopback address the
+          // browser allows it, but a failure here must not hide the string on the page.
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(text).catch(() => {});
+          }
+        } catch (error) {
+          status("could not share: " + error.message);
+        }
+      }
+
+      // An empty connection list has a reason, and the monitor's state is what names it: an
+      // unelevated run cannot subscribe at all, and without this the list reads as a quiet machine
+      // rather than as a feed that never opened.
+      function renderMonitor(monitor) {
+        if (!monitor) {
+          return;
+        }
+
+        var text = "";
+
+        if (monitor.state === "running") {
+          text = "running, " + monitor.events + " events";
+          if (monitor.last_event_ms) {
+            var quiet = Math.round((Date.now() - monitor.last_event_ms) / 1000);
+
+            text += ", last event " + quiet + "s ago";
+          } else {
+            text += ", no event yet";
+          }
+        } else if (monitor.state === "refused") {
+          text = "no feed: " + (monitor.code ?? "refused");
+        } else {
+          text = monitor.state;
+        }
+
+        // "running, N events, last event Xs ago" said nothing a decision turned on
+        // (owner: nutzlos), so a running feed is silent now. Only states that mean a
+        // problem still show: a refused subscription would otherwise read as a quiet
+        // machine with an empty list.
+        el("monitor").textContent = monitor.state === "running" ? "" : "(" + text + ")";
+        el("monitor").title =
+          monitor.state === "refused"
+            ? "the event subscription was refused, so no connection can be listed"
+            : "the state of the connection feed";
+      }
+
+      // The header chips are controls: protection answers a click with the same
+      // request the settings page makes, and the policy chip moves to the settings tab, where
+      // its dropdown lives - flipping a default policy from a chip wants a confirm dialog of
+      // its own, which the settings page already has.
+      el("chip-protection").addEventListener("click", async () => {
+        try {
+          apply(await request("POST", "/api/protection", {}));
+        } catch (error) {
+          status("could not change protection: " + error.message);
+        }
+      });
+
+      // The chip is a toggle like its neighbour, not a link into the settings: the
+      // sentence on the setting itself explains what a flip means, the click does the flip.
+      el("chip-policy").addEventListener("click", async () => {
+        const next = defaultPolicy === "deny" ? "allow" : "deny";
+
+        try {
+          apply(await request("POST", "/api/settings", { default_policy: next }));
+          status("default policy is " + next);
+        } catch (error) {
+          status("could not change the default policy: " + error.message);
+        }
+      });
+
+      // F5 loses the token that lives only in this page's memory, and with it the right to
+      // write. A reload cannot be prevented; it can be questioned, so the loss is never silent.
+      window.addEventListener("beforeunload", () => {
+        if (token !== "") {
+          return "reloading loses this tab's write token";
+        }
+        return null;
+      });
+
+      // The three header chips only say what the state already told us; the controls that change
+      // these values live in Settings, where their explanations have room.
+      function renderChips(state) {
+        const protectionChip = el("chip-protection");
+
+        protectionChip.textContent = state.protection ? "protected" : "paused";
+        // Paused is not a neutral state: without the filters the machine is unguarded,
+        // and the owner wants that to read red rather than grey.
+        protectionChip.className = "chip " + (state.protection ? "ok" : "bad");
+
+        const policyChip = el("chip-policy");
+
+        policyChip.textContent = state.default_policy === "deny" ? "Block unknown" : "Allow unknown";
+        policyChip.className = "chip " + (state.default_policy === "deny" ? "ok" : "bad");
+        policyChip.style.cursor = "pointer";
+        policyChip.title =
+          state.default_policy === "deny"
+            ? "Programs without a rule are blocked. Loopback and the IPv6 base functions stay reachable."
+            : "Programs without a rule may go out; they only appear in the Detected list.";
+      }
+
+      function apply(state) {
+        rules = state.rules.rule;
+        el("version").textContent = state.version || "";
+        truncations = new Map(
+          (state.pattern_truncations || []).map((cut) => [ruleKey(cut), cut]),
+        );
+        destNotes = new Map((state.dest_notes || []).map((note) => [note.name, note]));
+        generation = state.generation;
+        elevated = state.elevated;
+        detected = state.detected;
+        detectedTotal = state.detected_total || detected.length;
+        origins = new Map(Object.entries(state.origins || {}));
+        protection = state.protection;
+        el("addr").textContent = location.host;
+        el("protection").textContent = state.protection ? "on" : "paused";
+        defaultPolicy = state.default_policy;
+        el("default-policy").textContent = state.default_policy;
+        el("policy-note").textContent =
+          state.default_policy === "deny"
+            ? "Programs without a rule are blocked. Loopback and the IPv6 base functions stay reachable."
+            : "Programs without a rule may go out; they only appear in the Detected list.";
+        el("theme").textContent = state.theme;
+        el("log-level").textContent = state.log_level;
+        renderTheme(state.theme);
+        renderChips(state);
+        renderRules();
+        renderDetected();
+        renderBanner(state.store);
+        renderRulesChanged(state.rules_changed);
+
+        // The state carries the newest events first, so the panel needs no second request.
+        if (state.events.length > 0) {
+          events = state.events.slice();
+          renderConnections();
+        }
+
+        renderMonitor(state.monitor);
+
+        watchEvents();
+
+        if (!startTabSettled) {
+          startTabSettled = true;
+          // Connections is the page's front door: what the machine is doing now, not the
+          // queue that may or may not hold something.
+          showTab("connections");
+        }
+
+        const store = state.store;
+
+        if (store.ok && (store.removed || store.installed)) {
+          status("removed " + store.removed + ", installed " + store.installed);
+        } else {
+          status("");
+        }
+      }
+
+      // The token arrives in the fragment of the URL the tray opens, and a fragment is never sent
+      // over the wire, so the secret is in no request, no log and no response body. It lives in
+      // this variable alone: no storage and no cookie, because a reload of the tab is not meant to
+      // keep a write right it can no longer account for.
+      let token = new URLSearchParams(window.location.hash.slice(1)).get("token") ?? "";
+
+      // Taken out of the address again at once, so the bar shows the page rather than a secret, and
+      // so a copy of the address does not hand the token to whoever receives it.
+      if (window.location.hash !== "") {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+
+      // Every control on the page that sends a writing request. A tab without a token can read the
+      // whole state but may not change it, and saying so before the first click is kinder than
+      // answering 401 after it. The buttons the lists build are handled where they are made.
+      const WRITE_CONTROLS = [
+        "add",
+        "apply",
+        "clear",
+        "export",
+        "import",
+        "restore",
+        "restore-file",
+        "quit",
+        "profile",
+        "profile-new",
+        "profile-rename",
+        "profile-delete",
+        "default-policy",
+        "protection",
+        "theme",
+        "log-level",
+      ];
+
+      WRITE_CONTROLS.forEach((id) => {
+        const node = el(id);
+
+        if (node.tagName === "BUTTON" || node.tagName === "SELECT") {
+          node.disabled = token === "";
+        } else {
+          // A settings switch is a span, so it has no disabled state; see the aria-disabled rule.
+          node.setAttribute("aria-disabled", token === "" ? "true" : "false");
+        }
+      });
+
+      el("read-only").hidden = token !== "";
+
+      // The version of the rule list this page last saw. A whole-list write names it, and a 409
+      // means someone else wrote while this page was open.
+      let generation = 0;
+
+      // Whether the server runs with an elevated token, which decides if the degraded banner
+      // offers the relaunch button at all.
+      let elevated = false;
+
+      async function request(method, path, payload) {
+        const headers = {};
+
+        if (payload) {
+          headers["content-type"] = "application/json";
+        }
+        if (token !== "") {
+          headers["x-winfw-token"] = token;
+        }
+
+        const response = await fetch(path, {
+          method,
+          headers,
+          body: payload ? JSON.stringify(payload) : undefined,
+        });
+
+        if (!response.ok && response.status !== 409) {
+          throw new Error(path + " answered " + response.status);
+        }
+
+        // One route answers with a bare Base64 string rather than JSON, and reading that as JSON
+        // would fail on the padding character.
+        if ((response.headers.get("content-type") ?? "").startsWith("application/json")) {
+          const body = await response.json();
+
+          if (response.status === 409) {
+            // A whole-list write named a generation the server has moved past. The body is the
+            // state as it is now; the caller says what it means.
+            body.conflict = true;
+          }
+
+          return body;
+        }
+
+        return response.text();
+      }
+
+      async function load() {
+        try {
+          apply(await request("GET", "/api/state"));
+        } catch (error) {
+          status("could not read the state: " + error.message);
+          setTimeout(load, 2000);
+        }
+
+        fillProfiles();
+      }
+
+      // Kept out of apply() so a refresh cannot reset a selection the user is mid-click on.
+      async function fillProfiles() {
+        try {
+          const profiles = await request("GET", "/api/profiles");
+          const select = el("profile");
+
+          select.replaceChildren();
+          for (const name of ["", ...profiles.names]) {
+            const option = document.createElement("option");
+
+            option.value = name;
+            option.textContent = name === "" ? "default" : name;
+            select.appendChild(option);
+          }
+          select.value = profiles.active;
+        } catch (error) {
+          // A missing profile list must not hide the rules.
+        }
+      }
+
+      async function save() {
+        try {
+          const state = await request("POST", "/api/rules", { rule: rules, generation: generation });
+
+          apply(state);
+          if (state.conflict) {
+            status("the rule list changed underneath you — save again");
+          }
+        } catch (error) {
+          status("could not save: " + error.message);
+        }
+      }
+
+      async function moveRule(index, to) {
+        try {
+          const state = await request("POST", "/api/rules/move", {
+            index: index,
+            to: to,
+            generation: generation,
+          });
+
+          apply(state);
+          if (state.conflict) {
+            status("the rule list changed underneath you — move again");
+          }
+        } catch (error) {
+          status("could not move: " + error.message);
+        }
+      }
+
+      // Adding a rule opens the same dialog as editing one: the point of adding is to name the
+      // rule and its pattern, so the dialog is not bypassed with a prefilled row. Cancel takes
+      // the fresh row out again, which is what `pendingAdd` remembers.
+      let pendingAdd = false;
+
+      el("add").addEventListener("click", () => {
+        pendingAdd = true;
+        rules.push({
+          name: "",
+          action: "allow",
+          pattern: "",
+          enabled: true,
+          protocol: null,
+          direction: null,
+          port: null,
+          remote: null,
+          local: null,
+        });
+        openRuleDialog(rules.length - 1);
+      });
+
+      el("apply").addEventListener("click", save);
+
+      // Clearing takes the filters out of the store while the rules stay in the file, so it is
+      // worth asking before doing it.
+      el("clear").addEventListener("click", async () => {
+        if (!confirm("Take our filters out of the store? The rules stay in the file.")) {
+          return;
+        }
+
+        try {
+          const store = await request("POST", "/api/clear", {});
+
+          renderBanner(store);
+          status("removed " + store.removed + " filters");
+        } catch (error) {
+          status("could not clear: " + error.message);
+        }
+      });
+
+      el("export").addEventListener("click", async () => {
+        try {
+          const report = await request("POST", "/api/export", {});
+
+          status("exported " + report.files.length + " files to " + report.dir);
+        } catch (error) {
+          status("could not export: " + error.message);
+        }
+      });
+
+      el("import").addEventListener("click", async () => {
+        const text = window.prompt("Paste a share string");
+
+        if (text === null || text.trim() === "") {
+          return;
+        }
+
+        try {
+          apply(await request("POST", "/api/rules/import", { share: text }));
+          status("imported one rule");
+        } catch (error) {
+          status("could not import: " + error.message);
+        }
+      });
+
+      // Restore is the file half of Export. The text is read in the browser and handed over as a
+      // string, because the server holds no path a browser could name, and the question comes
+      // first: this is the one action that can take rules away rather than fail to add them.
+      el("restore").addEventListener("click", () => el("restore-file").click());
+
+      el("restore-file").addEventListener("change", async () => {
+        const picked = el("restore-file").files[0];
+
+        if (!picked) {
+          return;
+        }
+
+        if (!confirm("Replace the rules on screen with " + picked.name + "?")) {
+          el("restore-file").value = "";
+          return;
+        }
+
+        try {
+          const text = await picked.text();
+
+          const state = await request("POST", "/api/rules/replace", {
+            text: text,
+            generation: generation,
+          });
+
+          apply(state);
+          if (state.conflict) {
+            status("the rule list changed underneath you — restore again");
+          } else {
+            status("restored " + picked.name);
+          }
+        } catch (error) {
+          status("could not restore: " + error.message);
+        }
+
+        el("restore-file").value = "";
+      });
+
+      // Stopping ends the process, so the page says what happened rather than reloading a server
+      // that is no longer there. `Quit` takes our filters out with it, which is what the tools
+      // section asks before running it. The other way out — stop and leave the rules in the
+      // firewall — is `/api/shutdown`, and a script can still call it.
+      el("quit").addEventListener("click", async () => {
+        if (!confirm("Quit and drop the rules?\n\nwinfw-mcp stops and its filters leave the firewall with it, so every program may reach the network again until the tool starts next time.")) {
+          return;
+        }
+
+        try {
+          const answer = await request("POST", "/api/quit", {});
+
+          status(answer.cleared ? "stopped, filters removed" : "stopped, store refused the clear");
+        } catch (error) {
+          status("could not stop: " + error.message);
+        }
+      });
+
+      // Both settings values are things the server changes while it runs, so the shortest route to
+      // flipping one is to click the word you want the other one of.
+
+      // Toggling the filter re-groups the list, so rows that arrived over the event stream are
+      // affected exactly like rows the state carried.
+      el("show-lan").addEventListener("change", renderConnections);
+      el("show-allowed").addEventListener("change", renderConnections);
+
+      // The server empties the list and says how many entries went away; the next connection of
+      // an application that is still undecided is asked about again as if never cleared.
+      el("detected-clear").addEventListener("click", async () => {
+        try {
+          const answer = await request("POST", "/api/detected/clear", {});
+
+          detected = [];
+          detectedTotal = 0;
+          renderDetected();
+          status("cleared " + answer.removed + " entries");
+        } catch (error) {
+          status("could not clear: " + error.message);
+        }
+      });
+
+      el("default-policy").addEventListener("click", async () => {
+        const next = el("default-policy").textContent === "allow" ? "deny" : "allow";
+
+        try {
+          apply(await request("POST", "/api/settings", { default_policy: next }));
+          status("default policy is " + next);
+        } catch (error) {
+          status("could not change the default policy: " + error.message);
+        }
+      });
+
+      // An empty body means flip, which is the same request the tray menu sends.
+      el("protection").addEventListener("click", async () => {
+        try {
+          apply(await request("POST", "/api/protection", {}));
+          status(protection ? "protection resumed" : "protection paused");
+        } catch (error) {
+          status("could not change protection: " + error.message);
+        }
+      });
+
+      // Three values rather than two, so a click walks the whole range rather than pinning the
+      // page to one of the fixed schemes.
+      el("theme").addEventListener("click", async () => {
+        const order = ["light", "dark", "auto"];
+        const at = order.indexOf(el("theme").textContent);
+        const next = order[(at + 1) % order.length];
+
+        try {
+          apply(await request("POST", "/api/settings", { theme: next }));
+          status("theme is " + next);
+        } catch (error) {
+          status("could not change the theme: " + error.message);
+        }
+      });
+
+      // Six levels rather than a text field, because the filter the server parses accepts a
+      // hundred spellings and a typo would only show up in the log itself.
+      el("log-level").addEventListener("click", async () => {
+        const order = ["off", "error", "warn", "info", "debug", "trace"];
+        const at = order.indexOf(el("log-level").textContent);
+        const next = order[(at + 1) % order.length];
+
+        try {
+          apply(await request("POST", "/api/settings", { log_level: next }));
+          status("log level is " + next);
+        } catch (error) {
+          status("could not change the log level: " + error.message);
+        }
+      });
+
+      el("profile").addEventListener("change", async () => {
+        const name = el("profile").value;
+
+        try {
+          apply(await request("POST", "/api/profiles/switch", { name }));
+          status("switched to " + (name === "" ? "the default profile" : name));
+          fillProfiles();
+        } catch (error) {
+          status("could not switch profile: " + error.message);
+        }
+      });
+
+      // The three actions work on what the selector holds, because that is the profile the user is
+      // looking at. A name the server refuses comes back as an error, and the status line is where
+      // such a refusal belongs rather than in a dialog of its own.
+      el("profile-new").addEventListener("click", async () => {
+        const name = prompt("Name of the new profile, made out of the rules on screen:");
+
+        if (name === null || name.trim() === "") {
+          return;
+        }
+
+        try {
+          apply(await request("POST", "/api/profiles/create", { name: name.trim() }));
+          status("created profile " + name.trim());
+          fillProfiles();
+        } catch (error) {
+          status("could not create profile: " + error.message);
+        }
+      });
+
+      el("profile-rename").addEventListener("click", async () => {
+        const name = el("profile").value;
+        const next = prompt("New name for profile '" + (name === "" ? "default" : name) + "':");
+
+        if (next === null || next.trim() === "") {
+          return;
+        }
+
+        try {
+          apply(await request("POST", "/api/profiles/rename", { name, new_name: next.trim() }));
+          status("renamed " + name + " to " + next.trim());
+          fillProfiles();
+        } catch (error) {
+          status("could not rename profile: " + error.message);
+        }
+      });
+
+      el("profile-delete").addEventListener("click", async () => {
+        const name = el("profile").value;
+
+        if (name === "") {
+          status("the default rules are not a profile, so there is nothing to delete");
+          return;
+        }
+
+        if (!confirm("Delete profile '" + name + "'? Its rules file goes with it.")) {
+          return;
+        }
+
+        try {
+          apply(await request("POST", "/api/profiles/delete", { name }));
+          status("deleted profile " + name);
+          fillProfiles();
+        } catch (error) {
+          status("could not delete profile: " + error.message);
+        }
+      });
+
+      load();
+    </script>
+  </body>
+</html>
